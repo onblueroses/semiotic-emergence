@@ -34,7 +34,7 @@ impl SeededRng {
 
     pub fn gen_f32(&mut self) -> f32 {
         use rand::Rng;
-        self.inner.gen::<f32>()
+        self.inner.r#gen::<f32>()
     }
 
     pub fn shuffle<T>(&mut self, slice: &mut [T]) {
