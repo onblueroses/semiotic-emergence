@@ -1,6 +1,10 @@
 use clap::Parser;
 use std::path::PathBuf;
 
+use predator_prey_evolution_communication::config::SimConfig;
+use predator_prey_evolution_communication::run_simulation;
+use predator_prey_evolution_communication::simulation::SimOptions;
+
 #[derive(Parser)]
 #[command(name = "predator-prey-evolution")]
 #[command(about = "Evolutionary simulation with emergent prey communication")]
@@ -38,11 +42,15 @@ fn main() {
     }
 }
 
-#[expect(clippy::print_stdout)]
-#[expect(clippy::unnecessary_wraps)]
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let _cli = Cli::parse();
-    println!("predator-prey-evolution-communication v0.1.0");
-    println!("Simulation engine ready.");
+    let cli = Cli::parse();
+    let mut config = SimConfig::load(cli.config)?;
+
+    let options = SimOptions {
+        seed: cli.seed,
+        max_generations: cli.generations,
+    };
+
+    run_simulation(&mut config, &options)?;
     Ok(())
 }

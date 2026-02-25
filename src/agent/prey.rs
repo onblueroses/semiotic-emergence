@@ -6,7 +6,7 @@ use crate::world::entity::{Direction, LineageId, Position, PreyId};
 
 #[expect(
     dead_code,
-    reason = "constructed by population init; remove when prey spawning is implemented"
+    reason = "fields read during tick phases 2-5; remove as phases are implemented"
 )]
 pub(crate) struct Prey {
     pub(crate) id: PreyId,

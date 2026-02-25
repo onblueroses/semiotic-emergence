@@ -137,6 +137,7 @@ pub enum SimError {
     Config(String),
     Io(std::io::Error),
     Checkpoint(String),
+    Simulation(String),
 }
 
 impl std::fmt::Display for SimError {
@@ -145,6 +146,7 @@ impl std::fmt::Display for SimError {
             SimError::Config(msg) => write!(f, "Configuration error: {msg}"),
             SimError::Io(e) => write!(f, "IO error: {e}"),
             SimError::Checkpoint(msg) => write!(f, "Checkpoint error: {msg}"),
+            SimError::Simulation(msg) => write!(f, "Simulation error: {msg}"),
         }
     }
 }

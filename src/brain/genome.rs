@@ -1,5 +1,6 @@
 use crate::brain::activation::ActivationFn;
-use crate::brain::innovation::InnovationNumber;
+use crate::brain::innovation::{InnovationCounter, InnovationNumber};
+use crate::rng::SeededRng;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct NodeId(pub u32);
@@ -56,6 +57,65 @@ impl NeatGenome {
 
     pub fn sort_connections(&mut self) {
         self.connections.sort_by_key(|c| c.innovation);
+    }
+
+    /// Create a minimal genome with sparse random connections (~20% of possible).
+    ///
+    /// Input nodes (`0..input_count`), then output nodes. No hidden nodes initially.
+    /// Output nodes use Sigmoid activation.
+    pub(crate) fn create_minimal(
+        id: GenomeId,
+        input_count: usize,
+        output_count: usize,
+        rng: &mut SeededRng,
+        innovations: &mut InnovationCounter,
+    ) -> Self {
+        let mut nodes = Vec::with_capacity(input_count + output_count);
+
+        // Input nodes: identity activation (Sigmoid is fine, they pass raw values)
+        for i in 0..input_count {
+            nodes.push(NodeGene {
+                id: NodeId(i as u32),
+                kind: NodeKind::Input,
+                activation: ActivationFn::Sigmoid,
+                bias: 0.0,
+            });
+        }
+
+        // Output nodes
+        for i in 0..output_count {
+            nodes.push(NodeGene {
+                id: NodeId((input_count + i) as u32),
+                kind: NodeKind::Output,
+                activation: ActivationFn::Sigmoid,
+                bias: 0.0,
+            });
+        }
+
+        // Sparse random connections: ~20% of input-to-output pairs
+        let mut connections = Vec::new();
+        for inp in 0..input_count {
+            for out in 0..output_count {
+                if rng.gen_f32() < 0.2 {
+                    let from = NodeId(inp as u32);
+                    let to = NodeId((input_count + out) as u32);
+                    let innovation = innovations.get_connection_innovation(from, to);
+                    connections.push(ConnectionGene {
+                        from,
+                        to,
+                        weight: rng.gen_range(-2.0_f32..2.0),
+                        enabled: true,
+                        innovation,
+                    });
+                }
+            }
+        }
+
+        let mut genome = Self::new(id, nodes, connections);
+        genome.sort_connections();
+        #[cfg(debug_assertions)]
+        genome.validate();
+        genome
     }
 
     #[cfg(debug_assertions)]

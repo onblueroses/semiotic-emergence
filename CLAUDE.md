@@ -88,3 +88,9 @@ brain   world/{entity,terrain,food}
 **Ask first**: changing sensor/output neuron count (breaks all existing genomes), modifying fitness function weights, adding new dependencies to Cargo.toml, changing grid coordinate system.
 
 **Never**: `#[allow(...)]` (denied by clippy - use `#[expect(...)]` with a reason string). Import world/agent types from brain/. Access `World` fields directly from viz/ (use snapshots). Construct RNG outside `World.rng`.
+
+## Research Reference
+
+`.claude/reference/evolution-research.md` - Curated findings from literature, open-source projects, and practitioner experience on: NEAT implementation pitfalls, predator-prey simulation design, signal/communication emergence, fitness function design, energy economics, spatial reproduction, observability metrics, progressive difficulty, and Rust performance patterns. **Read this before making architectural decisions** about evolution, fitness, communication, or simulation parameters. Updated incrementally as new research is conducted.
+
+`.claude/reference/language-evolution-research.md` - Literature review on computational models of language evolution: Lewis signaling games, Iterated Learning Model (Kirby), Naming Games (Steels/Baronchelli), deep RL emergent communication (Lazaridou, Havrylov, Chaabouni, Mordatch), novelty analysis vs existing work, Hockett's design features with measurement formulas (NMI, TopSim, PosDis, deception rate, displacement rate, receiver response), and paper strategy (venues, narrative, minimum viable results). **Read this before implementing stats/metrics.rs or designing experiments.**

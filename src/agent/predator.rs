@@ -17,7 +17,7 @@ pub enum PredatorState {
 
 #[expect(
     dead_code,
-    reason = "constructed by world init; remove when predator spawning is implemented"
+    reason = "fields read during predator AI phase 4; remove then"
 )]
 pub(crate) struct Predator {
     pub(crate) id: PredatorId,

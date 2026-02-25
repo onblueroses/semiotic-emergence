@@ -11,10 +11,6 @@ pub(crate) struct InnovationCounter {
     generation_node_splits: HashMap<InnovationNumber, NodeId>,
 }
 
-#[expect(
-    dead_code,
-    reason = "used by mutation operators in evolution/; remove when mutations are implemented"
-)]
 impl InnovationCounter {
     pub(crate) fn new(initial_innovation: u64, initial_node_id: u32) -> Self {
         Self {
@@ -40,6 +36,10 @@ impl InnovationCounter {
         }
     }
 
+    #[expect(
+        dead_code,
+        reason = "used by add_node mutation in evolution phases 7-9; remove then"
+    )]
     pub(crate) fn get_node_for_split(&mut self, split_connection: InnovationNumber) -> NodeId {
         if let Some(&node) = self.generation_node_splits.get(&split_connection) {
             node
@@ -51,10 +51,12 @@ impl InnovationCounter {
         }
     }
 
+    #[expect(dead_code, reason = "used by evolution phases 7-9; remove then")]
     pub(crate) fn next_node_id(&self) -> NodeId {
         self.next_node_id
     }
 
+    #[expect(dead_code, reason = "used by evolution phases 7-9; remove then")]
     pub(crate) fn next_innovation(&self) -> InnovationNumber {
         self.next_innovation
     }
