@@ -18,7 +18,5 @@
 Thumbs.db
 
 # Claude Code
-.claude/worktrees/
-.claude/settings.local.json
-.claude/auto-context-save-*.md
-.claude/plans/
+.claude/
+CLAUDE.md

@@ -6,7 +6,6 @@ pub enum Action {
     Move(Direction),
     Eat,
     Signal(Symbol),
-    Reproduce,
     Climb,
     Hide,
     Idle,

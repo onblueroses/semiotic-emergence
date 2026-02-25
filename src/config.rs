@@ -33,8 +33,6 @@ pub struct PreyConfig {
     pub energy_per_tick: f32,
     pub move_energy_cost: f32,
     pub signal_energy_cost: f32,
-    pub reproduce_energy_cost: f32,
-    pub reproduce_energy_threshold: f32,
     pub vision_range: u32,
     pub vision_angle: f32,
     pub hearing_range: u32,
@@ -67,6 +65,7 @@ pub struct NeatConfig {
     pub weight_perturb_strength: f32,
     pub add_node_rate: f64,
     pub add_connection_rate: f64,
+    pub bias_mutate_rate: f64,
     pub disable_gene_rate: f64,
     pub interspecies_mate_rate: f64,
     pub stagnation_limit: u32,
@@ -89,7 +88,6 @@ pub struct EvolutionConfig {
     pub min_prey_alive: u32,
     pub fitness_survival_weight: f32,
     pub fitness_energy_weight: f32,
-    pub fitness_offspring_weight: f32,
     pub fitness_kin_bonus: f32,
     pub kin_relatedness_generations: u32,
 }
@@ -101,6 +99,7 @@ pub struct StatsConfig {
     pub export_path: String,
     pub track_signals: bool,
     pub track_lineage: bool,
+    pub stats_interval: u32,
 }
 
 impl SimConfig {
