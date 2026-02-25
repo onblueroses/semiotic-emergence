@@ -4,6 +4,8 @@ use crate::brain::innovation::InnovationCounter;
 use crate::config::{SimConfig, SimError};
 use crate::evolution::population::evolve_population;
 use crate::evolution::species::SpeciesState;
+use crate::stats::collector::StatsCollector;
+use crate::stats::export::export_csv;
 use crate::world::entity::Position;
 use crate::world::grid::World;
 
@@ -47,6 +49,11 @@ pub fn run_simulation(config: &mut SimConfig, options: &SimOptions) -> Result<()
     // Persistent species state across generations (D3: lives in simulation, not World)
     let mut species_state = SpeciesState::new(config.neat.compatibility_threshold);
 
+    // Stats collection for semiotic metrics (MI, TopSim, iconicity)
+    let mut stats_collector = StatsCollector::new();
+    let stats_interval = config.stats.stats_interval;
+    let vocab_size = config.signal.vocab_size;
+
     eprintln!(
         "Initialized: {}x{} world, {} prey, {} predators, {} food",
         config.world.width,
@@ -75,6 +82,16 @@ pub fn run_simulation(config: &mut SimConfig, options: &SimOptions) -> Result<()
             .iter()
             .map(|(_, f, _)| *f)
             .fold(0.0_f32, f32::max);
+        let avg_fitness = if result.genomes_with_fitness.is_empty() {
+            0.0
+        } else {
+            result
+                .genomes_with_fitness
+                .iter()
+                .map(|(_, f, _)| *f)
+                .sum::<f32>()
+                / result.genomes_with_fitness.len() as f32
+        };
 
         eprintln!(
             "  -> {} ticks, {} alive, best fitness: {:.1}, {} species",
@@ -83,6 +100,21 @@ pub fn run_simulation(config: &mut SimConfig, options: &SimOptions) -> Result<()
             best_fitness,
             species_state.species.len(),
         );
+
+        // Feed signal events to stats collector and finalize at stats_interval
+        if stats_interval > 0 && (generation + 1) % stats_interval == 0 {
+            for event in &result.signal_events {
+                stats_collector.record_signal(event.clone());
+            }
+            stats_collector.finalize_generation(
+                generation,
+                avg_fitness,
+                best_fitness,
+                species_state.species.len() as u32,
+                result.prey_alive_end,
+                u32::from(vocab_size),
+            );
+        }
 
         // NEAT evolution: speciation, selection, crossover, mutation
         // Returns (genome, Option<parent_position>) for kin-aware placement
@@ -96,6 +128,15 @@ pub fn run_simulation(config: &mut SimConfig, options: &SimOptions) -> Result<()
 
         // Reset world for next generation
         world.reset_for_generation(config);
+    }
+
+    // Export stats CSV if we have data
+    if !stats_collector.generations.is_empty() {
+        if let Err(err) = export_csv(&stats_collector, &config.stats.export_path) {
+            eprintln!("Warning: failed to export stats CSV: {err}");
+        } else {
+            eprintln!("Stats exported to {}", config.stats.export_path);
+        }
     }
 
     eprintln!("Simulation complete: {max_generations} generations.");
