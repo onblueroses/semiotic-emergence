@@ -4,6 +4,9 @@ globs: ["src/agent/**/*.rs"]
 
 # Agent Module Rules
 
+## Dependency boundary
+agent/ imports from world/{entity,terrain} for shared types (Position, Direction, Terrain) and from brain/ for neural network types. agent/ does NOT import from world/grid.rs (would create a tight circular dependency). The `World` struct in grid.rs holds `Vec<Prey>` and `Vec<Predator>` - that's the container direction (grid owns agents), not the other way around.
+
 ## Sensor encoding contract
 Prey brains receive exactly `input_count(vocab_size)` inputs (36 with vocab_size=8). See `sensor.rs` constants for the exact layout:
 - 0-8: predator distances/directions (aerial, ground, pack)

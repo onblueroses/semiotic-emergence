@@ -40,16 +40,20 @@ snapshot
  |
 evolution  <->  stats
  |               |
-agent          signal
- |    \       /
-brain   world
- |       |
- +--+----+
-    |
-config, rng
+world/grid ------+
+ |    |     \
+agent      signal
+ |    \       |
+brain   world/{entity,terrain,food}
+ |         |
+ +----+----+
+      |
+ config, rng
 ```
 
-Modules may only import downward. `brain` never imports `world` or `agent`. `signal` never imports `agent` or `evolution`.
+`world/grid` is the simulation container - it owns `Vec<Prey>`, `Vec<Predator>`, `Vec<ActiveSignal>`. It imports from agent/ and signal/. `world/{entity,terrain,food}` are shared primitive types at the bottom. This bidirectional relationship between world/grid and agent is by design (container pattern), not a violation.
+
+`brain` never imports `world`, `agent`, or `signal`. `signal` never imports `agent` or `evolution`.
 
 ## Invariants
 

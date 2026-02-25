@@ -4,6 +4,10 @@ use crate::brain::network::NeatNetwork;
 use crate::signal::message::Symbol;
 use crate::world::entity::{Direction, LineageId, Position, PreyId};
 
+#[expect(
+    dead_code,
+    reason = "constructed by population init; remove when prey spawning is implemented"
+)]
 pub(crate) struct Prey {
     pub(crate) id: PreyId,
     pub(crate) pos: Position,

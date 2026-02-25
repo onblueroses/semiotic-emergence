@@ -4,6 +4,11 @@ globs: ["src/world/**/*.rs"]
 
 # World Module Rules
 
+## Module structure
+world/ has two layers with different dependency roles:
+- `entity.rs`, `terrain.rs`, `food.rs` - shared primitive types (Position, Direction, IDs, Terrain, Food). These sit at the bottom of the dependency graph. Imported by agent/ and signal/.
+- `grid.rs` - the simulation container (`World` struct). Owns `Vec<Prey>`, `Vec<Predator>`, `Vec<ActiveSignal>`. Imports FROM agent/ and signal/. This is the container pattern - grid.rs is above agent/ in the dependency graph even though it lives in world/.
+
 ## Grid index formula
 Index into terrain/food arrays: `y * width + x`. Always use `World::idx(x, y)`, never compute the index inline. Getting this wrong causes silent data corruption.
 

@@ -22,7 +22,11 @@
     "deny": [
       "Bash(git push --force*)",
       "Bash(git push -f*)",
+      "Bash(git push*--force*)",
+      "Bash(git push*-f *)",
+      "Bash(git push* -f)",
       "Bash(git commit --no-verify*)",
+      "Bash(git commit*--no-verify*)",
       "Bash(rm -rf*)",
       "Bash(cargo publish*)"
     ]

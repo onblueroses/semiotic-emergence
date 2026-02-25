@@ -65,4 +65,4 @@ missing_debug_implementations = "warn"
 [dev-dependencies.cargo-husky]
 version = "1"
 default-features = false
-features = ["precommit-hook", "run-cargo-fmt", "run-cargo-clippy", "run-cargo-test"]
+features = ["precommit-hook", "user-hooks"]

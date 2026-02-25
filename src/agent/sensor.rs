@@ -1,3 +1,8 @@
+#![expect(
+    dead_code,
+    reason = "sensor constants used when encoding is implemented; remove then"
+)]
+
 /// Aggregated sensor reading for a single prey agent.
 /// All values normalized to [-1, 1] or [0, 1].
 #[derive(Clone, Debug)]

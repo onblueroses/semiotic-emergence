@@ -11,6 +11,10 @@ pub(crate) struct InnovationCounter {
     generation_node_splits: HashMap<InnovationNumber, NodeId>,
 }
 
+#[expect(
+    dead_code,
+    reason = "used by mutation operators in evolution/; remove when mutations are implemented"
+)]
 impl InnovationCounter {
     pub(crate) fn new(initial_innovation: u64, initial_node_id: u32) -> Self {
         Self {

@@ -1,3 +1,8 @@
+#![expect(
+    dead_code,
+    reason = "NeatNetwork used when brain-agent integration is wired up; remove then"
+)]
+
 use crate::brain::activation::{ActivationFn, apply_activation};
 use crate::brain::genome::{NeatGenome, NodeKind};
 use std::ops::Range;

@@ -5,6 +5,10 @@ use crate::signal::message::ActiveSignal;
 use crate::world::food::Food;
 use crate::world::terrain::Terrain;
 
+#[expect(
+    dead_code,
+    reason = "constructed in simulation main loop; remove when sim loop is implemented"
+)]
 pub(crate) struct World {
     pub(crate) width: u32,
     pub(crate) height: u32,
@@ -18,6 +22,10 @@ pub(crate) struct World {
     pub(crate) rng: SeededRng,
 }
 
+#[expect(
+    dead_code,
+    reason = "constructed in simulation main loop; remove when sim loop is implemented"
+)]
 impl World {
     pub(crate) fn new(width: u32, height: u32, seed: u64) -> Self {
         let size = (width * height) as usize;

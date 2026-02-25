@@ -15,6 +15,10 @@ pub enum PredatorState {
     Resting,
 }
 
+#[expect(
+    dead_code,
+    reason = "constructed by world init; remove when predator spawning is implemented"
+)]
 pub(crate) struct Predator {
     pub(crate) id: PredatorId,
     pub(crate) kind: PredatorKind,

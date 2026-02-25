@@ -1,0 +1,16 @@
+#!/bin/sh
+#
+# Pre-commit hook managed via cargo-husky user-hooks feature.
+# Source: .cargo-husky/hooks/pre-commit (git-tracked, survives rebuilds)
+#
+
+set -e
+
+export PATH="$HOME/.cargo/bin:$PATH"
+
+echo '+cargo test'
+cargo test
+echo '+cargo clippy -- -D warnings'
+cargo clippy -- -D warnings
+echo '+cargo fmt -- --check'
+cargo fmt -- --check

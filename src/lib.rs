@@ -1,5 +1,3 @@
-#![expect(dead_code, reason = "most modules are stubs; remove when wired up")]
-
 pub mod config;
 pub mod rng;
 
