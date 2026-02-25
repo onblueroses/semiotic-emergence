@@ -1,0 +1,84 @@
+# Stage 1: Single ground predator - evolve evasion behavior
+# Prerequisite: genomes evolved from Stage 0 (carry forward, never reset)
+# Goal: prey learn to detect and avoid a single slow predator
+# Success: predation deaths drop 40%+ from initial rate
+# Next: stage2_pressure.toml when survival > 70% for 10 consecutive gens
+
+seed = 42
+
+[world]
+width = 40
+height = 30
+food_density = 0.25
+food_energy = 25.0
+food_regrow_ticks = 30
+terrain_tree_pct = 0.0      # Still flat - terrain deferred to Stage 2
+terrain_rock_pct = 0.0
+terrain_water_pct = 0.0
+terrain_bush_pct = 0.0
+
+[prey]
+initial_count = 100
+initial_energy = 100.0
+max_energy = 200.0
+energy_per_tick = 0.4
+move_energy_cost = 0.8
+signal_energy_cost = 0.0    # Still free - communication deferred to Stage 3
+reproduce_energy_cost = 50.0
+reproduce_energy_threshold = 140.0
+vision_range = 7            # Slight increase - seeing predator early matters
+vision_angle = 60.0
+hearing_range = 10
+
+[predators]
+aerial_count = 0
+ground_count = 1            # Single slow predator (snake)
+pack_count = 0
+aerial_speed = 3
+ground_speed = 1            # Same speed as prey - evasion is about detection, not speed
+ground_vision = 4           # Prey sees predator first (vision 7 vs 4)
+pack_speed = 2
+aerial_vision = 15
+pack_vision = 10
+attack_cooldown = 60        # Very slow attack rate (~13 attacks/gen)
+kill_radius = 1
+
+[neat]
+population_size = 100
+c1_excess = 1.0
+c2_disjoint = 1.0
+c3_weight = 0.4
+compatibility_threshold = 3.0
+weight_mutate_rate = 0.8
+weight_perturb_rate = 0.9
+weight_perturb_strength = 0.5
+add_node_rate = 0.03
+add_connection_rate = 0.05
+disable_gene_rate = 0.01
+interspecies_mate_rate = 0.001
+stagnation_limit = 15
+elitism_count = 2
+survival_rate = 0.2
+
+[signal]
+vocab_size = 8
+signal_range = 10
+signal_decay_rate = 0.3
+signal_lifetime = 3
+
+[evolution]
+generation_ticks = 800      # Longer to allow evasion strategies to differentiate
+max_generations = 500       # Predator avoidance takes 50-200 gens
+min_prey_alive = 5
+fitness_survival_weight = 1.0
+fitness_energy_weight = 0.0 # Drop energy weight - survival IS the metric now
+fitness_offspring_weight = 2.0
+fitness_kin_bonus = 0.0
+kin_relatedness_generations = 0
+
+[stats]
+export_every_n_generations = 5
+export_format = "csv"
+export_path = "output/stage1/"
+track_signals = false
+track_lineage = false
