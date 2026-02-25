@@ -2,7 +2,7 @@ use crate::agent::action::Action;
 use crate::agent::predator::{Predator, PredatorKind, PredatorState};
 use crate::agent::prey::Prey;
 use crate::agent::sensor::{self, SensorReading};
-use crate::brain::genome::{GenomeId, NeatGenome};
+use crate::brain::genome::NeatGenome;
 use crate::brain::network::NeatNetwork;
 use crate::config::{SimConfig, SimError};
 use crate::rng::SeededRng;
@@ -26,13 +26,13 @@ pub(crate) struct World {
     pub(crate) rng: SeededRng,
     pub(crate) next_prey_id: u32,
     pub(crate) next_predator_id: u32,
-    /// Genomes+fitness collected from prey that died during the generation
-    pub(crate) dead_genomes: Vec<(NeatGenome, f32)>,
+    /// Genomes+fitness+position collected from prey that died during the generation
+    pub(crate) dead_genomes: Vec<(NeatGenome, f32, Position)>,
 }
 
 /// Result of running one generation.
 pub(crate) struct GenerationResult {
-    pub(crate) genomes_with_fitness: Vec<(NeatGenome, f32)>,
+    pub(crate) genomes_with_fitness: Vec<(NeatGenome, f32, Position)>,
     pub(crate) ticks_elapsed: u64,
     pub(crate) prey_alive_end: u32,
 }
@@ -145,9 +145,31 @@ impl World {
         }
     }
 
+    #[expect(
+        dead_code,
+        reason = "convenience wrapper for tests and initial population"
+    )]
     pub(crate) fn spawn_prey(&mut self, genomes: &[NeatGenome], config: &SimConfig) {
-        for genome in genomes {
-            let pos = self.random_passable_pos();
+        let genomes_with_pos: Vec<(NeatGenome, Option<Position>)> =
+            genomes.iter().map(|g| (g.clone(), None)).collect();
+        self.spawn_prey_with_positions(&genomes_with_pos, config);
+    }
+
+    pub(crate) fn spawn_prey_with_positions(
+        &mut self,
+        genomes_with_pos: &[(NeatGenome, Option<Position>)],
+        config: &SimConfig,
+    ) {
+        use crate::evolution::kin::kin_placement;
+
+        for (genome, parent_pos) in genomes_with_pos {
+            let pos = kin_placement(
+                *parent_pos,
+                self.width,
+                self.height,
+                &self.terrain,
+                &mut self.rng,
+            );
             let id = PreyId(self.next_prey_id);
             self.next_prey_id += 1;
             let brain = NeatNetwork::from_genome(genome);
@@ -165,7 +187,6 @@ impl World {
                 lineage,
                 parent_genome_id: None,
                 generation_born: self.generation,
-                offspring_count: 0,
                 fitness_cache: None,
                 ticks_since_signal: 0,
                 is_climbing: false,
@@ -296,9 +317,6 @@ impl World {
         let mut order: Vec<usize> = (0..decisions.len()).collect();
         self.rng.shuffle(&mut order);
 
-        // Collect offspring to add after the loop (avoids borrow conflict)
-        let mut offspring: Vec<Prey> = Vec::new();
-
         let width = self.width;
         let height = self.height;
 
@@ -340,56 +358,6 @@ impl World {
                     self.prey[prey_idx].is_climbing = false;
                     self.prey[prey_idx].is_hidden = false;
                 }
-                Action::Reproduce => {
-                    self.prey[prey_idx].is_climbing = false;
-                    self.prey[prey_idx].is_hidden = false;
-                    if self.prey[prey_idx].energy >= config.prey.reproduce_energy_threshold {
-                        self.prey[prey_idx].energy -= config.prey.reproduce_energy_cost;
-                        self.prey[prey_idx].offspring_count += 1;
-
-                        let parent_pos = self.prey[prey_idx].pos;
-                        let parent_lineage = self.prey[prey_idx].lineage;
-                        let parent_genome_id = self.prey[prey_idx].genome.id;
-
-                        let offspring_pos = find_adjacent_passable(
-                            parent_pos,
-                            &self.terrain,
-                            width,
-                            height,
-                            &mut self.rng,
-                        );
-
-                        if let Some(pos) = offspring_pos {
-                            let child_id = PreyId(self.next_prey_id);
-                            self.next_prey_id += 1;
-                            let mut child_genome = self.prey[prey_idx].genome.clone();
-                            child_genome.id = GenomeId(u64::from(child_id.0));
-                            for conn in &mut child_genome.connections {
-                                conn.weight += self.rng.gen_range(-0.1_f32..0.1);
-                            }
-                            let brain = NeatNetwork::from_genome(&child_genome);
-                            offspring.push(Prey {
-                                id: child_id,
-                                pos,
-                                energy: config.prey.initial_energy * 0.5,
-                                age: 0,
-                                genome: child_genome,
-                                brain,
-                                facing: Direction::North,
-                                last_action: Action::Idle,
-                                last_signal: None,
-                                lineage: parent_lineage,
-                                parent_genome_id: Some(parent_genome_id),
-                                generation_born: self.generation,
-                                offspring_count: 0,
-                                fitness_cache: None,
-                                ticks_since_signal: 0,
-                                is_climbing: false,
-                                is_hidden: false,
-                            });
-                        }
-                    }
-                }
                 Action::Climb => {
                     let px = self.prey[prey_idx].pos.x;
                     let py = self.prey[prey_idx].pos.y;
@@ -417,8 +385,6 @@ impl World {
             self.prey[prey_idx].last_action = *action;
             self.prey[prey_idx].energy -= config.prey.energy_per_tick;
         }
-
-        self.prey.extend(offspring);
     }
 
     /// Phase 7: Food regrowth.
@@ -477,10 +443,12 @@ impl World {
         dead_indices.sort_unstable();
         dead_indices.reverse();
 
+        let max_ticks = config.evolution.generation_ticks;
         for &idx in &dead_indices {
             let prey = &self.prey[idx];
-            let fitness = compute_fitness(prey, config);
-            self.dead_genomes.push((prey.genome.clone(), fitness));
+            let fitness = compute_fitness(prey, max_ticks, config);
+            self.dead_genomes
+                .push((prey.genome.clone(), fitness, prey.pos));
             self.prey.swap_remove(idx);
         }
     }
@@ -572,8 +540,9 @@ impl World {
 
         // Compute fitness for surviving prey
         for prey in &self.prey {
-            let fitness = compute_fitness(prey, config);
-            self.dead_genomes.push((prey.genome.clone(), fitness));
+            let fitness = compute_fitness(prey, max_ticks, config);
+            self.dead_genomes
+                .push((prey.genome.clone(), fitness, prey.pos));
         }
 
         GenerationResult {
@@ -1111,12 +1080,16 @@ fn tick_pack(
     kills
 }
 
-/// Compute fitness for a prey (simplified, no kin bonus).
-fn compute_fitness(prey: &Prey, config: &SimConfig) -> f32 {
-    let evo = &config.evolution;
-    prey.age as f32 * evo.fitness_survival_weight
-        + prey.energy.max(0.0) * evo.fitness_energy_weight
-        + prey.offspring_count as f32 * evo.fitness_offspring_weight
+/// Compute fitness for a prey using normalized formula (D6).
+fn compute_fitness(prey: &Prey, max_ticks: u64, config: &SimConfig) -> f32 {
+    crate::evolution::fitness::compute_normalized_fitness(
+        u64::from(prey.age),
+        max_ticks,
+        prey.energy,
+        config.prey.max_energy,
+        0.0, // Kin bonus computed separately in future
+        config,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1179,32 +1152,5 @@ fn move_toward(
         } else {
             try_move(predator, 0, dy, terrain, width, height);
         }
-    }
-}
-
-/// Find an adjacent passable cell for offspring spawning.
-fn find_adjacent_passable(
-    pos: Position,
-    terrain: &[Terrain],
-    width: u32,
-    height: u32,
-    rng: &mut SeededRng,
-) -> Option<Position> {
-    let mut candidates = Vec::new();
-    for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
-        let nx = pos.x as i32 + dx;
-        let ny = pos.y as i32 + dy;
-        if nx >= 0 && ny >= 0 && (nx as u32) < width && (ny as u32) < height {
-            let idx = (ny as u32 * width + nx as u32) as usize;
-            if terrain[idx].is_passable() {
-                candidates.push(Position::new(nx as u32, ny as u32));
-            }
-        }
-    }
-    if candidates.is_empty() {
-        None
-    } else {
-        let i = rng.gen_range(0..candidates.len());
-        Some(candidates[i])
     }
 }

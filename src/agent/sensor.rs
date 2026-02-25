@@ -67,24 +67,23 @@ pub(crate) const OUT_MOVE_SOUTH: usize = 1;
 pub(crate) const OUT_MOVE_EAST: usize = 2;
 pub(crate) const OUT_MOVE_WEST: usize = 3;
 pub(crate) const OUT_EAT: usize = 4;
-pub(crate) const OUT_REPRODUCE: usize = 5;
-pub(crate) const OUT_CLIMB: usize = 6;
-pub(crate) const OUT_HIDE: usize = 7;
-pub(crate) const OUT_IDLE: usize = 8;
-pub(crate) const OUT_SIGNAL_EMIT: usize = 9;
-pub(crate) const OUT_SIGNAL_SYMBOL_START: usize = 10;
+pub(crate) const OUT_CLIMB: usize = 5;
+pub(crate) const OUT_HIDE: usize = 6;
+pub(crate) const OUT_IDLE: usize = 7;
+pub(crate) const OUT_SIGNAL_EMIT: usize = 8;
+pub(crate) const OUT_SIGNAL_SYMBOL_START: usize = 9;
 
 pub(crate) fn output_count(vocab_size: u8) -> usize {
-    10 + vocab_size as usize
+    9 + vocab_size as usize
 }
 
 /// Decode neural network outputs into an action and optional signal.
 ///
-/// Primary action: argmax over outputs[0..9] (movement dirs + eat/reproduce/climb/hide/idle).
-/// Signal: if outputs[9] > 0.5, also emit a signal (symbol = argmax of symbol outputs).
+/// Primary action: argmax over outputs[0..8] (movement dirs + eat/climb/hide/idle).
+/// Signal: if outputs[8] > 0.5, also emit a signal (symbol = argmax of symbol outputs).
 pub(crate) fn decode_outputs(outputs: &[f32], vocab_size: u8) -> (Action, Option<Symbol>) {
-    // Primary action: argmax of first 9 outputs
-    let action_outputs = &outputs[..9.min(outputs.len())];
+    // Primary action: argmax of first 8 outputs
+    let action_outputs = &outputs[..8.min(outputs.len())];
     let (best_idx, _) = action_outputs.iter().enumerate().fold(
         (OUT_IDLE, f32::NEG_INFINITY),
         |(bi, bv), (i, &v)| {
@@ -98,7 +97,6 @@ pub(crate) fn decode_outputs(outputs: &[f32], vocab_size: u8) -> (Action, Option
         OUT_MOVE_EAST => Action::Move(Direction::East),
         OUT_MOVE_WEST => Action::Move(Direction::West),
         OUT_EAT => Action::Eat,
-        OUT_REPRODUCE => Action::Reproduce,
         OUT_CLIMB => Action::Climb,
         OUT_HIDE => Action::Hide,
         _ => Action::Idle,
@@ -130,7 +128,7 @@ mod tests {
 
     #[test]
     fn decode_idle_on_zeros() {
-        let outputs = vec![0.0; 18];
+        let outputs = vec![0.0; 17]; // 9 + vocab_size(8) = 17
         let (action, signal) = decode_outputs(&outputs, 8);
         // All zeros: first index (NORTH) wins in tie
         assert!(matches!(action, Action::Move(Direction::North)));
@@ -139,7 +137,7 @@ mod tests {
 
     #[test]
     fn decode_eat_action() {
-        let mut outputs = vec![0.0; 18];
+        let mut outputs = vec![0.0; 17];
         outputs[OUT_EAT] = 1.0;
         let (action, _) = decode_outputs(&outputs, 8);
         assert!(matches!(action, Action::Eat));
@@ -147,7 +145,7 @@ mod tests {
 
     #[test]
     fn decode_signal_when_above_threshold() {
-        let mut outputs = vec![0.0; 18];
+        let mut outputs = vec![0.0; 17];
         outputs[OUT_EAT] = 1.0;
         outputs[OUT_SIGNAL_EMIT] = 0.6;
         outputs[OUT_SIGNAL_SYMBOL_START + 3] = 1.0; // Symbol 3
@@ -158,7 +156,7 @@ mod tests {
 
     #[test]
     fn decode_no_signal_below_threshold() {
-        let mut outputs = vec![0.0; 18];
+        let mut outputs = vec![0.0; 17];
         outputs[OUT_SIGNAL_EMIT] = 0.4;
         outputs[OUT_SIGNAL_SYMBOL_START] = 1.0;
         let (_, signal) = decode_outputs(&outputs, 8);

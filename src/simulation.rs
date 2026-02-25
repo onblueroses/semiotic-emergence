@@ -2,6 +2,9 @@ use crate::agent::sensor;
 use crate::brain::genome::{GenomeId, NeatGenome};
 use crate::brain::innovation::InnovationCounter;
 use crate::config::{SimConfig, SimError};
+use crate::evolution::population::evolve_population;
+use crate::evolution::species::SpeciesState;
+use crate::world::entity::Position;
 use crate::world::grid::World;
 
 /// CLI options that override config file values.
@@ -24,26 +27,31 @@ pub fn run_simulation(config: &mut SimConfig, options: &SimOptions) -> Result<()
     // Initialize world (terrain + food + predators)
     let mut world = World::initialize(config)?;
 
-    // Create innovation counter. Initial node count = input_count + output_count.
+    // Create innovation counter. Initial node count = input + bias + output.
     let input_count = sensor::input_count(config.signal.vocab_size);
     let output_count = sensor::output_count(config.signal.vocab_size);
-    let initial_node_count = (input_count + output_count) as u32;
+    let initial_node_count = (input_count + 1 + output_count) as u32; // +1 for bias node
     let mut innovations = InnovationCounter::new(0, initial_node_count);
 
-    // Generate initial population
-    let mut genomes = create_initial_population(
+    // Generate initial population (no parent positions for gen 0)
+    let initial_genomes = create_initial_population(
         config.neat.population_size,
         input_count,
         output_count,
         &mut world,
         &mut innovations,
     );
+    let mut next_gen_with_pos: Vec<(NeatGenome, Option<Position>)> =
+        initial_genomes.into_iter().map(|g| (g, None)).collect();
+
+    // Persistent species state across generations (D3: lives in simulation, not World)
+    let mut species_state = SpeciesState::new(config.neat.compatibility_threshold);
 
     eprintln!(
         "Initialized: {}x{} world, {} prey, {} predators, {} food",
         config.world.width,
         config.world.height,
-        genomes.len(),
+        next_gen_with_pos.len(),
         world.predators.len(),
         world.food.iter().filter(|f| f.is_some()).count(),
     );
@@ -51,7 +59,7 @@ pub fn run_simulation(config: &mut SimConfig, options: &SimOptions) -> Result<()
     // Main generation loop
     for generation in 0..max_generations {
         world.generation = generation;
-        world.spawn_prey(&genomes, config);
+        world.spawn_prey_with_positions(&next_gen_with_pos, config);
 
         eprintln!(
             "Generation {generation}: {} prey, {} predators",
@@ -62,25 +70,28 @@ pub fn run_simulation(config: &mut SimConfig, options: &SimOptions) -> Result<()
         // Run the generation (tick loop)
         let result = world.run_generation(config);
 
+        let best_fitness = result
+            .genomes_with_fitness
+            .iter()
+            .map(|(_, f, _)| *f)
+            .fold(0.0_f32, f32::max);
+
         eprintln!(
-            "  -> {} ticks, {} alive, best fitness: {:.1}",
+            "  -> {} ticks, {} alive, best fitness: {:.1}, {} species",
             result.ticks_elapsed,
             result.prey_alive_end,
-            result
-                .genomes_with_fitness
-                .iter()
-                .map(|(_, f)| *f)
-                .fold(0.0_f32, f32::max),
+            best_fitness,
+            species_state.species.len(),
         );
 
-        // Placeholder evolution: keep elites, randomize rest
-        genomes = next_generation_placeholder(
+        // NEAT evolution: speciation, selection, crossover, mutation
+        // Returns (genome, Option<parent_position>) for kin-aware placement
+        next_gen_with_pos = evolve_population(
             &result.genomes_with_fitness,
+            &mut species_state,
             config,
-            &mut world,
+            &mut world.rng,
             &mut innovations,
-            input_count,
-            output_count,
         );
 
         // Reset world for next generation
@@ -111,46 +122,4 @@ fn create_initial_population(
     }
     innovations.reset_generation();
     genomes
-}
-
-/// Placeholder for real NEAT evolution. Keeps elites, randomizes rest.
-fn next_generation_placeholder(
-    genomes_with_fitness: &[(NeatGenome, f32)],
-    config: &SimConfig,
-    world: &mut World,
-    innovations: &mut InnovationCounter,
-    input_count: usize,
-    output_count: usize,
-) -> Vec<NeatGenome> {
-    let pop_size = config.neat.population_size as usize;
-    let elite_count = config.neat.elitism_count as usize;
-
-    // Sort by fitness descending
-    let mut sorted: Vec<_> = genomes_with_fitness.to_vec();
-    sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-    let mut next_gen = Vec::with_capacity(pop_size);
-
-    // Keep elites
-    for (genome, _) in sorted.iter().take(elite_count.min(pop_size)) {
-        next_gen.push(genome.clone());
-    }
-
-    // Fill rest with new random genomes
-    innovations.reset_generation();
-    let mut genome_id_counter = genomes_with_fitness.len() as u64;
-    while next_gen.len() < pop_size {
-        let genome = NeatGenome::create_minimal(
-            GenomeId(genome_id_counter),
-            input_count,
-            output_count,
-            &mut world.rng,
-            innovations,
-        );
-        genome_id_counter += 1;
-        next_gen.push(genome);
-    }
-    innovations.reset_generation();
-
-    next_gen
 }

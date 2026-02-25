@@ -21,7 +21,6 @@ pub(crate) struct Prey {
     pub(crate) lineage: LineageId,
     pub(crate) parent_genome_id: Option<GenomeId>,
     pub(crate) generation_born: u32,
-    pub(crate) offspring_count: u32,
     pub(crate) fitness_cache: Option<f32>,
     pub(crate) ticks_since_signal: u32,
     pub(crate) is_climbing: bool,

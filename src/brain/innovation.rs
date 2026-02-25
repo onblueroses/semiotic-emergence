@@ -36,10 +36,6 @@ impl InnovationCounter {
         }
     }
 
-    #[expect(
-        dead_code,
-        reason = "used by add_node mutation in evolution phases 7-9; remove then"
-    )]
     pub(crate) fn get_node_for_split(&mut self, split_connection: InnovationNumber) -> NodeId {
         if let Some(&node) = self.generation_node_splits.get(&split_connection) {
             node

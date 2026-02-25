@@ -3,6 +3,7 @@ use crate::brain::genome::{NeatGenome, NodeKind};
 use std::ops::Range;
 
 struct NetworkNode {
+    kind: NodeKind,
     activation: ActivationFn,
     bias: f32,
     value: f32,
@@ -116,6 +117,7 @@ impl NeatNetwork {
             }
 
             net_nodes.push(NetworkNode {
+                kind: gene.kind,
                 activation: gene.activation,
                 bias: gene.bias,
                 value: 0.0,
@@ -138,8 +140,14 @@ impl NeatNetwork {
             self.nodes[i].value = val;
         }
 
-        // Forward pass through hidden + output nodes
+        // Forward pass through bias + hidden + output nodes
         for i in self.input_count..self.nodes.len() {
+            // Bias nodes always output 1.0 - skip activation
+            if self.nodes[i].kind == NodeKind::Bias {
+                self.nodes[i].value = 1.0;
+                continue;
+            }
+
             let incoming = self.nodes[i].incoming.clone();
             let bias = self.nodes[i].bias;
             let activation = self.nodes[i].activation;

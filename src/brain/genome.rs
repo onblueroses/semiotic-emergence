@@ -14,6 +14,7 @@ pub struct SpeciesId(pub u32);
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum NodeKind {
     Input,
+    Bias,
     Hidden,
     Output,
 }
@@ -61,8 +62,9 @@ impl NeatGenome {
 
     /// Create a minimal genome with sparse random connections (~20% of possible).
     ///
-    /// Input nodes (`0..input_count`), then output nodes. No hidden nodes initially.
-    /// Output nodes use Sigmoid activation.
+    /// Node layout: input nodes (`0..input_count`), bias node (`input_count`),
+    /// then output nodes (`input_count+1..`). No hidden nodes initially.
+    /// Output nodes use Sigmoid activation. Bias node uses Identity.
     pub(crate) fn create_minimal(
         id: GenomeId,
         input_count: usize,
@@ -70,22 +72,32 @@ impl NeatGenome {
         rng: &mut SeededRng,
         innovations: &mut InnovationCounter,
     ) -> Self {
-        let mut nodes = Vec::with_capacity(input_count + output_count);
+        let mut nodes = Vec::with_capacity(input_count + 1 + output_count);
 
-        // Input nodes: identity activation (Sigmoid is fine, they pass raw values)
+        // Input nodes
         for i in 0..input_count {
             nodes.push(NodeGene {
                 id: NodeId(i as u32),
                 kind: NodeKind::Input,
-                activation: ActivationFn::Sigmoid,
+                activation: ActivationFn::Identity,
                 bias: 0.0,
             });
         }
 
-        // Output nodes
+        // Bias node at index input_count
+        let bias_id = NodeId(input_count as u32);
+        nodes.push(NodeGene {
+            id: bias_id,
+            kind: NodeKind::Bias,
+            activation: ActivationFn::Identity,
+            bias: 0.0,
+        });
+
+        // Output nodes start after bias
+        let output_offset = input_count + 1;
         for i in 0..output_count {
             nodes.push(NodeGene {
-                id: NodeId((input_count + i) as u32),
+                id: NodeId((output_offset + i) as u32),
                 kind: NodeKind::Output,
                 activation: ActivationFn::Sigmoid,
                 bias: 0.0,
@@ -98,7 +110,7 @@ impl NeatGenome {
             for out in 0..output_count {
                 if rng.gen_f32() < 0.2 {
                     let from = NodeId(inp as u32);
-                    let to = NodeId((input_count + out) as u32);
+                    let to = NodeId((output_offset + out) as u32);
                     let innovation = innovations.get_connection_innovation(from, to);
                     connections.push(ConnectionGene {
                         from,
@@ -111,6 +123,21 @@ impl NeatGenome {
             }
         }
 
+        // Sparse connections from bias to outputs (~20%)
+        for out in 0..output_count {
+            if rng.gen_f32() < 0.2 {
+                let to = NodeId((output_offset + out) as u32);
+                let innovation = innovations.get_connection_innovation(bias_id, to);
+                connections.push(ConnectionGene {
+                    from: bias_id,
+                    to,
+                    weight: rng.gen_range(-2.0_f32..2.0),
+                    enabled: true,
+                    innovation,
+                });
+            }
+        }
+
         let mut genome = Self::new(id, nodes, connections);
         genome.sort_connections();
         #[cfg(debug_assertions)]
@@ -120,8 +147,33 @@ impl NeatGenome {
 
     #[cfg(debug_assertions)]
     pub fn validate(&self) {
-        use std::collections::HashSet;
+        use std::collections::{HashMap, HashSet};
         let node_ids: HashSet<NodeId> = self.nodes.iter().map(|n| n.id).collect();
+        let node_kinds: HashMap<NodeId, NodeKind> =
+            self.nodes.iter().map(|n| (n.id, n.kind)).collect();
+
+        // At most one bias node
+        let bias_count = self
+            .nodes
+            .iter()
+            .filter(|n| n.kind == NodeKind::Bias)
+            .count();
+        assert!(
+            bias_count <= 1,
+            "Genome has {bias_count} bias nodes, expected 0 or 1"
+        );
+
+        // Bias nodes must use Identity activation
+        for n in &self.nodes {
+            if n.kind == NodeKind::Bias {
+                assert!(
+                    n.activation == ActivationFn::Identity,
+                    "Bias node {:?} must use Identity activation",
+                    n.id
+                );
+            }
+        }
+
         for conn in &self.connections {
             assert!(
                 node_ids.contains(&conn.from),
@@ -133,7 +185,21 @@ impl NeatGenome {
                 "Connection references non-existent target node {:?}",
                 conn.to
             );
+            // No incoming connections to bias or input nodes
+            let to_kind = node_kinds[&conn.to];
+            assert!(
+                to_kind != NodeKind::Bias,
+                "Connection targets bias node {:?} - bias nodes cannot have incoming connections",
+                conn.to
+            );
+            assert!(
+                to_kind != NodeKind::Input,
+                "Connection targets input node {:?} - input nodes cannot have incoming connections",
+                conn.to
+            );
         }
+
+        // Connections sorted by innovation number
         for w in self.connections.windows(2) {
             assert!(
                 w[0].innovation <= w[1].innovation,
