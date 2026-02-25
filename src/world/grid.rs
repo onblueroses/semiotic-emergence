@@ -9,6 +9,7 @@ use crate::rng::SeededRng;
 use crate::signal::message::{ActiveSignal, Symbol};
 use crate::signal::propagation;
 use crate::snapshot::{AgentSnapshot, PredatorSnapshot, SignalSnapshot, WorldSnapshot};
+use crate::stats::collector::SignalEvent;
 use crate::world::entity::{Direction, LineageId, Position, PredatorId, PreyId};
 use crate::world::food::{self, Food};
 use crate::world::terrain::{self, Terrain};
@@ -28,6 +29,8 @@ pub(crate) struct World {
     pub(crate) next_predator_id: u32,
     /// Genomes+fitness+position collected from prey that died during the generation
     pub(crate) dead_genomes: Vec<(NeatGenome, f32, Position)>,
+    /// Signal events recorded during the current generation (for MI/TopSim/iconicity).
+    pub(crate) signal_events: Vec<SignalEvent>,
 }
 
 /// Result of running one generation.
@@ -35,6 +38,8 @@ pub(crate) struct GenerationResult {
     pub(crate) genomes_with_fitness: Vec<(NeatGenome, f32, Position)>,
     pub(crate) ticks_elapsed: u64,
     pub(crate) prey_alive_end: u32,
+    /// Signal events recorded during the generation (empty if `track_signals` is false).
+    pub(crate) signal_events: Vec<SignalEvent>,
 }
 
 // ---------------------------------------------------------------------------
@@ -60,6 +65,7 @@ impl World {
             next_prey_id: 0,
             next_predator_id: 0,
             dead_genomes: Vec::new(),
+            signal_events: Vec::new(),
         }
     }
 
@@ -92,6 +98,7 @@ impl World {
             next_prey_id: 0,
             next_predator_id: 0,
             dead_genomes: Vec::new(),
+            signal_events: Vec::new(),
         };
 
         world.spawn_predators(config);
@@ -206,6 +213,7 @@ impl World {
         self.predators.clear();
         self.signals.clear();
         self.dead_genomes.clear();
+        self.signal_events.clear();
         self.tick = 0;
         self.next_prey_id = 0;
         self.next_predator_id = 0;
@@ -295,12 +303,26 @@ impl World {
 
     /// Phase 3: Emit signals for prey that decided to signal.
     fn emit_signals(&mut self, decisions: &[(usize, Action, Option<Symbol>)], config: &SimConfig) {
+        let track = config.stats.track_signals;
         for &(idx, _, ref signal_opt) in decisions {
             if let Some(symbol) = signal_opt {
                 let prey = &mut self.prey[idx];
                 prey.energy = (prey.energy - config.prey.signal_energy_cost).max(0.0);
                 prey.last_signal = Some(*symbol);
                 prey.ticks_since_signal = 0;
+
+                if track {
+                    let (pred_kind, pred_dist) = nearest_predator_info(prey.pos, &self.predators);
+                    self.signal_events.push(SignalEvent {
+                        emitter_id: prey.id,
+                        symbol: symbol.0,
+                        emitter_pos: prey.pos,
+                        nearest_predator_kind: pred_kind,
+                        nearest_predator_dist: pred_dist,
+                        tick: self.tick,
+                    });
+                }
+
                 let sig = propagation::create_signal(prey.id, prey.pos, *symbol, self.tick);
                 self.signals.push(sig);
             }
@@ -549,6 +571,7 @@ impl World {
             genomes_with_fitness: std::mem::take(&mut self.dead_genomes),
             ticks_elapsed: self.tick,
             prey_alive_end: self.prey.len() as u32,
+            signal_events: std::mem::take(&mut self.signal_events),
         }
     }
 
@@ -1078,6 +1101,27 @@ fn tick_pack(
     }
 
     kills
+}
+
+/// Find the nearest predator's kind and distance from a given position.
+/// Returns (None, None) if no predators exist.
+fn nearest_predator_info(
+    pos: Position,
+    predators: &[Predator],
+) -> (Option<PredatorKind>, Option<f32>) {
+    let mut best_dist = f32::MAX;
+    let mut best_kind = None;
+    for pred in predators {
+        let dist = pos.distance_to(&pred.pos);
+        if dist < best_dist {
+            best_dist = dist;
+            best_kind = Some(pred.kind);
+        }
+    }
+    match best_kind {
+        Some(kind) => (Some(kind), Some(best_dist)),
+        None => (None, None),
+    }
 }
 
 /// Compute fitness for a prey using normalized formula (D6).
