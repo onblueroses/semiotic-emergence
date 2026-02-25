@@ -62,6 +62,9 @@ cast_possible_wrap = "allow"
 [lints.rust]
 missing_debug_implementations = "warn"
 
+[package.metadata.cargo-machete]
+ignored = ["crossterm", "bincode"]
+
 [dev-dependencies.cargo-husky]
 version = "1"
 default-features = false

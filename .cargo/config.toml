@@ -1,4 +1,4 @@
 [alias]
 lint = "clippy --all-targets -- -D warnings"
 ca = "check --all-targets"
-ta = "test --all-targets"
+ta = "nextest run --no-tests=pass"

@@ -1,0 +1,32 @@
+# cargo-deny configuration (v0.19+)
+# https://embarkstudios.github.io/cargo-deny/
+
+[advisories]
+yanked = "warn"
+unmaintained = "workspace"
+# bincode is unmaintained (RUSTSEC-2025-0141) but planned for checkpoint serialization.
+# Reassess when checkpoint system is implemented - may switch to bitcode or postcard.
+ignore = ["RUSTSEC-2025-0141"]
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

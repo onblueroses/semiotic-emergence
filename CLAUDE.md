@@ -7,9 +7,13 @@ Evolutionary simulation where prey evolve emergent communication via NEAT neuroe
 ```bash
 cargo ca          # check --all-targets (fast compile check)
 cargo lint        # clippy --all-targets -- -D warnings
-cargo ta          # test --all-targets
+cargo ta          # nextest run (parallel test runner)
 cargo fmt         # format all code
 cargo doc --no-deps  # build docs, catch missing doc links
+cargo machete     # find unused dependencies
+cargo deny check  # license + advisory + supply chain audit
+cargo audit       # RustSec vulnerability scan
+cargo expand      # print macro expansions (on-demand debugging)
 ```
 
 ## Architecture
