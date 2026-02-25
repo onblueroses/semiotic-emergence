@@ -1,3 +1,6 @@
+WORK IN PROGRESS / LEARNING PROJECT
+  public to hold myself accountable. 
+
 # Predator-Prey Evolution & Communication
 
 Prey agents evolve emergent alarm calls and deception under selection pressure from predators - implemented in Rust using NEAT neuroevolution.
