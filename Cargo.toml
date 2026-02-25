@@ -1,0 +1,39 @@
+[package]
+name = "predator-prey-evolution-communication"
+version = "0.1.0"
+edition = "2024"
+description = "Evolutionary simulation where prey agents evolve emergent communication through NEAT neuroevolution"
+license = "MIT"
+repository = "https://github.com/onblueroses/predator-prey-evolution-communication"
+keywords = ["evolution", "neat", "emergent-communication", "simulation", "artificial-life"]
+categories = ["simulation", "science"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+rand = "0.8"
+rand_chacha = "0.3"
+clap = { version = "4", features = ["derive"] }
+bincode = "1"
+
+[dependencies.crossterm]
+version = "0.28"
+optional = true
+
+[features]
+default = ["terminal-viz"]
+terminal-viz = ["dep:crossterm"]
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "simulation"
+harness = false
+
+[profile.release]
+opt-level = 3
+lto = true
+
+[profile.dev]
+opt-level = 1  # Faster iteration without full optimization

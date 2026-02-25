@@ -1,0 +1,80 @@
+# Small world for quick iteration and testing
+
+seed = 42
+
+[world]
+width = 30
+height = 20
+food_density = 0.20
+food_energy = 25.0
+food_regrow_ticks = 30
+terrain_tree_pct = 0.10
+terrain_rock_pct = 0.05
+terrain_water_pct = 0.03
+terrain_bush_pct = 0.08
+
+[prey]
+initial_count = 30
+initial_energy = 100.0
+max_energy = 200.0
+energy_per_tick = 0.5
+move_energy_cost = 1.0
+signal_energy_cost = 3.0
+reproduce_energy_cost = 60.0
+reproduce_energy_threshold = 120.0
+vision_range = 6
+vision_angle = 60.0
+hearing_range = 8
+
+[predators]
+aerial_count = 1
+ground_count = 1
+pack_count = 2
+aerial_speed = 3
+ground_speed = 1
+pack_speed = 2
+aerial_vision = 12
+ground_vision = 4
+pack_vision = 8
+attack_cooldown = 20
+kill_radius = 1
+
+[neat]
+population_size = 30
+c1_excess = 1.0
+c2_disjoint = 1.0
+c3_weight = 0.4
+compatibility_threshold = 3.0
+weight_mutate_rate = 0.8
+weight_perturb_rate = 0.9
+weight_perturb_strength = 0.5
+add_node_rate = 0.03
+add_connection_rate = 0.05
+disable_gene_rate = 0.01
+interspecies_mate_rate = 0.001
+stagnation_limit = 15
+elitism_count = 1
+survival_rate = 0.2
+
+[signal]
+vocab_size = 4
+signal_range = 8
+signal_decay_rate = 0.3
+signal_lifetime = 3
+
+[evolution]
+generation_ticks = 500
+max_generations = 100
+min_prey_alive = 3
+fitness_survival_weight = 1.0
+fitness_energy_weight = 0.3
+fitness_offspring_weight = 2.0
+fitness_kin_bonus = 0.5
+kin_relatedness_generations = 3
+
+[stats]
+export_every_n_generations = 5
+export_format = "csv"
+export_path = "output/"
+track_signals = true
+track_lineage = true
