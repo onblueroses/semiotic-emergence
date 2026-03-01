@@ -354,7 +354,7 @@ impl World {
                     if nx >= 0 && ny >= 0 && (nx as u32) < width && (ny as u32) < height {
                         let ux = nx as u32;
                         let uy = ny as u32;
-                        let ti = (uy * width + ux) as usize;
+                        let ti = grid_idx(ux, uy, width);
                         if self.terrain[ti].is_passable() {
                             self.prey[prey_idx].pos = Position::new(ux, uy);
                             self.prey[prey_idx].facing = *dir;
@@ -367,7 +367,7 @@ impl World {
                 Action::Eat => {
                     let px = self.prey[prey_idx].pos.x;
                     let py = self.prey[prey_idx].pos.y;
-                    let food_idx = (py * width + px) as usize;
+                    let food_idx = grid_idx(px, py, width);
                     if let Some(food_item) = &mut self.food[food_idx]
                         && food_item.energy > 0.0
                     {
@@ -383,7 +383,7 @@ impl World {
                 Action::Climb => {
                     let px = self.prey[prey_idx].pos.x;
                     let py = self.prey[prey_idx].pos.y;
-                    let ti = (py * width + px) as usize;
+                    let ti = grid_idx(px, py, width);
                     let cell_terrain = self.terrain[ti];
                     // Only trees can be climbed; rocks provide hiding via Hide action
                     self.prey[prey_idx].is_climbing = cell_terrain == Terrain::Tree;
@@ -392,7 +392,7 @@ impl World {
                 Action::Hide => {
                     let px = self.prey[prey_idx].pos.x;
                     let py = self.prey[prey_idx].pos.y;
-                    let ti = (py * width + px) as usize;
+                    let ti = grid_idx(px, py, width);
                     let terrain = self.terrain[ti];
                     self.prey[prey_idx].is_hidden =
                         matches!(terrain, Terrain::Tree | Terrain::Bush | Terrain::Rock);
@@ -631,6 +631,17 @@ impl World {
 }
 
 // ---------------------------------------------------------------------------
+// Standalone grid index (for free functions that lack &self)
+// ---------------------------------------------------------------------------
+
+/// Compute a flat grid index from (x, y) coordinates and grid width.
+/// Free-function equivalent of `World::idx()` for use outside `impl World`.
+#[inline]
+fn grid_idx(x: u32, y: u32, width: u32) -> usize {
+    y as usize * width as usize + x as usize
+}
+
+// ---------------------------------------------------------------------------
 // Free functions: sensor encoding, predator AI, fitness
 // ---------------------------------------------------------------------------
 
@@ -717,7 +728,7 @@ fn encode_environment_sensors(
 ) {
     let width = ctx.width;
     let height = ctx.terrain.len() as u32 / width;
-    let cell_idx = (pos.y * width + pos.x) as usize;
+    let cell_idx = grid_idx(pos.x, pos.y, width);
     let current_terrain = ctx.terrain.get(cell_idx).copied().unwrap_or(Terrain::Open);
     reading.inputs[sensor::ON_TREE] = if current_terrain == Terrain::Tree {
         1.0
@@ -743,7 +754,7 @@ fn encode_environment_sensors(
 
     for sy in min_y..=max_y {
         for sx in min_x..=max_x {
-            let ti = (sy * width + sx) as usize;
+            let ti = grid_idx(sx, sy, width);
             let d = pos.distance_to(&Position::new(sx, sy));
             match ctx.terrain[ti] {
                 Terrain::Tree if d < nearest_tree_dist => nearest_tree_dist = d,
@@ -849,7 +860,7 @@ fn tick_aerial(
             continue;
         }
         // Eagle defeated by tree cover
-        let cell = (pos.y * width + pos.x) as usize;
+        let cell = grid_idx(pos.x, pos.y, width);
         if is_climbing && terrain.get(cell).copied() == Some(Terrain::Tree) {
             continue;
         }
@@ -915,7 +926,7 @@ fn tick_ground(
                 if dist > vision {
                     continue;
                 }
-                let cell = (pos.y * width + pos.x) as usize;
+                let cell = grid_idx(pos.x, pos.y, width);
                 let cell_terrain = terrain.get(cell).copied().unwrap_or(Terrain::Open);
                 // Prey climbing a tree is visible but ground predator can't reach
                 if is_climbing && cell_terrain == Terrain::Tree {
@@ -940,7 +951,7 @@ fn tick_ground(
             // Check if target still visible and in range
             let target = prey.iter().find(|p| p.0 == target_id);
             if let Some(&(_, pos, is_climbing, is_hidden)) = target {
-                let cell = (pos.y * width + pos.x) as usize;
+                let cell = grid_idx(pos.x, pos.y, width);
                 let cell_terrain = terrain.get(cell).copied().unwrap_or(Terrain::Open);
                 // Lost target: prey climbed a tree or hid behind rock
                 if (is_climbing && cell_terrain == Terrain::Tree)
@@ -1039,7 +1050,7 @@ fn tick_pack(
                 continue;
             }
             // Skip prey protected by terrain
-            let cell = (pos.y * width + pos.x) as usize;
+            let cell = grid_idx(pos.x, pos.y, width);
             let cell_terrain = terrain.get(cell).copied().unwrap_or(Terrain::Open);
             if is_climbing && cell_terrain == Terrain::Tree {
                 continue;
@@ -1160,7 +1171,7 @@ fn try_move(
     let nx = predator.pos.x as i32 + dx;
     let ny = predator.pos.y as i32 + dy;
     if nx >= 0 && ny >= 0 && (nx as u32) < width && (ny as u32) < height {
-        let ti = (ny as u32 * width + nx as u32) as usize;
+        let ti = grid_idx(nx as u32, ny as u32, width);
         let cell = terrain[ti];
         let passable = match predator.kind {
             // Aerial predators fly over everything except water

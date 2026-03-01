@@ -110,10 +110,10 @@ impl SimConfig {
 
         if let Some(path) = path {
             let user_toml = std::fs::read_to_string(&path).map_err(SimError::Io)?;
-            let overrides: SimConfig = toml::from_str(&user_toml).map_err(|e| {
+            let user_config: SimConfig = toml::from_str(&user_toml).map_err(|e| {
                 SimError::Config(format!("Failed to parse {}: {e}", path.display()))
             })?;
-            config = overrides;
+            config = user_config;
         }
 
         config.validate()?;

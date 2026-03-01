@@ -1,2 +1,1 @@
-// Offspring generation, elitism, species allocation.
-// Implemented during Phase 9.
+// Offspring generation, elitism, and species allocation.
