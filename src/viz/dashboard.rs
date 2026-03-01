@@ -1,2 +1,1 @@
-// Stats panel and generation info display.
-// Implemented during Phase 15.
+// Stats panel and generation info display for terminal visualization.

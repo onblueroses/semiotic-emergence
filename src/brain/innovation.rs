@@ -47,12 +47,12 @@ impl InnovationCounter {
         }
     }
 
-    #[expect(dead_code, reason = "used by evolution phases 7-9; remove then")]
+    #[expect(dead_code, reason = "reserved for NEAT topology evolution")]
     pub(crate) fn next_node_id(&self) -> NodeId {
         self.next_node_id
     }
 
-    #[expect(dead_code, reason = "used by evolution phases 7-9; remove then")]
+    #[expect(dead_code, reason = "reserved for NEAT topology evolution")]
     pub(crate) fn next_innovation(&self) -> InnovationNumber {
         self.next_innovation
     }
