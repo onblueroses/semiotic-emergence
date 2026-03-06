@@ -1,13 +1,13 @@
 use rand::Rng;
 
-pub const INPUTS: usize = 10;
+pub const INPUTS: usize = 16;
 pub const HIDDEN: usize = 6;
 pub const OUTPUTS: usize = 8;
 pub const GENOME_LEN: usize = INPUTS * HIDDEN + HIDDEN + HIDDEN * OUTPUTS + OUTPUTS;
 
 #[derive(Clone, Debug)]
 pub struct Brain {
-    /// Weights: [input->hidden (60), hidden biases (6), hidden->output (48), output biases (8)]
+    /// Weights: [input->hidden (96), hidden biases (6), hidden->output (48), output biases (8)]
     pub weights: Vec<f32>,
 }
 
@@ -17,7 +17,7 @@ impl Brain {
         Self { weights }
     }
 
-    /// Feed-forward: 10 inputs -> 6 hidden (tanh) -> 8 outputs (raw, no activation)
+    /// Feed-forward: 16 inputs -> 6 hidden (tanh) -> 8 outputs (raw, no activation)
     pub fn forward(&self, inputs: &[f32; INPUTS]) -> [f32; OUTPUTS] {
         let w = &self.weights;
         let mut hidden = [0.0_f32; HIDDEN];
@@ -49,7 +49,7 @@ mod tests {
 
     #[test]
     fn genome_length() {
-        assert_eq!(GENOME_LEN, 122);
+        assert_eq!(GENOME_LEN, 158);
     }
 
     #[test]

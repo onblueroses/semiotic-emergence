@@ -4,10 +4,11 @@ use crate::brain::{Brain, INPUTS, OUTPUTS};
 use crate::signal::{self, Signal, SIGNAL_THRESHOLD};
 
 pub const GRID_SIZE: i32 = 20;
-pub const FOOD_COUNT: usize = 15;
-pub const PREY_VISION_RANGE: f32 = 6.0;
+pub const FOOD_COUNT: usize = 25;
+pub const PREY_VISION_RANGE: f32 = 4.0;
 pub const CONFUSION_THRESHOLD: usize = 3;
-pub const CONFUSION_RADIUS: f32 = 2.0;
+pub const CONFUSION_RADIUS: f32 = 4.0;
+pub const PREDATOR_SPEED: u32 = 2;
 
 #[derive(Clone, Debug)]
 pub struct Prey {
@@ -175,14 +176,20 @@ impl World {
             1.0
         };
 
-        // 6-8: Incoming signal strengths
-        let sig_strengths = signal::receive(&self.signals, p.x, p.y, self.tick);
-        inp[6] = sig_strengths[0];
-        inp[7] = sig_strengths[1];
-        inp[8] = sig_strengths[2];
+        // 6-14: Incoming signals (strength + direction per symbol)
+        let sig = signal::receive_detailed(&self.signals, p.x, p.y, self.tick, gs);
+        inp[6] = sig[0].strength;
+        inp[7] = sig[0].dx;
+        inp[8] = sig[0].dy;
+        inp[9] = sig[1].strength;
+        inp[10] = sig[1].dx;
+        inp[11] = sig[1].dy;
+        inp[12] = sig[2].strength;
+        inp[13] = sig[2].dx;
+        inp[14] = sig[2].dy;
 
-        // 9: Own energy
-        inp[9] = p.energy.clamp(0.0, 1.0);
+        // 15: Own energy
+        inp[15] = p.energy.clamp(0.0, 1.0);
 
         inp
     }
@@ -233,54 +240,56 @@ impl World {
     }
 
     fn move_predator(&mut self, rng: &mut impl Rng) {
-        // Confusion effect: 3+ alive prey within radius -> predator moves randomly
-        let nearby = self
-            .prey
-            .iter()
-            .filter(|p| {
+        for _ in 0..PREDATOR_SPEED {
+            // Confusion effect: 3+ alive prey within radius -> predator moves randomly
+            let nearby = self
+                .prey
+                .iter()
+                .filter(|p| {
+                    if !p.alive {
+                        return false;
+                    }
+                    let dx = (p.x - self.predator.x) as f32;
+                    let dy = (p.y - self.predator.y) as f32;
+                    (dx * dx + dy * dy).sqrt() <= CONFUSION_RADIUS
+                })
+                .count();
+
+            if nearby >= CONFUSION_THRESHOLD {
+                self.confusion_ticks += 1;
+                match rng.gen_range(0..4) {
+                    0 => self.predator.y = (self.predator.y - 1).rem_euclid(GRID_SIZE),
+                    1 => self.predator.y = (self.predator.y + 1).rem_euclid(GRID_SIZE),
+                    2 => self.predator.x = (self.predator.x + 1).rem_euclid(GRID_SIZE),
+                    _ => self.predator.x = (self.predator.x - 1).rem_euclid(GRID_SIZE),
+                }
+                continue;
+            }
+
+            let mut nearest: Option<(i32, i32, f32)> = None;
+            for p in &self.prey {
                 if !p.alive {
-                    return false;
+                    continue;
                 }
                 let dx = (p.x - self.predator.x) as f32;
                 let dy = (p.y - self.predator.y) as f32;
-                (dx * dx + dy * dy).sqrt() <= CONFUSION_RADIUS
-            })
-            .count();
+                let d = dx * dx + dy * dy;
+                if nearest.is_none() || d < nearest.unwrap_or((0, 0, f32::MAX)).2 {
+                    nearest = Some((p.x, p.y, d));
+                }
+            }
 
-        if nearby >= CONFUSION_THRESHOLD {
-            self.confusion_ticks += 1;
-            match rng.gen_range(0..4) {
-                0 => self.predator.y = (self.predator.y - 1).rem_euclid(GRID_SIZE),
-                1 => self.predator.y = (self.predator.y + 1).rem_euclid(GRID_SIZE),
-                2 => self.predator.x = (self.predator.x + 1).rem_euclid(GRID_SIZE),
-                _ => self.predator.x = (self.predator.x - 1).rem_euclid(GRID_SIZE),
+            if let Some((tx, ty, _)) = nearest {
+                let dx = tx - self.predator.x;
+                let dy = ty - self.predator.y;
+                if dx.abs() >= dy.abs() {
+                    self.predator.x += dx.signum();
+                } else {
+                    self.predator.y += dy.signum();
+                }
+                self.predator.x = self.predator.x.rem_euclid(GRID_SIZE);
+                self.predator.y = self.predator.y.rem_euclid(GRID_SIZE);
             }
-            return;
-        }
-
-        let mut nearest: Option<(i32, i32, f32)> = None;
-        for p in &self.prey {
-            if !p.alive {
-                continue;
-            }
-            let dx = (p.x - self.predator.x) as f32;
-            let dy = (p.y - self.predator.y) as f32;
-            let d = dx * dx + dy * dy;
-            if nearest.is_none() || d < nearest.unwrap_or((0, 0, f32::MAX)).2 {
-                nearest = Some((p.x, p.y, d));
-            }
-        }
-
-        if let Some((tx, ty, _)) = nearest {
-            let dx = tx - self.predator.x;
-            let dy = ty - self.predator.y;
-            if dx.abs() >= dy.abs() {
-                self.predator.x += dx.signum();
-            } else {
-                self.predator.y += dy.signum();
-            }
-            self.predator.x = self.predator.x.rem_euclid(GRID_SIZE);
-            self.predator.y = self.predator.y.rem_euclid(GRID_SIZE);
         }
     }
 

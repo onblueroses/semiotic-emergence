@@ -21,7 +21,7 @@ fn compute_iconicity(signal_events: &[SignalEvent], ticks_near: u32, total_ticks
     }
     let signals_near = signal_events
         .iter()
-        .filter(|e| e.predator_dist < 6.0)
+        .filter(|e| e.predator_dist < world::PREY_VISION_RANGE)
         .count() as f32;
     let signal_near_rate = signals_near / signal_events.len() as f32;
     let baseline_near_rate = ticks_near as f32 / total_ticks as f32;
@@ -80,9 +80,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(200);
     let ticks_per_eval: u32 = 500;
 
-    let pop_size = 20;
-    let group_size = 4;
-    let elite_count = 4;
+    let pop_size = 40;
+    let group_size = 8;
+    let elite_count = 8;
     let tournament_size = 3;
     let mutation_sigma = 0.1;
 

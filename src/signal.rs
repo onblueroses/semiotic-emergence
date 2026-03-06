@@ -13,6 +13,7 @@ pub struct Signal {
 /// Compute received signal strengths for a prey at (rx, ry) on the given tick.
 /// Returns strength per symbol `[0..NUM_SYMBOLS]`. Only signals from previous ticks
 /// are receivable (1-tick delay). Strongest-per-symbol wins.
+#[cfg(test)]
 pub fn receive(signals: &[Signal], rx: i32, ry: i32, current_tick: u32) -> [f32; NUM_SYMBOLS] {
     let mut strengths = [0.0_f32; NUM_SYMBOLS];
     for sig in signals {
@@ -32,6 +33,47 @@ pub fn receive(signals: &[Signal], rx: i32, ry: i32, current_tick: u32) -> [f32;
         }
     }
     strengths
+}
+
+#[derive(Clone, Debug)]
+pub struct ReceivedSignal {
+    pub strength: f32,
+    pub dx: f32,
+    pub dy: f32,
+}
+
+/// Compute detailed received signals including direction to strongest emitter per symbol.
+pub fn receive_detailed(
+    signals: &[Signal],
+    rx: i32,
+    ry: i32,
+    current_tick: u32,
+    grid_size: f32,
+) -> [ReceivedSignal; NUM_SYMBOLS] {
+    let mut result = std::array::from_fn::<_, NUM_SYMBOLS, _>(|_| ReceivedSignal {
+        strength: 0.0,
+        dx: 0.0,
+        dy: 0.0,
+    });
+    for sig in signals {
+        if sig.tick_emitted >= current_tick {
+            continue;
+        }
+        let dx = (sig.x - rx) as f32;
+        let dy = (sig.y - ry) as f32;
+        let dist = (dx * dx + dy * dy).sqrt();
+        if dist > SIGNAL_RANGE {
+            continue;
+        }
+        let strength = 1.0 - dist / SIGNAL_RANGE;
+        let sym = sig.symbol as usize;
+        if sym < NUM_SYMBOLS && strength > result[sym].strength {
+            result[sym].strength = strength;
+            result[sym].dx = dx / grid_size;
+            result[sym].dy = dy / grid_size;
+        }
+    }
+    result
 }
 
 /// Decide whether to emit a signal based on NN outputs 5-7.
@@ -87,6 +129,23 @@ mod tests {
         }];
         let strengths = receive(&signals, 20, 0, 1);
         assert!(strengths[0].abs() < 1e-6);
+    }
+
+    #[test]
+    fn receive_detailed_returns_direction() {
+        let signals = vec![Signal {
+            x: 5,
+            y: 3,
+            symbol: 0,
+            tick_emitted: 4,
+        }];
+        let result = receive_detailed(&signals, 2, 1, 5, 20.0);
+        assert!(result[0].strength > 0.0);
+        assert!((result[0].dx - 3.0 / 20.0).abs() < 1e-6);
+        assert!((result[0].dy - 2.0 / 20.0).abs() < 1e-6);
+        // Other symbols should be zero
+        assert!(result[1].strength.abs() < 1e-6);
+        assert!(result[2].strength.abs() < 1e-6);
     }
 
     #[test]
