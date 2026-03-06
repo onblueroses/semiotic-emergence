@@ -1,0 +1,26 @@
+[package]
+name = "predator-prey"
+version = "0.1.0"
+edition = "2021"
+description = "Minimal predator-prey simulation with evolving neural networks and emergent communication"
+license = "MIT"
+repository = "https://github.com/onblueroses/predator-prey-evolution-communication"
+
+[dependencies]
+rand = "0.8"
+rand_chacha = "0.3"
+
+[profile.release]
+opt-level = 3
+lto = true
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
