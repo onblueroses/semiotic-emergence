@@ -5,6 +5,9 @@ use crate::signal::{self, Signal, SIGNAL_THRESHOLD};
 
 pub const GRID_SIZE: i32 = 20;
 pub const FOOD_COUNT: usize = 15;
+pub const PREY_VISION_RANGE: f32 = 6.0;
+pub const CONFUSION_THRESHOLD: usize = 3;
+pub const CONFUSION_RADIUS: f32 = 2.0;
 
 #[derive(Clone, Debug)]
 pub struct Prey {
@@ -29,6 +32,11 @@ pub struct Food {
     pub y: i32,
 }
 
+pub struct SignalEvent {
+    pub symbol: u8,
+    pub predator_dist: f32,
+}
+
 pub struct World {
     pub prey: Vec<Prey>,
     pub predator: Predator,
@@ -36,6 +44,10 @@ pub struct World {
     pub signals: Vec<Signal>,
     pub tick: u32,
     pub signals_emitted: u32,
+    pub signal_events: Vec<SignalEvent>,
+    pub ticks_near_predator: u32,
+    pub total_prey_ticks: u32,
+    pub confusion_ticks: u32,
 }
 
 impl World {
@@ -72,6 +84,10 @@ impl World {
             signals: Vec::new(),
             tick: 0,
             signals_emitted: 0,
+            signal_events: Vec::new(),
+            ticks_near_predator: 0,
+            total_prey_ticks: 0,
+            confusion_ticks: 0,
         }
     }
 
@@ -82,14 +98,21 @@ impl World {
     pub fn step(&mut self, rng: &mut impl Rng) {
         self.tick += 1;
 
-        // Prune old signals (older than range in ticks, say 4 ticks)
         self.signals
             .retain(|s| self.tick.saturating_sub(s.tick_emitted) <= 4);
 
-        // Process each prey
         for i in 0..self.prey.len() {
             if !self.prey[i].alive {
                 continue;
+            }
+
+            // Track proximity stats for iconicity baseline
+            let pdx = (self.predator.x - self.prey[i].x) as f32;
+            let pdy = (self.predator.y - self.prey[i].y) as f32;
+            let pdist = (pdx * pdx + pdy * pdy).sqrt();
+            self.total_prey_ticks += 1;
+            if pdist <= PREY_VISION_RANGE {
+                self.ticks_near_predator += 1;
             }
 
             let inputs = self.build_inputs(i);
@@ -99,13 +122,9 @@ impl World {
             self.prey[i].ticks_alive += 1;
         }
 
-        // Move predator toward nearest alive prey
-        self.move_predator();
-
-        // Kill adjacent prey
+        self.move_predator(rng);
         self.predator_kill();
 
-        // Respawn food if running low
         if self.food.len() < FOOD_COUNT / 2 {
             while self.food.len() < FOOD_COUNT {
                 self.food.push(Food {
@@ -121,13 +140,15 @@ impl World {
         let mut inp = [0.0_f32; INPUTS];
         let gs = GRID_SIZE as f32;
 
-        // 0-2: Predator relative dx, dy, distance
+        // 0-2: Predator relative dx, dy, distance (gated by vision range)
         let pdx = (self.predator.x - p.x) as f32;
         let pdy = (self.predator.y - p.y) as f32;
         let pdist = (pdx * pdx + pdy * pdy).sqrt();
-        inp[0] = pdx / gs;
-        inp[1] = pdy / gs;
-        inp[2] = (pdist / gs).min(1.0);
+        if pdist <= PREY_VISION_RANGE {
+            inp[0] = pdx / gs;
+            inp[1] = pdy / gs;
+            inp[2] = (pdist / PREY_VISION_RANGE).min(1.0);
+        }
 
         // 3-4: Nearest food dx, dy
         if let Some(f) = self.nearest_food(p.x, p.y) {
@@ -167,7 +188,6 @@ impl World {
     }
 
     fn apply_outputs(&mut self, prey_idx: usize, outputs: &[f32; OUTPUTS]) {
-        // Outputs 0-4: movement (N/S/E/W) + eat
         let action = outputs[..5]
             .iter()
             .enumerate()
@@ -195,6 +215,13 @@ impl World {
         let px = self.prey[prey_idx].x;
         let py = self.prey[prey_idx].y;
         if let Some(symbol) = signal::maybe_emit(outputs.as_slice(), SIGNAL_THRESHOLD) {
+            let pdx = (self.predator.x - px) as f32;
+            let pdy = (self.predator.y - py) as f32;
+            let predator_dist = (pdx * pdx + pdy * pdy).sqrt();
+            self.signal_events.push(SignalEvent {
+                symbol,
+                predator_dist,
+            });
             self.signals.push(Signal {
                 x: px,
                 y: py,
@@ -205,7 +232,32 @@ impl World {
         }
     }
 
-    fn move_predator(&mut self) {
+    fn move_predator(&mut self, rng: &mut impl Rng) {
+        // Confusion effect: 3+ alive prey within radius -> predator moves randomly
+        let nearby = self
+            .prey
+            .iter()
+            .filter(|p| {
+                if !p.alive {
+                    return false;
+                }
+                let dx = (p.x - self.predator.x) as f32;
+                let dy = (p.y - self.predator.y) as f32;
+                (dx * dx + dy * dy).sqrt() <= CONFUSION_RADIUS
+            })
+            .count();
+
+        if nearby >= CONFUSION_THRESHOLD {
+            self.confusion_ticks += 1;
+            match rng.gen_range(0..4) {
+                0 => self.predator.y = (self.predator.y - 1).rem_euclid(GRID_SIZE),
+                1 => self.predator.y = (self.predator.y + 1).rem_euclid(GRID_SIZE),
+                2 => self.predator.x = (self.predator.x + 1).rem_euclid(GRID_SIZE),
+                _ => self.predator.x = (self.predator.x - 1).rem_euclid(GRID_SIZE),
+            }
+            return;
+        }
+
         let mut nearest: Option<(i32, i32, f32)> = None;
         for p in &self.prey {
             if !p.alive {
@@ -222,7 +274,6 @@ impl World {
         if let Some((tx, ty, _)) = nearest {
             let dx = tx - self.predator.x;
             let dy = ty - self.predator.y;
-            // Move 1 step toward target (prefer axis with larger delta)
             if dx.abs() >= dy.abs() {
                 self.predator.x += dx.signum();
             } else {
