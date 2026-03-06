@@ -23,22 +23,26 @@ src/main.rs       - Generation loop, CSV output
 
 ## Key numbers
 
-- Grid: 20x20, wrapping edges
+- Grid: 20x20, wrapping edges (toroidal - all distances use shortest path)
 - Population: 48 genomes, evaluated in groups of 8
 - Elites: top 8 pass through unchanged
 - Tournament size: 3
-- Mutation: Gaussian, sigma=0.1
+- Mutation: Gaussian (Box-Muller), sigma=0.1
 - Eval rounds: 5 (2 kin-grouped, 3 random-shuffled)
 - Ticks per evaluation: 500
 - Signal range: 8 cells, linear decay
+- Signal cost: 0.01 energy per emission
 - Prey vision: 4.0 cells
 - Predator speed: 2 cells/tick (prey move 1)
 - Confusion: radius 4.0, threshold 3 nearby prey
-- Food: 25 items, respawn when < 50%
+- Food: 25 items, respawn when < 50%, +0.3 energy each
+- Energy: start 1.0, drain 0.002/tick, death at 0
+- MI bins: [0-4), [4-8), [8-11), [11+) aligned with vision/signal range
 
 ## Invariants
 
 - Single RNG (`ChaCha8Rng`) seeded from CLI arg for reproducibility
+- Prey processed in shuffled order each tick (no index bias)
 - Signals emitted on tick T receivable on tick T+1 only
 - Predator moves 2 cells/tick toward nearest prey (confused by 3+ nearby prey), kills within 1 cell
-- NN outputs 0-4 = movement/eat (argmax), outputs 5-7 = signal (emit if max > 0.5)
+- NN outputs 0-4 = movement/eat (argmax), outputs 5-7 = signal (emit if max > 0.5, costs energy)

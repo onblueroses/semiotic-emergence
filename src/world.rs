@@ -1,3 +1,4 @@
+use rand::seq::SliceRandom;
 use rand::Rng;
 
 use crate::brain::{Brain, INPUTS, OUTPUTS};
@@ -9,6 +10,8 @@ pub const PREY_VISION_RANGE: f32 = 4.0;
 pub const CONFUSION_THRESHOLD: usize = 3;
 pub const CONFUSION_RADIUS: f32 = 4.0;
 pub const PREDATOR_SPEED: u32 = 2;
+pub const ENERGY_DRAIN: f32 = 0.002;
+pub const SIGNAL_COST: f32 = 0.01;
 
 /// Wrap-aware signed delta: shortest path on a toroidal grid.
 /// Returns value in (-size/2, size/2].
@@ -121,8 +124,19 @@ impl World {
         self.signals
             .retain(|s| self.tick.saturating_sub(s.tick_emitted) <= 4);
 
-        for i in 0..self.prey.len() {
+        // Shuffle prey processing order to prevent index bias
+        let mut order: Vec<usize> = (0..self.prey.len()).collect();
+        order.shuffle(rng);
+
+        for &i in &order {
             if !self.prey[i].alive {
+                continue;
+            }
+
+            // Metabolism: drain energy each tick
+            self.prey[i].energy -= ENERGY_DRAIN;
+            if self.prey[i].energy <= 0.0 {
+                self.prey[i].alive = false;
                 continue;
             }
 
@@ -239,22 +253,25 @@ impl World {
             _ => {}
         }
 
-        // Signal emission (outputs 5-7)
+        // Signal emission (outputs 5-7) - costs energy
         let px = self.prey[prey_idx].x;
         let py = self.prey[prey_idx].y;
-        if let Some(symbol) = signal::maybe_emit(outputs.as_slice(), SIGNAL_THRESHOLD) {
-            let predator_dist = wrap_dist_sq(px, py, self.predator.x, self.predator.y).sqrt();
-            self.signal_events.push(SignalEvent {
-                symbol,
-                predator_dist,
-            });
-            self.signals.push(Signal {
-                x: px,
-                y: py,
-                symbol,
-                tick_emitted: self.tick,
-            });
-            self.signals_emitted += 1;
+        if self.prey[prey_idx].energy > SIGNAL_COST {
+            if let Some(symbol) = signal::maybe_emit(outputs.as_slice(), SIGNAL_THRESHOLD) {
+                self.prey[prey_idx].energy -= SIGNAL_COST;
+                let predator_dist = wrap_dist_sq(px, py, self.predator.x, self.predator.y).sqrt();
+                self.signal_events.push(SignalEvent {
+                    symbol,
+                    predator_dist,
+                });
+                self.signals.push(Signal {
+                    x: px,
+                    y: py,
+                    symbol,
+                    tick_emitted: self.tick,
+                });
+                self.signals_emitted += 1;
+            }
         }
     }
 
