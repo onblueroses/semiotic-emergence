@@ -33,15 +33,16 @@ fn compute_mutual_info(signal_events: &[SignalEvent]) -> f32 {
     if signal_events.len() < 20 {
         return 0.0;
     }
-    // 3 symbols x 4 distance bins: [0-5), [5-10), [10-14), [14+)
+    // 3 symbols x 4 distance bins aligned with game mechanics:
+    // [0-4) = within prey vision, [4-8) = signal range only, [8-11) = far, [11+) = max
     let mut counts = [[0u32; 4]; 3];
     for e in signal_events {
         let sym = (e.symbol as usize).min(2);
-        let bin = if e.predator_dist < 5.0 {
+        let bin = if e.predator_dist < 4.0 {
             0
-        } else if e.predator_dist < 10.0 {
+        } else if e.predator_dist < 8.0 {
             1
-        } else if e.predator_dist < 14.0 {
+        } else if e.predator_dist < 11.0 {
             2
         } else {
             3

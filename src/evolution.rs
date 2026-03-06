@@ -29,7 +29,11 @@ pub fn crossover(a: &Brain, b: &Brain, rng: &mut impl Rng) -> Brain {
 
 pub fn mutate(brain: &mut Brain, sigma: f32, rng: &mut impl Rng) {
     for w in &mut brain.weights {
-        *w += rng.gen::<f32>() * 2.0 * sigma - sigma;
+        // Box-Muller transform: Gaussian with mean 0, std dev sigma
+        let u1: f32 = rng.gen::<f32>().max(f32::MIN_POSITIVE);
+        let u2: f32 = rng.gen();
+        let z = (-2.0 * u1.ln()).sqrt() * (2.0 * std::f32::consts::PI * u2).cos();
+        *w += z * sigma;
     }
 }
 
