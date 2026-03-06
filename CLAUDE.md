@@ -33,7 +33,7 @@ src/main.rs       - Generation loop, CSV output
 - Signal range: 8 cells, linear decay
 - Signal cost: 0.01 energy per emission
 - Prey vision: 4.0 cells
-- Predator speed: 2 cells/tick (prey move 1)
+- Predator speed: 3 cells/tick (prey move 1)
 - Confusion: radius 4.0, threshold 3 nearby prey
 - Food: 25 items, respawn when < 50%, +0.3 energy each
 - Energy: start 1.0, drain 0.002/tick, death at 0
@@ -43,6 +43,6 @@ src/main.rs       - Generation loop, CSV output
 
 - Single RNG (`ChaCha8Rng`) seeded from CLI arg for reproducibility
 - Prey processed in shuffled order each tick (no index bias)
-- Signals emitted on tick T receivable on tick T+1 only
-- Predator moves 2 cells/tick toward nearest prey (confused by 3+ nearby prey), kills within 1 cell
+- Signals emitted on tick T receivable from tick T+1, persist up to 4 ticks
+- Predator moves 3 cells/tick toward nearest prey (confused by 3+ nearby prey), kills on same cell only
 - NN outputs 0-4 = movement/eat (argmax), outputs 5-7 = signal (emit if max > 0.5, costs energy)

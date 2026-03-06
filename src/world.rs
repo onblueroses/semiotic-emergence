@@ -9,7 +9,7 @@ pub const FOOD_COUNT: usize = 25;
 pub const PREY_VISION_RANGE: f32 = 4.0;
 pub const CONFUSION_THRESHOLD: usize = 3;
 pub const CONFUSION_RADIUS: f32 = 4.0;
-pub const PREDATOR_SPEED: u32 = 2;
+pub const PREDATOR_SPEED: u32 = 3;
 pub const ENERGY_DRAIN: f32 = 0.002;
 pub const SIGNAL_COST: f32 = 0.01;
 
@@ -331,7 +331,7 @@ impl World {
             }
             let dx = wrap_delta(self.predator.x, p.x, GRID_SIZE).abs();
             let dy = wrap_delta(self.predator.y, p.y, GRID_SIZE).abs();
-            if dx <= 1 && dy <= 1 {
+            if dx == 0 && dy == 0 {
                 p.alive = false;
             }
         }
