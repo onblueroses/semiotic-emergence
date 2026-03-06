@@ -1,6 +1,19 @@
+use crate::world::GRID_SIZE;
+
 pub const SIGNAL_RANGE: f32 = 8.0;
 pub const SIGNAL_THRESHOLD: f32 = 0.5;
 pub const NUM_SYMBOLS: usize = 3;
+
+fn wrap_delta(a: i32, b: i32) -> f32 {
+    let d = b - a;
+    if d > GRID_SIZE / 2 {
+        (d - GRID_SIZE) as f32
+    } else if d < -(GRID_SIZE / 2) {
+        (d + GRID_SIZE) as f32
+    } else {
+        d as f32
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct Signal {
@@ -20,8 +33,8 @@ pub fn receive(signals: &[Signal], rx: i32, ry: i32, current_tick: u32) -> [f32;
         if sig.tick_emitted >= current_tick {
             continue; // 1-tick delay: only past signals
         }
-        let dx = (sig.x - rx) as f32;
-        let dy = (sig.y - ry) as f32;
+        let dx = wrap_delta(rx, sig.x);
+        let dy = wrap_delta(ry, sig.y);
         let dist = (dx * dx + dy * dy).sqrt();
         if dist > SIGNAL_RANGE {
             continue;
@@ -59,8 +72,8 @@ pub fn receive_detailed(
         if sig.tick_emitted >= current_tick {
             continue;
         }
-        let dx = (sig.x - rx) as f32;
-        let dy = (sig.y - ry) as f32;
+        let dx = wrap_delta(rx, sig.x);
+        let dy = wrap_delta(ry, sig.y);
         let dist = (dx * dx + dy * dy).sqrt();
         if dist > SIGNAL_RANGE {
             continue;
@@ -127,7 +140,8 @@ mod tests {
             symbol: 0,
             tick_emitted: 0,
         }];
-        let strengths = receive(&signals, 20, 0, 1);
+        // Place receiver 10 cells away (> SIGNAL_RANGE of 8)
+        let strengths = receive(&signals, 10, 0, 1);
         assert!(strengths[0].abs() < 1e-6);
     }
 

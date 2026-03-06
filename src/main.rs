@@ -13,7 +13,8 @@ use rand_chacha::ChaCha8Rng;
 use brain::Brain;
 use world::{SignalEvent, World};
 
-const EVAL_ROUNDS: usize = 2;
+const EVAL_ROUNDS: usize = 5;
+const KIN_ROUNDS: usize = 2;
 
 fn compute_iconicity(signal_events: &[SignalEvent], ticks_near: u32, total_ticks: u32) -> f32 {
     if signal_events.is_empty() || total_ticks == 0 {
@@ -80,7 +81,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(200);
     let ticks_per_eval: u32 = 500;
 
-    let pop_size = 40;
+    let pop_size = 48;
     let group_size = 8;
     let elite_count = 8;
     let tournament_size = 3;
@@ -103,9 +104,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut total_prey_ticks: u32 = 0;
         let mut total_confusion_ticks: u32 = 0;
 
-        for _round in 0..EVAL_ROUNDS {
+        for round in 0..EVAL_ROUNDS {
             let mut indices: Vec<usize> = (0..pop_size).collect();
-            indices.shuffle(&mut rng);
+            if round < KIN_ROUNDS {
+                // Kin grouping: sort by genome weight sum so similar genomes evaluate together.
+                // Signalers co-located with other signalers get confusion benefit.
+                indices.sort_by(|&a, &b| {
+                    let sum_a: f32 = population[a].weights.iter().sum();
+                    let sum_b: f32 = population[b].weights.iter().sum();
+                    sum_a
+                        .partial_cmp(&sum_b)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+            } else {
+                indices.shuffle(&mut rng);
+            }
 
             for group_indices in indices.chunks(group_size) {
                 let brains: Vec<Brain> = group_indices

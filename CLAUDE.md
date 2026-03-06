@@ -24,10 +24,11 @@ src/main.rs       - Generation loop, CSV output
 ## Key numbers
 
 - Grid: 20x20, wrapping edges
-- Population: 40 genomes, evaluated in groups of 8
+- Population: 48 genomes, evaluated in groups of 8
 - Elites: top 8 pass through unchanged
 - Tournament size: 3
 - Mutation: Gaussian, sigma=0.1
+- Eval rounds: 5 (2 kin-grouped, 3 random-shuffled)
 - Ticks per evaluation: 500
 - Signal range: 8 cells, linear decay
 - Prey vision: 4.0 cells

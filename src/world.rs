@@ -10,6 +10,25 @@ pub const CONFUSION_THRESHOLD: usize = 3;
 pub const CONFUSION_RADIUS: f32 = 4.0;
 pub const PREDATOR_SPEED: u32 = 2;
 
+/// Wrap-aware signed delta: shortest path on a toroidal grid.
+/// Returns value in (-size/2, size/2].
+fn wrap_delta(a: i32, b: i32, size: i32) -> i32 {
+    let d = b - a;
+    if d > size / 2 {
+        d - size
+    } else if d < -(size / 2) {
+        d + size
+    } else {
+        d
+    }
+}
+
+fn wrap_dist_sq(ax: i32, ay: i32, bx: i32, by: i32) -> f32 {
+    let dx = wrap_delta(ax, bx, GRID_SIZE) as f32;
+    let dy = wrap_delta(ay, by, GRID_SIZE) as f32;
+    dx * dx + dy * dy
+}
+
 #[derive(Clone, Debug)]
 pub struct Prey {
     pub x: i32,
@@ -108,9 +127,13 @@ impl World {
             }
 
             // Track proximity stats for iconicity baseline
-            let pdx = (self.predator.x - self.prey[i].x) as f32;
-            let pdy = (self.predator.y - self.prey[i].y) as f32;
-            let pdist = (pdx * pdx + pdy * pdy).sqrt();
+            let pdist = wrap_dist_sq(
+                self.prey[i].x,
+                self.prey[i].y,
+                self.predator.x,
+                self.predator.y,
+            )
+            .sqrt();
             self.total_prey_ticks += 1;
             if pdist <= PREY_VISION_RANGE {
                 self.ticks_near_predator += 1;
@@ -142,8 +165,8 @@ impl World {
         let gs = GRID_SIZE as f32;
 
         // 0-2: Predator relative dx, dy, distance (gated by vision range)
-        let pdx = (self.predator.x - p.x) as f32;
-        let pdy = (self.predator.y - p.y) as f32;
+        let pdx = wrap_delta(p.x, self.predator.x, GRID_SIZE) as f32;
+        let pdy = wrap_delta(p.y, self.predator.y, GRID_SIZE) as f32;
         let pdist = (pdx * pdx + pdy * pdy).sqrt();
         if pdist <= PREY_VISION_RANGE {
             inp[0] = pdx / gs;
@@ -153,8 +176,8 @@ impl World {
 
         // 3-4: Nearest food dx, dy
         if let Some(f) = self.nearest_food(p.x, p.y) {
-            inp[3] = (f.x - p.x) as f32 / gs;
-            inp[4] = (f.y - p.y) as f32 / gs;
+            inp[3] = wrap_delta(p.x, f.x, GRID_SIZE) as f32 / gs;
+            inp[4] = wrap_delta(p.y, f.y, GRID_SIZE) as f32 / gs;
         }
 
         // 5: Nearest ally distance
@@ -163,9 +186,7 @@ impl World {
             if j == prey_idx || !other.alive {
                 continue;
             }
-            let dx = (other.x - p.x) as f32;
-            let dy = (other.y - p.y) as f32;
-            let d = (dx * dx + dy * dy).sqrt();
+            let d = wrap_dist_sq(p.x, p.y, other.x, other.y).sqrt();
             if d < min_ally {
                 min_ally = d;
             }
@@ -222,9 +243,7 @@ impl World {
         let px = self.prey[prey_idx].x;
         let py = self.prey[prey_idx].y;
         if let Some(symbol) = signal::maybe_emit(outputs.as_slice(), SIGNAL_THRESHOLD) {
-            let pdx = (self.predator.x - px) as f32;
-            let pdy = (self.predator.y - py) as f32;
-            let predator_dist = (pdx * pdx + pdy * pdy).sqrt();
+            let predator_dist = wrap_dist_sq(px, py, self.predator.x, self.predator.y).sqrt();
             self.signal_events.push(SignalEvent {
                 symbol,
                 predator_dist,
@@ -246,12 +265,9 @@ impl World {
                 .prey
                 .iter()
                 .filter(|p| {
-                    if !p.alive {
-                        return false;
-                    }
-                    let dx = (p.x - self.predator.x) as f32;
-                    let dy = (p.y - self.predator.y) as f32;
-                    (dx * dx + dy * dy).sqrt() <= CONFUSION_RADIUS
+                    p.alive
+                        && wrap_dist_sq(p.x, p.y, self.predator.x, self.predator.y).sqrt()
+                            <= CONFUSION_RADIUS
                 })
                 .count();
 
@@ -271,17 +287,15 @@ impl World {
                 if !p.alive {
                     continue;
                 }
-                let dx = (p.x - self.predator.x) as f32;
-                let dy = (p.y - self.predator.y) as f32;
-                let d = dx * dx + dy * dy;
+                let d = wrap_dist_sq(self.predator.x, self.predator.y, p.x, p.y);
                 if nearest.is_none() || d < nearest.unwrap_or((0, 0, f32::MAX)).2 {
                     nearest = Some((p.x, p.y, d));
                 }
             }
 
             if let Some((tx, ty, _)) = nearest {
-                let dx = tx - self.predator.x;
-                let dy = ty - self.predator.y;
+                let dx = wrap_delta(self.predator.x, tx, GRID_SIZE);
+                let dy = wrap_delta(self.predator.y, ty, GRID_SIZE);
                 if dx.abs() >= dy.abs() {
                     self.predator.x += dx.signum();
                 } else {
@@ -298,8 +312,8 @@ impl World {
             if !p.alive {
                 continue;
             }
-            let dx = (p.x - self.predator.x).abs();
-            let dy = (p.y - self.predator.y).abs();
+            let dx = wrap_delta(self.predator.x, p.x, GRID_SIZE).abs();
+            let dy = wrap_delta(self.predator.y, p.y, GRID_SIZE).abs();
             if dx <= 1 && dy <= 1 {
                 p.alive = false;
             }
@@ -307,17 +321,22 @@ impl World {
     }
 
     fn nearest_food(&self, x: i32, y: i32) -> Option<&Food> {
-        self.food
-            .iter()
-            .min_by_key(|f| (f.x - x).abs() + (f.y - y).abs())
+        self.food.iter().min_by_key(|f| {
+            wrap_delta(x, f.x, GRID_SIZE).abs() + wrap_delta(y, f.y, GRID_SIZE).abs()
+        })
     }
 
     fn nearest_food_idx(&self, x: i32, y: i32, max_dist: i32) -> Option<usize> {
         self.food
             .iter()
             .enumerate()
-            .filter(|(_, f)| (f.x - x).abs() + (f.y - y).abs() <= max_dist)
-            .min_by_key(|(_, f)| (f.x - x).abs() + (f.y - y).abs())
+            .filter(|(_, f)| {
+                wrap_delta(x, f.x, GRID_SIZE).abs() + wrap_delta(y, f.y, GRID_SIZE).abs()
+                    <= max_dist
+            })
+            .min_by_key(|(_, f)| {
+                wrap_delta(x, f.x, GRID_SIZE).abs() + wrap_delta(y, f.y, GRID_SIZE).abs()
+            })
             .map(|(i, _)| i)
     }
 }
