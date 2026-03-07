@@ -1,6 +1,6 @@
 use rand::Rng;
 
-use crate::brain::Brain;
+use crate::brain::{Brain, GENOME_LEN};
 
 pub fn tournament_select<'a>(
     population: &'a [(Brain, f32)],
@@ -20,10 +20,9 @@ pub fn tournament_select<'a>(
 }
 
 pub fn crossover(a: &Brain, b: &Brain, rng: &mut impl Rng) -> Brain {
-    let point = rng.gen_range(1..a.weights.len());
-    let mut weights = Vec::with_capacity(a.weights.len());
-    weights.extend_from_slice(&a.weights[..point]);
-    weights.extend_from_slice(&b.weights[point..]);
+    let point = rng.gen_range(1..GENOME_LEN);
+    let mut weights = a.weights;
+    weights[point..].copy_from_slice(&b.weights[point..]);
     Brain { weights }
 }
 
@@ -73,7 +72,6 @@ pub fn evolve(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::brain::GENOME_LEN;
 
     #[test]
     fn crossover_preserves_length() {

@@ -208,6 +208,10 @@ impl World {
         }
 
         self.move_predator(rng);
+        // Kill check runs once after all 3 movement sub-steps, not after each.
+        // The predator can pass through a prey's cell without killing it. This is
+        // intentional: the overshoot makes the confusion effect more impactful and
+        // creates stronger evolutionary pressure for grouping behavior.
         self.predator_kill();
 
         if self.food.len() < FOOD_COUNT / 2 {
@@ -406,5 +410,317 @@ impl World {
                 wrap_delta(x, f.x, GRID_SIZE).abs() + wrap_delta(y, f.y, GRID_SIZE).abs()
             })
             .map(|(i, _)| i)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::brain::{Brain, GENOME_LEN, INPUTS};
+    use rand::SeedableRng;
+    use rand_chacha::ChaCha8Rng;
+
+    fn zero_brain() -> Brain {
+        Brain {
+            weights: [0.0; GENOME_LEN],
+        }
+    }
+
+    fn minimal_world(prey_positions: &[(i32, i32)], predator: (i32, i32)) -> World {
+        let prey = prey_positions
+            .iter()
+            .map(|&(x, y)| Prey {
+                x,
+                y,
+                energy: 1.0,
+                alive: true,
+                brain: zero_brain(),
+                ticks_alive: 0,
+                food_eaten: 0,
+            })
+            .collect();
+        World {
+            prey,
+            predator: Predator {
+                x: predator.0,
+                y: predator.1,
+            },
+            food: Vec::new(),
+            signals: Vec::new(),
+            tick: 0,
+            signals_emitted: 0,
+            signal_events: Vec::new(),
+            ticks_near_predator: 0,
+            total_prey_ticks: 0,
+            confusion_ticks: 0,
+            receiver_counts: [[[0u32; 5]; 2]; 4],
+            signals_per_tick: Vec::new(),
+            min_pred_dist_per_tick: Vec::new(),
+            no_signals: true,
+        }
+    }
+
+    // --- Toroidal wrapping ---
+
+    #[test]
+    fn wrap_delta_no_wrap() {
+        assert_eq!(wrap_delta(3, 7, GRID_SIZE), 4);
+        assert_eq!(wrap_delta(7, 3, GRID_SIZE), -4);
+    }
+
+    #[test]
+    fn wrap_delta_across_boundary() {
+        // 18 -> 1: naive delta = -17, but wrapping = +3 (shorter path)
+        assert_eq!(wrap_delta(18, 1, GRID_SIZE), 3);
+        // 1 -> 18: naive delta = 17, but wrapping = -3
+        assert_eq!(wrap_delta(1, 18, GRID_SIZE), -3);
+    }
+
+    #[test]
+    fn wrap_delta_half_grid() {
+        // Exactly half the grid: delta = 10, which is size/2, lands in the else branch
+        assert_eq!(wrap_delta(0, 10, GRID_SIZE), 10);
+        // -10 is exactly -(size/2), also the else branch
+        assert_eq!(wrap_delta(10, 0, GRID_SIZE), -10);
+    }
+
+    #[test]
+    fn wrap_dist_sq_same_cell_is_zero() {
+        assert!((wrap_dist_sq(5, 5, 5, 5) - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn wrap_dist_sq_across_boundary() {
+        // (19, 0) to (1, 0): wrap delta x = 2
+        let d = wrap_dist_sq(19, 0, 1, 0);
+        assert!((d - 4.0).abs() < 1e-6); // 2^2 = 4
+    }
+
+    // --- Predator movement ---
+
+    #[test]
+    fn predator_moves_toward_nearest_prey() {
+        let mut world = minimal_world(&[(10, 5)], (5, 5));
+        let mut rng = ChaCha8Rng::seed_from_u64(0);
+
+        world.move_predator(&mut rng);
+
+        // Predator at (5,5), prey at (10,5): dx=5, dy=0. Should move +x 3 times.
+        assert_eq!(world.predator.x, 8);
+        assert_eq!(world.predator.y, 5);
+    }
+
+    #[test]
+    fn predator_chases_through_wrap_boundary() {
+        // Predator at (1,10), prey at (18,10): wrap dx = -3, so predator moves left
+        let mut world = minimal_world(&[(18, 10)], (1, 10));
+        let mut rng = ChaCha8Rng::seed_from_u64(0);
+
+        world.move_predator(&mut rng);
+
+        // 3 steps of x-1 wrapping: 1 -> 0 -> 19 -> 18
+        assert_eq!(world.predator.x, 18);
+        assert_eq!(world.predator.y, 10);
+    }
+
+    #[test]
+    fn predator_confused_by_three_nearby_prey() {
+        // Place 3 prey within CONFUSION_RADIUS of predator
+        let px = 10;
+        let py = 10;
+        let mut world = minimal_world(&[(px + 1, py), (px - 1, py), (px, py + 1)], (px, py));
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        world.move_predator(&mut rng);
+
+        // All sub-steps should be confused (3 prey within radius 4.0 of predator)
+        assert_eq!(world.confusion_ticks, PREDATOR_SPEED);
+    }
+
+    #[test]
+    fn predator_not_confused_by_two_nearby_prey() {
+        let px = 10;
+        let py = 10;
+        let mut world = minimal_world(&[(px + 1, py), (px - 1, py)], (px, py));
+        let mut rng = ChaCha8Rng::seed_from_u64(0);
+
+        world.move_predator(&mut rng);
+
+        assert_eq!(world.confusion_ticks, 0);
+    }
+
+    // --- Predator kill ---
+
+    #[test]
+    fn predator_kills_prey_on_same_cell() {
+        let mut world = minimal_world(&[(5, 5)], (5, 5));
+
+        world.predator_kill();
+
+        assert!(!world.prey[0].alive);
+    }
+
+    #[test]
+    fn predator_does_not_kill_adjacent_prey() {
+        let mut world = minimal_world(&[(5, 6)], (5, 5));
+
+        world.predator_kill();
+
+        assert!(world.prey[0].alive);
+    }
+
+    #[test]
+    fn predator_kill_marks_dead() {
+        let mut world = minimal_world(&[(3, 3), (3, 3), (7, 7)], (3, 3));
+
+        world.predator_kill();
+
+        assert!(!world.prey[0].alive);
+        assert!(!world.prey[1].alive);
+        assert!(world.prey[2].alive);
+    }
+
+    // --- Energy mechanics ---
+
+    #[test]
+    fn energy_drains_per_tick() {
+        let mut world = minimal_world(&[(0, 0)], (15, 15));
+        // Place food far away so prey can't eat
+        world.food.push(Food { x: 10, y: 10 });
+        let mut rng = ChaCha8Rng::seed_from_u64(0);
+
+        let before = world.prey[0].energy;
+        world.step(&mut rng);
+        let after = world.prey[0].energy;
+
+        assert!((before - after - ENERGY_DRAIN).abs() < 1e-6);
+    }
+
+    #[test]
+    fn food_consumption_restores_energy() {
+        let mut world = minimal_world(&[(5, 5)], (15, 15));
+        world.prey[0].energy = 0.5;
+        // Place food on the prey's cell
+        world.food.push(Food { x: 5, y: 5 });
+
+        // Directly test apply_outputs with eat action (output 4 is highest)
+        let mut outputs = [0.0_f32; crate::brain::OUTPUTS];
+        outputs[4] = 1.0; // eat action
+        world.apply_outputs(0, &outputs);
+
+        // Energy should increase by 0.3 (minus nothing - apply_outputs doesn't drain)
+        assert!((world.prey[0].energy - 0.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn energy_caps_at_one() {
+        let mut world = minimal_world(&[(5, 5)], (15, 15));
+        world.prey[0].energy = 0.9;
+        world.food.push(Food { x: 5, y: 5 });
+
+        let mut outputs = [0.0_f32; crate::brain::OUTPUTS];
+        outputs[4] = 1.0;
+        world.apply_outputs(0, &outputs);
+
+        assert!((world.prey[0].energy - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn energy_death_at_zero() {
+        let mut world = minimal_world(&[(0, 0)], (15, 15));
+        world.prey[0].energy = ENERGY_DRAIN * 0.5; // less than one tick's drain
+        world.food.push(Food { x: 10, y: 10 });
+        let mut rng = ChaCha8Rng::seed_from_u64(0);
+
+        world.step(&mut rng);
+
+        assert!(!world.prey[0].alive);
+    }
+
+    // --- Food respawn ---
+
+    #[test]
+    fn food_respawns_when_below_half() {
+        let mut world = minimal_world(&[(0, 0)], (15, 15));
+        // Start with fewer than FOOD_COUNT/2 food items (FOOD_COUNT=25, so half=12, add 11)
+        for x in 5..16 {
+            world.food.push(Food { x, y: 5 });
+        }
+        let mut rng = ChaCha8Rng::seed_from_u64(0);
+
+        world.step(&mut rng);
+
+        assert_eq!(world.food.len(), FOOD_COUNT);
+    }
+
+    #[test]
+    fn food_does_not_respawn_above_half() {
+        let mut world = minimal_world(&[(0, 0)], (15, 15));
+        // Start with exactly FOOD_COUNT/2 + 1 items (above threshold: 13 items)
+        for x in 5..18 {
+            world.food.push(Food { x, y: 5 });
+        }
+        let initial_count = world.food.len();
+        let mut rng = ChaCha8Rng::seed_from_u64(0);
+
+        world.step(&mut rng);
+
+        // Prey might eat one, but food won't respawn because count >= FOOD_COUNT/2
+        assert!(world.food.len() <= initial_count);
+    }
+
+    // --- Input building / vision gating ---
+
+    #[test]
+    fn predator_inputs_zeroed_when_out_of_range() {
+        let mut world = minimal_world(&[(0, 0)], (15, 15));
+        // Distance: wrap_dist from (0,0) to (15,15) = sqrt(5^2 + 5^2) = ~7.07 > PREY_VISION_RANGE (4.0)
+        world.food.push(Food { x: 10, y: 10 });
+
+        let inputs = world.build_inputs(0);
+
+        // Predator inputs (0-2) should all be zero
+        assert!((inputs[0]).abs() < 1e-6);
+        assert!((inputs[1]).abs() < 1e-6);
+        assert!((inputs[2]).abs() < 1e-6);
+    }
+
+    #[test]
+    fn predator_inputs_populated_when_in_range() {
+        // Prey at (10,10), predator at (12,10): distance = 2.0 < 4.0
+        let mut world = minimal_world(&[(10, 10)], (12, 10));
+        world.food.push(Food { x: 5, y: 5 });
+
+        let inputs = world.build_inputs(0);
+
+        // dx = wrap_delta(10, 12, 20) = 2, normalized by grid: 2/20 = 0.1
+        assert!((inputs[0] - 0.1).abs() < 1e-6);
+        // dy = 0
+        assert!((inputs[1]).abs() < 1e-6);
+        // distance = 2.0, normalized: 2.0/4.0 = 0.5
+        assert!((inputs[2] - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn predator_inputs_at_vision_boundary() {
+        // Place predator exactly at vision range: distance = 4.0
+        // Prey at (0,0), predator at (4,0): distance = 4.0 <= PREY_VISION_RANGE
+        let mut world = minimal_world(&[(0, 0)], (4, 0));
+        world.food.push(Food { x: 10, y: 10 });
+
+        let inputs = world.build_inputs(0);
+
+        // Should be populated (distance <= range, not strictly <)
+        assert!(inputs[0] > 0.0 || inputs[2] > 0.0);
+    }
+
+    #[test]
+    fn build_inputs_returns_correct_size() {
+        let mut world = minimal_world(&[(0, 0)], (15, 15));
+        world.food.push(Food { x: 5, y: 5 });
+
+        let inputs = world.build_inputs(0);
+
+        assert_eq!(inputs.len(), INPUTS);
     }
 }
