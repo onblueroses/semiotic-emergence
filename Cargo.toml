@@ -1,10 +1,10 @@
 [package]
-name = "predator-prey"
+name = "semiotic-emergence"
 version = "0.1.0"
 edition = "2021"
-description = "Minimal predator-prey simulation with evolving neural networks and emergent communication"
+description = "A semiotic observatory: watching meaning come into existence in a minimal evolutionary world"
 license = "MIT"
-repository = "https://github.com/onblueroses/predator-prey-evolution-communication"
+repository = "https://github.com/onblueroses/semiotic-emergence"
 
 [dependencies]
 rand = "0.8"
