@@ -8,12 +8,12 @@ pub const GENOME_LEN: usize = INPUTS * HIDDEN + HIDDEN + HIDDEN * OUTPUTS + OUTP
 #[derive(Clone, Debug)]
 pub struct Brain {
     /// Weights: [input->hidden (96), hidden biases (6), hidden->output (48), output biases (8)]
-    pub weights: Vec<f32>,
+    pub weights: [f32; GENOME_LEN],
 }
 
 impl Brain {
     pub fn random(rng: &mut impl Rng) -> Self {
-        let weights = (0..GENOME_LEN).map(|_| rng.gen_range(-1.0..1.0)).collect();
+        let weights = std::array::from_fn(|_| rng.gen_range(-1.0..1.0));
         Self { weights }
     }
 
@@ -55,7 +55,7 @@ mod tests {
     #[test]
     fn zero_weights_zero_output() {
         let brain = Brain {
-            weights: vec![0.0; GENOME_LEN],
+            weights: [0.0; GENOME_LEN],
         };
         let out = brain.forward(&[0.0; INPUTS]);
         for v in &out {
