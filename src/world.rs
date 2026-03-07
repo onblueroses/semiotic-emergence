@@ -4,6 +4,25 @@ use rand::Rng;
 use crate::brain::{Brain, INPUTS, OUTPUTS};
 use crate::signal::{self, Signal, SIGNAL_THRESHOLD};
 
+pub const INPUT_NAMES: [&str; INPUTS] = [
+    "pred_dx",
+    "pred_dy",
+    "pred_dist",
+    "food_dx",
+    "food_dy",
+    "ally_dist",
+    "sig0_str",
+    "sig0_dx",
+    "sig0_dy",
+    "sig1_str",
+    "sig1_dx",
+    "sig1_dy",
+    "sig2_str",
+    "sig2_dx",
+    "sig2_dy",
+    "energy",
+];
+
 pub const GRID_SIZE: i32 = 20;
 pub const FOOD_COUNT: usize = 25;
 pub const PREY_VISION_RANGE: f32 = 4.0;
@@ -58,6 +77,9 @@ pub struct Food {
 pub struct SignalEvent {
     pub symbol: u8,
     pub predator_dist: f32,
+    pub inputs: [f32; INPUTS],
+    pub kin_round: bool,
+    pub emitter_idx: usize,
 }
 
 pub struct World {
@@ -76,16 +98,20 @@ pub struct World {
     /// `context`: 0=no predator, 1=predator visible.
     /// `action`: 0-4 (up/down/right/left/eat).
     pub receiver_counts: [[[u32; 5]; 2]; 4],
+    pub receiver_counts_kin: [[[u32; 5]; 2]; 4],
+    pub receiver_counts_rnd: [[[u32; 5]; 2]; 4],
     /// Signal count per tick (for silence correlation).
     pub signals_per_tick: Vec<u32>,
     /// Minimum predator-to-alive-prey distance per tick.
     pub min_pred_dist_per_tick: Vec<f32>,
     /// When true, signal emission is suppressed (counterfactual mode).
     pub no_signals: bool,
+    /// Whether the current eval round uses kin-grouped assignment.
+    pub kin_round: bool,
 }
 
 impl World {
-    pub fn new(brains: Vec<Brain>, rng: &mut impl Rng, no_signals: bool) -> Self {
+    pub fn new(brains: Vec<Brain>, rng: &mut impl Rng, no_signals: bool, kin_round: bool) -> Self {
         let prey = brains
             .into_iter()
             .map(|brain| Prey {
@@ -123,9 +149,12 @@ impl World {
             total_prey_ticks: 0,
             confusion_ticks: 0,
             receiver_counts: [[[0u32; 5]; 2]; 4],
+            receiver_counts_kin: [[[0u32; 5]; 2]; 4],
+            receiver_counts_rnd: [[[0u32; 5]; 2]; 4],
             signals_per_tick: Vec::new(),
             min_pred_dist_per_tick: Vec::new(),
             no_signals,
+            kin_round,
         }
     }
 
@@ -201,8 +230,13 @@ impl World {
                 .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
                 .map_or(0, |(i, _)| i);
             self.receiver_counts[signal_state][context][action] += 1;
+            if self.kin_round {
+                self.receiver_counts_kin[signal_state][context][action] += 1;
+            } else {
+                self.receiver_counts_rnd[signal_state][context][action] += 1;
+            }
 
-            self.apply_outputs(i, &outputs);
+            self.apply_outputs(i, &outputs, &inputs);
 
             self.prey[i].ticks_alive += 1;
         }
@@ -283,7 +317,7 @@ impl World {
         inp
     }
 
-    fn apply_outputs(&mut self, prey_idx: usize, outputs: &[f32; OUTPUTS]) {
+    fn apply_outputs(&mut self, prey_idx: usize, outputs: &[f32; OUTPUTS], inputs: &[f32; INPUTS]) {
         let action = outputs[..5]
             .iter()
             .enumerate()
@@ -318,6 +352,9 @@ impl World {
                 self.signal_events.push(SignalEvent {
                     symbol,
                     predator_dist,
+                    inputs: *inputs,
+                    kin_round: self.kin_round,
+                    emitter_idx: prey_idx,
                 });
                 self.signals.push(Signal {
                     x: px,
@@ -454,9 +491,12 @@ mod tests {
             total_prey_ticks: 0,
             confusion_ticks: 0,
             receiver_counts: [[[0u32; 5]; 2]; 4],
+            receiver_counts_kin: [[[0u32; 5]; 2]; 4],
+            receiver_counts_rnd: [[[0u32; 5]; 2]; 4],
             signals_per_tick: Vec::new(),
             min_pred_dist_per_tick: Vec::new(),
             no_signals: true,
+            kin_round: false,
         }
     }
 
@@ -606,7 +646,8 @@ mod tests {
         // Directly test apply_outputs with eat action (output 4 is highest)
         let mut outputs = [0.0_f32; crate::brain::OUTPUTS];
         outputs[4] = 1.0; // eat action
-        world.apply_outputs(0, &outputs);
+        let inputs = [0.0_f32; INPUTS];
+        world.apply_outputs(0, &outputs, &inputs);
 
         // Energy should increase by 0.3 (minus nothing - apply_outputs doesn't drain)
         assert!((world.prey[0].energy - 0.8).abs() < 1e-6);
@@ -620,7 +661,8 @@ mod tests {
 
         let mut outputs = [0.0_f32; crate::brain::OUTPUTS];
         outputs[4] = 1.0;
-        world.apply_outputs(0, &outputs);
+        let inputs = [0.0_f32; INPUTS];
+        world.apply_outputs(0, &outputs, &inputs);
 
         assert!((world.prey[0].energy - 1.0).abs() < 1e-6);
     }
