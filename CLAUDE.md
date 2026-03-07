@@ -77,7 +77,7 @@ Original five instruments in `src/metrics.rs`:
 6. **Input telescope** - I(Symbol; X_i) for all 16 input dimensions at emission time, quartile-binned (input_mi.csv)
 7. **Social telescope** - Kin vs random round split: mi_kin/mi_rnd, jsd_*_kin/jsd_*_rnd in output.csv
 8. **Contrast telescope** - Pairwise JSD between symbols' context distributions: contrast_01/02/12 in trajectory.csv
-9. **Fitness coupling** - Pearson(signal_count, fitness) per prey: sender_fit_corr in output.csv. receiver_fit_corr is reserved (always 0.0 - requires per-prey receiver tracking).
+9. **Fitness coupling** - Pearson(signal_rate, fitness) per prey: sender_fit_corr in output.csv. Signal rate = signals / ticks_alive, avoiding the tautological correlation between survival time and raw signal count.
 10. **Phase transition stats** - Rolling fluctuation ratio on trajectory_jsd: traj_fluct_ratio in output.csv
 
 ### SignalEvent enrichment
@@ -87,7 +87,7 @@ SignalEvent captures full input vector, kin_round flag, and emitter_idx at emiss
 ## CSV output
 
 **output.csv** - One row per generation:
-`generation,avg_fitness,max_fitness,signals_emitted,iconicity,mutual_info,confusion_ticks,jsd_no_pred,jsd_pred,silence_corr,mi_kin,mi_rnd,jsd_no_pred_kin,jsd_no_pred_rnd,jsd_pred_kin,jsd_pred_rnd,sender_fit_corr,receiver_fit_corr,traj_fluct_ratio`
+`generation,avg_fitness,max_fitness,signals_emitted,iconicity,mutual_info,confusion_ticks,jsd_no_pred,jsd_pred,silence_corr,mi_kin,mi_rnd,jsd_no_pred_kin,jsd_no_pred_rnd,jsd_pred_kin,jsd_pred_rnd,sender_fit_corr,traj_fluct_ratio`
 
 **trajectory.csv** - One row per generation:
 `generation,s0d0..s2d3,jsd_sym0..jsd_sym2,trajectory_jsd,contrast_01,contrast_02,contrast_12`
