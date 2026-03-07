@@ -71,10 +71,21 @@ pub struct World {
     pub ticks_near_predator: u32,
     pub total_prey_ticks: u32,
     pub confusion_ticks: u32,
+    /// Receiver response spectrum: `[signal_state][context][action]` counts.
+    /// `signal_state`: 0=none, 1=sym0, 2=sym1, 3=sym2 (strongest received).
+    /// `context`: 0=no predator, 1=predator visible.
+    /// `action`: 0-4 (up/down/right/left/eat).
+    pub receiver_counts: [[[u32; 5]; 2]; 4],
+    /// Signal count per tick (for silence correlation).
+    pub signals_per_tick: Vec<u32>,
+    /// Minimum predator-to-alive-prey distance per tick.
+    pub min_pred_dist_per_tick: Vec<f32>,
+    /// When true, signal emission is suppressed (counterfactual mode).
+    pub no_signals: bool,
 }
 
 impl World {
-    pub fn new(brains: Vec<Brain>, rng: &mut impl Rng) -> Self {
+    pub fn new(brains: Vec<Brain>, rng: &mut impl Rng, no_signals: bool) -> Self {
         let prey = brains
             .into_iter()
             .map(|brain| Prey {
@@ -111,6 +122,10 @@ impl World {
             ticks_near_predator: 0,
             total_prey_ticks: 0,
             confusion_ticks: 0,
+            receiver_counts: [[[0u32; 5]; 2]; 4],
+            signals_per_tick: Vec::new(),
+            min_pred_dist_per_tick: Vec::new(),
+            no_signals,
         }
     }
 
@@ -121,8 +136,19 @@ impl World {
     pub fn step(&mut self, rng: &mut impl Rng) {
         self.tick += 1;
 
+        let signals_before = self.signals_emitted;
+
         self.signals
             .retain(|s| self.tick.saturating_sub(s.tick_emitted) <= 4);
+
+        // Track minimum predator-to-alive-prey distance this tick
+        let min_pred_dist = self
+            .prey
+            .iter()
+            .filter(|p| p.alive)
+            .map(|p| wrap_dist_sq(p.x, p.y, self.predator.x, self.predator.y).sqrt())
+            .fold(f32::MAX, f32::min);
+        self.min_pred_dist_per_tick.push(min_pred_dist);
 
         // Shuffle prey processing order to prevent index bias
         let mut order: Vec<usize> = (0..self.prey.len()).collect();
@@ -155,6 +181,27 @@ impl World {
 
             let inputs = self.build_inputs(i);
             let outputs = self.prey[i].brain.forward(&inputs);
+
+            // Receiver response spectrum: classify signal state, context, and chosen action
+            let strengths = [inputs[6], inputs[9], inputs[12]];
+            let max_str = strengths[0].max(strengths[1]).max(strengths[2]);
+            let signal_state: usize = if max_str > 0.0 {
+                1 + strengths
+                    .iter()
+                    .enumerate()
+                    .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+                    .map_or(0, |(i, _)| i)
+            } else {
+                0
+            };
+            let context = usize::from(inputs[2] > 0.0);
+            let action = outputs[..5]
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+                .map_or(0, |(i, _)| i);
+            self.receiver_counts[signal_state][context][action] += 1;
+
             self.apply_outputs(i, &outputs);
 
             self.prey[i].ticks_alive += 1;
@@ -171,6 +218,9 @@ impl World {
                 });
             }
         }
+
+        self.signals_per_tick
+            .push(self.signals_emitted - signals_before);
     }
 
     fn build_inputs(&self, prey_idx: usize) -> [f32; INPUTS] {
@@ -254,9 +304,10 @@ impl World {
         }
 
         // Signal emission (outputs 5-7) - costs energy
+        // Suppressed in counterfactual mode (--no-signals)
         let px = self.prey[prey_idx].x;
         let py = self.prey[prey_idx].y;
-        if self.prey[prey_idx].energy > SIGNAL_COST {
+        if !self.no_signals && self.prey[prey_idx].energy > SIGNAL_COST {
             if let Some(symbol) = signal::maybe_emit(outputs.as_slice(), SIGNAL_THRESHOLD) {
                 self.prey[prey_idx].energy -= SIGNAL_COST;
                 let predator_dist = wrap_dist_sq(px, py, self.predator.x, self.predator.y).sqrt();

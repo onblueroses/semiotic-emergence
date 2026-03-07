@@ -8,7 +8,9 @@ A semiotic observatory for watching meaning emerge in a minimal evolutionary wor
 
 ```bash
 cargo build
-cargo run -- [seed] [generations]
+cargo run --release -- [seed] [gens]                # normal
+cargo run --release -- [seed] [gens] --no-signals   # counterfactual (signals suppressed)
+cargo run --release -- --batch N [gens]             # cross-population divergence
 cargo test
 cargo clippy --all-targets -- -D warnings
 ```
@@ -19,9 +21,10 @@ cargo clippy --all-targets -- -D warnings
 FRAMEWORK.md      - Governing intellectual framework (READ FIRST)
 src/brain.rs      - NN forward pass (16->6->8, 158 weights)
 src/evolution.rs  - GA: tournament select, crossover, mutation
-src/world.rs      - Grid, prey/predator structs, tick loop
+src/world.rs      - Grid, prey/predator structs, tick loop, receiver instrumentation
 src/signal.rs     - 3-symbol broadcast, distance decay, 1-tick delay
-src/main.rs       - Generation loop, CSV output
+src/metrics.rs    - All 5 FRAMEWORK instruments: MI, iconicity, JSD, silence, divergence
+src/main.rs       - Generation loop, CSV output, batch mode, counterfactual mode
 ```
 
 ## Key numbers
@@ -55,12 +58,16 @@ src/main.rs       - Generation loop, CSV output
 - MI > 0: signal symbols correlate with predator distance (sender-side structure exists)
 - Negative iconicity: prey suppress signals near the predator (silence = danger pattern)
 - These are Level 1 (index) phenomena - see FRAMEWORK.md hierarchy
-- Receiver-side effects are unmeasured (the critical blind spot)
+- JSD > 0.2 by gen 40: receivers change behavior in response to signals (instrument #1)
+- Negative silence_corr: signal rate drops near predator (temporal confirmation, instrument #2)
+- Counterfactual mode (--no-signals) confirms signal channel affects population dynamics
 
-## Development priorities (from FRAMEWORK.md)
+## Implemented instruments (from FRAMEWORK.md)
 
-1. Receiver response spectrum - does signal content change receiver behavior?
-2. Silence detection - is the zero sign functional?
-3. Semiotic trajectory - how does the signal-meaning mapping evolve over time?
-4. Cross-population divergence - convention vs. constraint?
-5. Counterfactual value - does the signal channel improve fitness?
+All five instruments are implemented in `src/metrics.rs`:
+
+1. **Receiver response spectrum** - JSD between action distributions with/without signal, per context (jsd_no_pred, jsd_pred)
+2. **Silence detection** - Pearson correlation between signals-per-tick and min-predator-distance (silence_corr)
+3. **Semiotic trajectory** - Per-generation signal-context matrix evolution in trajectory.csv, trajectory_jsd for phase transitions
+4. **Cross-population divergence** - Permutation-aware JSD across seeds (--batch mode, divergence.csv)
+5. **Counterfactual value** - --no-signals flag suppresses emission for fitness comparison

@@ -13,30 +13,37 @@ Whether they actually learn to talk to each other is still an open question. So 
 ## Run it
 
 ```bash
-cargo run --release -- [seed] [generations]
-cargo run --release -- 42 300
+cargo run --release -- [seed] [generations]       # normal run
+cargo run --release -- 42 300                     # seed 42, 300 gens
+cargo run --release -- 42 300 --no-signals        # counterfactual (signals suppressed)
+cargo run --release -- --batch 10 300             # cross-population divergence
 ```
 
-Output goes to `output.csv`.
+Output goes to `output.csv` and `trajectory.csv`. Batch mode also writes `divergence.csv`.
 
-## What we can see (and what we can't)
+## What we can see
 
-The CSV tracks a few things per generation: fitness, signal count, mutual information (does symbol choice correlate with predator distance?), iconicity (are signals concentrated near the predator?), and confusion ticks (how often prey successfully group up to confuse the predator).
+The CSV tracks per generation: fitness, signal count, mutual information (does symbol choice correlate with predator distance?), iconicity (are signals concentrated near the predator?), confusion ticks (how often prey successfully group up to confuse the predator), receiver JSD (does hearing a signal change what a prey does?), and silence correlation (do signals drop when the predator is close?).
 
-The thing that bothers me about these metrics is that they only look at the sender. We know the signals correlate with the world state, but we have no idea whether any other prey actually changes its behavior because of a signal it received. That's the gap between information and communication. A tree ring carries information about climate, but the tree isn't talking to anyone.
+The receiver-side instruments are the recent addition. We now have five instruments covering both halves of the communication channel:
 
-Building instruments for the receiver side is the priority. Does hearing symbol 0 make a prey behave differently than hearing symbol 1? Does silence change behavior? Does any of it actually improve survival? These are the questions the current metrics can't answer.
+1. **Receiver response spectrum** - JSD between action distributions with vs without signal. By gen 40, JSD > 0.2 - receivers genuinely change behavior in response to signals.
+2. **Silence detection** - Pearson correlation between signal rate and predator proximity. Negative values confirm the temporal pattern: prey go quiet near danger.
+3. **Semiotic trajectory** - How the signal-meaning mapping evolves generation by generation. Spikes in trajectory JSD mark phase transitions where meaning reorganizes.
+4. **Cross-population divergence** - Do different seeds develop different conventions? Permutation-aware comparison accounts for arbitrary symbol labeling.
+5. **Counterfactual value** - Run with `--no-signals` to suppress emission. Same seed, different fitness curves - the delta is the signal channel's contribution.
 
 ## The code
 
-About 900 lines of Rust across five files:
+About 1200 lines of Rust across six files:
 
 ```
 src/brain.rs      - Neural network (16 inputs, 6 hidden, 8 outputs)
 src/evolution.rs  - Genetic algorithm (tournament, crossover, Gaussian mutation)
 src/world.rs      - The grid, the physics, the predator, the food
 src/signal.rs     - Three symbols, linear decay, short range, one-tick delay
-src/main.rs       - Generation loop, metrics, CSV output
+src/metrics.rs    - All five FRAMEWORK instruments (MI, JSD, silence, trajectory, divergence)
+src/main.rs       - Generation loop, batch mode, counterfactual mode, CSV output
 ```
 
 ## How the world works
