@@ -1,3 +1,10 @@
 /target
 output.csv
+trajectory.csv
+input_mi.csv
+divergence.csv
+output/
+nul
+commit.ps1
+CLAUDE.md
 .claude/

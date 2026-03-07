@@ -35,7 +35,7 @@ The receiver-side instruments are the recent addition. We now have five instrume
 
 ## The code
 
-About 1200 lines of Rust across six files:
+About 2100 lines of Rust across six files (including inline tests):
 
 ```
 src/brain.rs      - Neural network (16 inputs, 6 hidden, 8 outputs)
