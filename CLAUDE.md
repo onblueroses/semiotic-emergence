@@ -23,8 +23,8 @@ src/brain.rs      - NN forward pass (16->6->8, 158 weights)
 src/evolution.rs  - GA: tournament select, crossover, mutation
 src/world.rs      - Grid, prey/predator structs, tick loop, receiver instrumentation
 src/signal.rs     - 3-symbol broadcast, distance decay, 1-tick delay
-src/metrics.rs    - All 5 FRAMEWORK instruments: MI, iconicity, JSD, silence, divergence
-src/main.rs       - Generation loop, CSV output, batch mode, counterfactual mode
+src/metrics.rs    - All instruments: MI, iconicity, JSD, silence, divergence, input MI, contrast, coupling, fluctuation
+src/main.rs       - Generation loop, CSV output (3 files), batch mode, counterfactual mode
 ```
 
 ## Key numbers
@@ -64,10 +64,35 @@ src/main.rs       - Generation loop, CSV output, batch mode, counterfactual mode
 
 ## Implemented instruments (from FRAMEWORK.md)
 
-All five instruments are implemented in `src/metrics.rs`:
+Original five instruments in `src/metrics.rs`:
 
 1. **Receiver response spectrum** - JSD between action distributions with/without signal, per context (jsd_no_pred, jsd_pred)
 2. **Silence detection** - Pearson correlation between signals-per-tick and min-predator-distance (silence_corr)
 3. **Semiotic trajectory** - Per-generation signal-context matrix evolution in trajectory.csv, trajectory_jsd for phase transitions
 4. **Cross-population divergence** - Permutation-aware JSD across seeds (--batch mode, divergence.csv)
 5. **Counterfactual value** - --no-signals flag suppresses emission for fitness comparison
+
+### Observatory enrichment (5 additional instruments)
+
+6. **Input telescope** - I(Symbol; X_i) for all 16 input dimensions at emission time, quartile-binned (input_mi.csv)
+7. **Social telescope** - Kin vs random round split: mi_kin/mi_rnd, jsd_*_kin/jsd_*_rnd in output.csv
+8. **Contrast telescope** - Pairwise JSD between symbols' context distributions: contrast_01/02/12 in trajectory.csv
+9. **Fitness coupling** - Pearson(signal_count, fitness) per prey: sender_fit_corr in output.csv. receiver_fit_corr is reserved (always 0.0 - requires per-prey receiver tracking).
+10. **Phase transition stats** - Rolling fluctuation ratio on trajectory_jsd: traj_fluct_ratio in output.csv
+
+### SignalEvent enrichment
+
+SignalEvent captures full input vector, kin_round flag, and emitter_idx at emission time. This enables all observatory instruments without modifying the simulation physics.
+
+## CSV output
+
+**output.csv** - One row per generation:
+`generation,avg_fitness,max_fitness,signals_emitted,iconicity,mutual_info,confusion_ticks,jsd_no_pred,jsd_pred,silence_corr,mi_kin,mi_rnd,jsd_no_pred_kin,jsd_no_pred_rnd,jsd_pred_kin,jsd_pred_rnd,sender_fit_corr,receiver_fit_corr,traj_fluct_ratio`
+
+**trajectory.csv** - One row per generation:
+`generation,s0d0..s2d3,jsd_sym0..jsd_sym2,trajectory_jsd,contrast_01,contrast_02,contrast_12`
+
+**input_mi.csv** - One row per generation:
+`generation,mi_pred_dx,mi_pred_dy,mi_pred_dist,mi_food_dx,mi_food_dy,mi_ally_dist,mi_sig0_str..mi_sig2_dy,mi_energy`
+
+**divergence.csv** - NxN matrix from `--batch` mode.

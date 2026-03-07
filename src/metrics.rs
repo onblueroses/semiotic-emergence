@@ -1,3 +1,4 @@
+use crate::brain::INPUTS;
 use crate::world::{SignalEvent, PREY_VISION_RANGE};
 
 pub fn compute_iconicity(signal_events: &[SignalEvent], ticks_near: u32, total_ticks: u32) -> f32 {
@@ -18,6 +19,46 @@ pub fn compute_mutual_info(signal_events: &[SignalEvent]) -> f32 {
         return 0.0;
     }
     let counts = signal_context_matrix(signal_events);
+    let n = signal_events.len() as f32;
+    let mut mi = 0.0_f32;
+    for s in 0..3 {
+        let prob_s = counts[s].iter().sum::<u32>() as f32 / n;
+        if prob_s == 0.0 {
+            continue;
+        }
+        for (bin, &count) in counts[s].iter().enumerate() {
+            let prob_d: f32 = (0..3).map(|ss| counts[ss][bin]).sum::<u32>() as f32 / n;
+            if prob_d == 0.0 {
+                continue;
+            }
+            let prob_joint = count as f32 / n;
+            if prob_joint > 0.0 {
+                mi += prob_joint * (prob_joint / (prob_s * prob_d)).ln();
+            }
+        }
+    }
+    mi
+}
+
+/// MI from a slice of references (for kin/random split).
+pub fn compute_mutual_info_refs(signal_events: &[&SignalEvent]) -> f32 {
+    if signal_events.len() < 20 {
+        return 0.0;
+    }
+    let mut counts = [[0u32; 4]; 3];
+    for e in signal_events {
+        let sym = (e.symbol as usize).min(2);
+        let bin = if e.predator_dist < 4.0 {
+            0
+        } else if e.predator_dist < 8.0 {
+            1
+        } else if e.predator_dist < 11.0 {
+            2
+        } else {
+            3
+        };
+        counts[sym][bin] += 1;
+    }
     let n = signal_events.len() as f32;
     let mut mi = 0.0_f32;
     for s in 0..3 {
@@ -210,6 +251,94 @@ pub fn cross_population_divergence(a: &[[f32; 4]; 3], b: &[[f32; 4]; 3]) -> f32 
     min_div
 }
 
+/// MI between each symbol and each of the 16 input dimensions at emission time.
+/// Uses quartile-based binning (scale-invariant).
+pub fn compute_input_mi(signal_events: &[SignalEvent]) -> [f32; INPUTS] {
+    let mut result = [0.0_f32; INPUTS];
+    if signal_events.len() < 20 {
+        return result;
+    }
+    let n = signal_events.len() as f32;
+
+    for (dim, result_mi) in result.iter_mut().enumerate() {
+        // Compute quartile boundaries for this input dimension
+        let mut vals: Vec<f32> = signal_events.iter().map(|e| e.inputs[dim]).collect();
+        vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let q1 = vals[vals.len() / 4];
+        let q2 = vals[vals.len() / 2];
+        let q3 = vals[3 * vals.len() / 4];
+
+        // Build 3x4 contingency: symbol x quartile bin
+        let mut counts = [[0u32; 4]; 3];
+        for e in signal_events {
+            let sym = (e.symbol as usize).min(2);
+            let bin = if e.inputs[dim] <= q1 {
+                0
+            } else if e.inputs[dim] <= q2 {
+                1
+            } else if e.inputs[dim] <= q3 {
+                2
+            } else {
+                3
+            };
+            counts[sym][bin] += 1;
+        }
+
+        // MI calculation (same formula as compute_mutual_info)
+        let mut mi = 0.0_f32;
+        for s in 0..3 {
+            let prob_s = counts[s].iter().sum::<u32>() as f32 / n;
+            if prob_s == 0.0 {
+                continue;
+            }
+            for (bin, &count) in counts[s].iter().enumerate() {
+                let prob_bin: f32 = (0..3).map(|ss| counts[ss][bin]).sum::<u32>() as f32 / n;
+                if prob_bin == 0.0 {
+                    continue;
+                }
+                let prob_joint = count as f32 / n;
+                if prob_joint > 0.0 {
+                    mi += prob_joint * (prob_joint / (prob_s * prob_bin)).ln();
+                }
+            }
+        }
+        *result_mi = mi;
+    }
+    result
+}
+
+/// Rolling fluctuation ratio: std(recent window) / std(early window).
+/// Rising ratio precedes phase transitions. Returns 0.0 if insufficient data.
+pub fn rolling_fluctuation_ratio(series: &[f32], window: usize) -> f32 {
+    if series.len() < window * 2 {
+        return 0.0;
+    }
+    let early = &series[..window];
+    let recent = &series[series.len() - window..];
+    let std_early = std_dev(early);
+    let std_recent = std_dev(recent);
+    if std_early < 1e-12 {
+        return 0.0;
+    }
+    std_recent / std_early
+}
+
+fn std_dev(xs: &[f32]) -> f32 {
+    let n = xs.len() as f32;
+    let mean = xs.iter().sum::<f32>() / n;
+    let var = xs.iter().map(|x| (x - mean) * (x - mean)).sum::<f32>() / n;
+    var.sqrt()
+}
+
+/// Pairwise JSD between symbols' context distributions: [0v1, 0v2, 1v2].
+pub fn inter_symbol_jsd(norm: &[[f32; 4]; 3]) -> [f32; 3] {
+    [
+        jsd_4(&norm[0], &norm[1]),
+        jsd_4(&norm[0], &norm[2]),
+        jsd_4(&norm[1], &norm[2]),
+    ]
+}
+
 /// JSD between two consecutive generation matrices (for trajectory phase transitions).
 pub fn trajectory_jsd(prev: &[[f32; 4]; 3], curr: &[[f32; 4]; 3]) -> f32 {
     let mut total = 0.0_f32;
@@ -304,24 +433,118 @@ mod tests {
     }
 
     #[test]
+    fn rolling_fluct_insufficient_data_returns_zero() {
+        assert!((rolling_fluctuation_ratio(&[1.0, 2.0, 3.0], 5) - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn rolling_fluct_stable_series_near_one() {
+        // Same variance early and late
+        let series: Vec<f32> = (0..40).map(|i| (i as f32 * 0.1).sin()).collect();
+        let ratio = rolling_fluctuation_ratio(&series, 10);
+        assert!(
+            (ratio - 1.0).abs() < 0.5,
+            "Expected ratio near 1.0, got {ratio}"
+        );
+    }
+
+    #[test]
+    fn rolling_fluct_increasing_variance() {
+        // Small variance early, large variance late
+        let mut series: Vec<f32> = (0..20).map(|i| 1.0 + (i as f32 * 0.01)).collect();
+        series.extend((0..20).map(|i| if i % 2 == 0 { 0.0 } else { 2.0 }));
+        let ratio = rolling_fluctuation_ratio(&series, 20);
+        assert!(ratio > 1.0, "Expected ratio > 1.0, got {ratio}");
+    }
+
+    #[test]
+    fn inter_symbol_jsd_identical_is_zero() {
+        let m = [[0.25, 0.25, 0.25, 0.25]; 3];
+        let result = inter_symbol_jsd(&m);
+        assert!(result.iter().all(|&v| v < 1e-10));
+    }
+
+    #[test]
+    fn inter_symbol_jsd_distinct_is_positive() {
+        let m = [
+            [0.9, 0.03, 0.03, 0.04],
+            [0.03, 0.9, 0.04, 0.03],
+            [0.04, 0.03, 0.03, 0.9],
+        ];
+        let result = inter_symbol_jsd(&m);
+        assert!(result.iter().all(|&v| v > 0.1));
+    }
+
+    #[test]
+    fn input_mi_detects_correlated_dimension() {
+        // Symbol 0 always emitted when dim 0 is low, symbol 1 when high
+        let mut events = Vec::new();
+        for i in 0..100 {
+            let val = i as f32 / 100.0;
+            let symbol = u8::from(val >= 0.5);
+            let mut inputs = [0.5_f32; INPUTS];
+            inputs[0] = val;
+            events.push(SignalEvent {
+                symbol,
+                predator_dist: 5.0,
+                inputs,
+                kin_round: false,
+                emitter_idx: 0,
+            });
+        }
+        let mi = compute_input_mi(&events);
+        // Dim 0 should have high MI (strong correlation)
+        assert!(mi[0] > 0.1, "Expected high MI for dim 0, got {}", mi[0]);
+        // Other dims should have near-zero MI (no correlation)
+        assert!(mi[1] < 0.01, "Expected low MI for dim 1, got {}", mi[1]);
+    }
+
+    #[test]
+    fn input_mi_too_few_events_returns_zeros() {
+        let events: Vec<SignalEvent> = (0..10)
+            .map(|i| SignalEvent {
+                symbol: (i % 3) as u8,
+                predator_dist: 5.0,
+                inputs: [0.0; INPUTS],
+                kin_round: false,
+                emitter_idx: 0,
+            })
+            .collect();
+        let mi = compute_input_mi(&events);
+        assert!(mi.iter().all(|&v| v == 0.0));
+    }
+
+    #[test]
     fn signal_context_matrix_bins_correctly() {
         let events = vec![
             SignalEvent {
                 symbol: 0,
                 predator_dist: 2.0,
-            }, // bin 0
+                inputs: [0.0; INPUTS],
+                kin_round: false,
+                emitter_idx: 0,
+            },
             SignalEvent {
                 symbol: 1,
                 predator_dist: 6.0,
-            }, // bin 1
+                inputs: [0.0; INPUTS],
+                kin_round: false,
+                emitter_idx: 0,
+            },
             SignalEvent {
                 symbol: 2,
                 predator_dist: 10.0,
-            }, // bin 2
+                inputs: [0.0; INPUTS],
+                kin_round: false,
+                emitter_idx: 0,
+            },
             SignalEvent {
                 symbol: 0,
                 predator_dist: 15.0,
-            }, // bin 3
+                inputs: [0.0; INPUTS],
+                kin_round: false,
+                emitter_idx: 0,
+            },
         ];
         let m = signal_context_matrix(&events);
         assert_eq!(m[0][0], 1);
