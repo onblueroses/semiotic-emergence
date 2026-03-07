@@ -19,6 +19,7 @@ const KIN_ROUNDS: usize = 2;
 const POP_SIZE: usize = 48;
 const GROUP_SIZE: usize = 8;
 const TICKS_PER_EVAL: u32 = 500;
+const FLUCT_WINDOW: usize = 10;
 
 struct RunResult {
     final_matrix: [[u32; 4]; 3],
@@ -49,7 +50,6 @@ struct GenMetrics {
     jsd_pred_rnd: f32,
     contrast: [f32; 3],
     sender_fit_corr: f32,
-    receiver_fit_corr: f32,
     traj_fluct_ratio: f32,
 }
 
@@ -57,7 +57,7 @@ impl GenMetrics {
     fn write_csv(&self, f: &mut File, gen: usize) -> Result<(), Box<dyn std::error::Error>> {
         writeln!(
             f,
-            "{gen},{:.1},{:.1},{},{:.4},{:.4},{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4}",
+            "{gen},{:.1},{:.1},{},{:.4},{:.4},{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4}",
             self.avg_fitness,
             self.max_fitness,
             self.total_signals,
@@ -74,7 +74,6 @@ impl GenMetrics {
             self.jsd_pred_kin,
             self.jsd_pred_rnd,
             self.sender_fit_corr,
-            self.receiver_fit_corr,
             self.traj_fluct_ratio
         )?;
         Ok(())
@@ -141,10 +140,8 @@ struct EvalResult {
     receiver_counts_rnd: [[[u32; 5]; 2]; 4],
     signals_per_tick: Vec<f32>,
     min_pred_dist: Vec<f32>,
-    /// Per-prey signal emission counts (across all rounds).
-    signal_counts_per_prey: Vec<f32>,
-    /// Per-prey receiver JSD (how much behavior changes with signals vs without).
-    receiver_jsd_per_prey: Vec<f32>,
+    /// Per-prey signal rate (signals per tick alive) across all rounds.
+    signal_rate_per_prey: Vec<f32>,
 }
 
 fn evaluate_generation(population: &[Brain], rng: &mut ChaCha8Rng, no_signals: bool) -> EvalResult {
@@ -159,7 +156,8 @@ fn evaluate_generation(population: &[Brain], rng: &mut ChaCha8Rng, no_signals: b
     let mut receiver_counts_rnd = [[[0u32; 5]; 2]; 4];
     let mut signals_per_tick: Vec<f32> = Vec::new();
     let mut min_pred_dist: Vec<f32> = Vec::new();
-    let mut signal_counts_per_prey = vec![0.0_f32; POP_SIZE];
+    let mut signal_counts_per_prey = [0.0_f32; POP_SIZE];
+    let mut ticks_alive_per_prey = [0.0_f32; POP_SIZE];
 
     for round in 0..EVAL_ROUNDS {
         let kin_round = round < KIN_ROUNDS;
@@ -231,9 +229,16 @@ fn evaluate_generation(population: &[Brain], rng: &mut ChaCha8Rng, no_signals: b
             for (i, prey) in world.prey.iter().enumerate() {
                 fitness[group_indices[i]] +=
                     prey.ticks_alive as f32 + prey.food_eaten as f32 * 10.0;
+                ticks_alive_per_prey[group_indices[i]] += prey.ticks_alive as f32;
             }
         }
     }
+
+    let signal_rate_per_prey: Vec<f32> = signal_counts_per_prey
+        .iter()
+        .zip(&ticks_alive_per_prey)
+        .map(|(&signals, &ticks)| if ticks > 0.0 { signals / ticks } else { 0.0 })
+        .collect();
 
     EvalResult {
         fitness,
@@ -247,8 +252,7 @@ fn evaluate_generation(population: &[Brain], rng: &mut ChaCha8Rng, no_signals: b
         receiver_counts_rnd,
         signals_per_tick,
         min_pred_dist,
-        signal_counts_per_prey,
-        receiver_jsd_per_prey: vec![0.0; POP_SIZE],
+        signal_rate_per_prey,
     }
 }
 
@@ -291,11 +295,10 @@ fn compute_gen_metrics(
     }
 
     let fitness_normalized: Vec<f32> = ev.fitness.iter().map(|f| f / EVAL_ROUNDS as f32).collect();
-    let sender_fit_corr = metrics::pearson(&ev.signal_counts_per_prey, &fitness_normalized);
-    let receiver_fit_corr = metrics::pearson(&ev.receiver_jsd_per_prey, &fitness_normalized);
+    let sender_fit_corr = metrics::pearson(&ev.signal_rate_per_prey, &fitness_normalized);
 
     traj_jsd_history.push(traj_jsd);
-    let traj_fluct_ratio = metrics::rolling_fluctuation_ratio(traj_jsd_history, 20);
+    let traj_fluct_ratio = metrics::rolling_fluctuation_ratio(traj_jsd_history, FLUCT_WINDOW);
 
     GenMetrics {
         avg_fitness,
@@ -319,7 +322,6 @@ fn compute_gen_metrics(
         jsd_pred_rnd,
         contrast,
         sender_fit_corr,
-        receiver_fit_corr,
         traj_fluct_ratio,
     }
 }
@@ -342,7 +344,7 @@ fn run_seed(
         .transpose()?;
 
     if let Some(ref mut f) = csv {
-        writeln!(f, "generation,avg_fitness,max_fitness,signals_emitted,iconicity,mutual_info,confusion_ticks,jsd_no_pred,jsd_pred,silence_corr,mi_kin,mi_rnd,jsd_no_pred_kin,jsd_no_pred_rnd,jsd_pred_kin,jsd_pred_rnd,sender_fit_corr,receiver_fit_corr,traj_fluct_ratio")?;
+        writeln!(f, "generation,avg_fitness,max_fitness,signals_emitted,iconicity,mutual_info,confusion_ticks,jsd_no_pred,jsd_pred,silence_corr,mi_kin,mi_rnd,jsd_no_pred_kin,jsd_no_pred_rnd,jsd_pred_kin,jsd_pred_rnd,sender_fit_corr,traj_fluct_ratio")?;
     }
     if let Some(ref mut f) = traj_csv {
         writeln!(f, "generation,s0d0,s0d1,s0d2,s0d3,s1d0,s1d1,s1d2,s1d3,s2d0,s2d1,s2d2,s2d3,jsd_sym0,jsd_sym1,jsd_sym2,trajectory_jsd,contrast_01,contrast_02,contrast_12")?;
