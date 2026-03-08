@@ -20,6 +20,7 @@ const POP_SIZE: usize = 48;
 const GROUP_SIZE: usize = 8;
 const TICKS_PER_EVAL: u32 = 500;
 const FLUCT_WINDOW: usize = 10;
+const MIN_RECEIVER_SAMPLES: u32 = 30;
 
 struct RunResult {
     final_matrix: [[u32; 4]; 3],
@@ -51,13 +52,17 @@ struct GenMetrics {
     contrast: [f32; 3],
     sender_fit_corr: f32,
     traj_fluct_ratio: f32,
+    receiver_fit_corr: f32,
+    response_fit_corr: f32,
+    silence_onset_jsd: f32,
+    silence_move_delta: f32,
 }
 
 impl GenMetrics {
     fn write_csv(&self, f: &mut File, gen: usize) -> Result<(), Box<dyn std::error::Error>> {
         writeln!(
             f,
-            "{gen},{:.1},{:.1},{},{:.4},{:.4},{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4}",
+            "{gen},{:.1},{:.1},{},{:.4},{:.4},{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4}",
             self.avg_fitness,
             self.max_fitness,
             self.total_signals,
@@ -74,7 +79,11 @@ impl GenMetrics {
             self.jsd_pred_kin,
             self.jsd_pred_rnd,
             self.sender_fit_corr,
-            self.traj_fluct_ratio
+            self.traj_fluct_ratio,
+            self.receiver_fit_corr,
+            self.response_fit_corr,
+            self.silence_onset_jsd,
+            self.silence_move_delta
         )?;
         Ok(())
     }
@@ -142,8 +151,13 @@ struct EvalResult {
     min_pred_dist: Vec<f32>,
     /// Per-prey signal rate (signals per tick alive) across all rounds.
     signal_rate_per_prey: Vec<f32>,
+    /// Per-prey action counts with/without signal, silence onset, and signal present.
+    actions_with_signal: Vec<[[u32; 5]; 2]>,
+    actions_without_signal: Vec<[[u32; 5]; 2]>,
+    silence_onset_actions: Vec<[[u32; 5]; 2]>,
 }
 
+#[allow(clippy::too_many_lines)]
 fn evaluate_generation(population: &[Brain], rng: &mut ChaCha8Rng, no_signals: bool) -> EvalResult {
     let mut fitness = vec![0.0_f32; POP_SIZE];
     let mut signal_events: Vec<world::SignalEvent> = Vec::new();
@@ -158,6 +172,9 @@ fn evaluate_generation(population: &[Brain], rng: &mut ChaCha8Rng, no_signals: b
     let mut min_pred_dist: Vec<f32> = Vec::new();
     let mut signal_counts_per_prey = [0.0_f32; POP_SIZE];
     let mut ticks_alive_per_prey = [0.0_f32; POP_SIZE];
+    let mut actions_with_signal = vec![[[0u32; 5]; 2]; POP_SIZE];
+    let mut actions_without_signal = vec![[[0u32; 5]; 2]; POP_SIZE];
+    let mut silence_onset_actions = vec![[[0u32; 5]; 2]; POP_SIZE];
 
     for round in 0..EVAL_ROUNDS {
         let kin_round = round < KIN_ROUNDS;
@@ -227,9 +244,18 @@ fn evaluate_generation(population: &[Brain], rng: &mut ChaCha8Rng, no_signals: b
             min_pred_dist.extend_from_slice(&world.min_pred_dist_per_tick);
 
             for (i, prey) in world.prey.iter().enumerate() {
-                fitness[group_indices[i]] +=
-                    prey.ticks_alive as f32 + prey.food_eaten as f32 * 10.0;
-                ticks_alive_per_prey[group_indices[i]] += prey.ticks_alive as f32;
+                let pop_idx = group_indices[i];
+                fitness[pop_idx] += prey.ticks_alive as f32 + prey.food_eaten as f32 * 10.0;
+                ticks_alive_per_prey[pop_idx] += prey.ticks_alive as f32;
+                for ctx in 0..2 {
+                    for a in 0..5 {
+                        actions_with_signal[pop_idx][ctx][a] += prey.actions_with_signal[ctx][a];
+                        actions_without_signal[pop_idx][ctx][a] +=
+                            prey.actions_without_signal[ctx][a];
+                        silence_onset_actions[pop_idx][ctx][a] +=
+                            prey.silence_onset_actions[ctx][a];
+                    }
+                }
             }
         }
     }
@@ -253,6 +279,9 @@ fn evaluate_generation(population: &[Brain], rng: &mut ChaCha8Rng, no_signals: b
         signals_per_tick,
         min_pred_dist,
         signal_rate_per_prey,
+        actions_with_signal,
+        actions_without_signal,
+        silence_onset_actions,
     }
 }
 
@@ -300,6 +329,36 @@ fn compute_gen_metrics(
     traj_jsd_history.push(traj_jsd);
     let traj_fluct_ratio = metrics::rolling_fluctuation_ratio(traj_jsd_history, FLUCT_WINDOW);
 
+    // Three-way coupling: receiver_fit_corr and response_fit_corr
+    let reception_rates: Vec<f32> = ev
+        .actions_with_signal
+        .iter()
+        .zip(&ev.actions_without_signal)
+        .map(|(w, wo)| {
+            let total_w: u32 = w.iter().flat_map(|c| c.iter()).sum();
+            let total_wo: u32 = wo.iter().flat_map(|c| c.iter()).sum();
+            let total = total_w + total_wo;
+            if total > 0 {
+                total_w as f32 / total as f32
+            } else {
+                0.0
+            }
+        })
+        .collect();
+    let receiver_fit_corr = metrics::pearson(&reception_rates, &fitness_normalized);
+
+    let per_prey_jsd_vec: Vec<f32> = ev
+        .actions_with_signal
+        .iter()
+        .zip(&ev.actions_without_signal)
+        .map(|(w, wo)| metrics::per_prey_receiver_jsd(w, wo, MIN_RECEIVER_SAMPLES))
+        .collect();
+    let response_fit_corr = metrics::pearson(&per_prey_jsd_vec, &fitness_normalized);
+
+    // Silence onset metrics
+    let (silence_onset_jsd, silence_move_delta) =
+        metrics::compute_silence_onset_metrics(&ev.silence_onset_actions, &ev.actions_with_signal);
+
     GenMetrics {
         avg_fitness,
         max_fitness,
@@ -323,6 +382,10 @@ fn compute_gen_metrics(
         contrast,
         sender_fit_corr,
         traj_fluct_ratio,
+        receiver_fit_corr,
+        response_fit_corr,
+        silence_onset_jsd,
+        silence_move_delta,
     }
 }
 
@@ -344,7 +407,7 @@ fn run_seed(
         .transpose()?;
 
     if let Some(ref mut f) = csv {
-        writeln!(f, "generation,avg_fitness,max_fitness,signals_emitted,iconicity,mutual_info,confusion_ticks,jsd_no_pred,jsd_pred,silence_corr,mi_kin,mi_rnd,jsd_no_pred_kin,jsd_no_pred_rnd,jsd_pred_kin,jsd_pred_rnd,sender_fit_corr,traj_fluct_ratio")?;
+        writeln!(f, "generation,avg_fitness,max_fitness,signals_emitted,iconicity,mutual_info,confusion_ticks,jsd_no_pred,jsd_pred,silence_corr,mi_kin,mi_rnd,jsd_no_pred_kin,jsd_no_pred_rnd,jsd_pred_kin,jsd_pred_rnd,sender_fit_corr,traj_fluct_ratio,receiver_fit_corr,response_fit_corr,silence_onset_jsd,silence_move_delta")?;
     }
     if let Some(ref mut f) = traj_csv {
         writeln!(f, "generation,s0d0,s0d1,s0d2,s0d3,s1d0,s1d1,s1d2,s1d3,s2d0,s2d1,s2d2,s2d3,jsd_sym0,jsd_sym1,jsd_sym2,trajectory_jsd,contrast_01,contrast_02,contrast_12")?;

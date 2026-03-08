@@ -313,6 +313,78 @@ pub fn trajectory_jsd(prev: &[[f32; 4]; 3], curr: &[[f32; 4]; 3]) -> f32 {
     total / 3.0
 }
 
+/// Per-prey receiver JSD: how much one prey's actions differ with vs without signal.
+/// Pools across both contexts. Returns 0.0 if either bucket has fewer than `min_samples` total.
+pub fn per_prey_receiver_jsd(
+    with: &[[u32; 5]; 2],
+    without: &[[u32; 5]; 2],
+    min_samples: u32,
+) -> f32 {
+    let mut with_pooled = [0u32; 5];
+    let mut without_pooled = [0u32; 5];
+    for ctx in 0..2 {
+        for a in 0..5 {
+            with_pooled[a] += with[ctx][a];
+            without_pooled[a] += without[ctx][a];
+        }
+    }
+    let total_with: u32 = with_pooled.iter().sum();
+    let total_without: u32 = without_pooled.iter().sum();
+    if total_with < min_samples || total_without < min_samples {
+        return 0.0;
+    }
+    let Some(p_with) = normalize_action_dist(&with_pooled) else {
+        return 0.0;
+    };
+    let Some(p_without) = normalize_action_dist(&without_pooled) else {
+        return 0.0;
+    };
+    jsd(&p_with, &p_without)
+}
+
+/// Silence onset metrics: how receivers behave when signals disappear vs during signals.
+/// `present` is the action distribution during signal reception (baseline).
+/// Aggregates across all prey, pred-invisible context (idx 0) only to isolate signal-channel effect.
+/// Returns `(onset_jsd, move_delta)`.
+pub fn compute_silence_onset_metrics(
+    onset: &[[[u32; 5]; 2]],
+    present: &[[[u32; 5]; 2]],
+) -> (f32, f32) {
+    let mut onset_pooled = [0u32; 5];
+    let mut present_pooled = [0u32; 5];
+    for prey_onset in onset {
+        for a in 0..5 {
+            onset_pooled[a] += prey_onset[0][a];
+        }
+    }
+    for prey_present in present {
+        for a in 0..5 {
+            present_pooled[a] += prey_present[0][a];
+        }
+    }
+
+    let total_onset: u32 = onset_pooled.iter().sum();
+    let total_present: u32 = present_pooled.iter().sum();
+    if total_onset < 10 || total_present < 10 {
+        return (0.0, 0.0);
+    }
+
+    let Some(p_onset) = normalize_action_dist(&onset_pooled) else {
+        return (0.0, 0.0);
+    };
+    let Some(p_present) = normalize_action_dist(&present_pooled) else {
+        return (0.0, 0.0);
+    };
+
+    let onset_jsd = jsd(&p_onset, &p_present);
+
+    // Flight = movement actions (0-3), vs eat (4)
+    let onset_flight: f32 = p_onset[0] + p_onset[1] + p_onset[2] + p_onset[3];
+    let present_flight: f32 = p_present[0] + p_present[1] + p_present[2] + p_present[3];
+
+    (onset_jsd, onset_flight - present_flight)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -516,5 +588,60 @@ mod tests {
         assert_eq!(m[1][1], 1);
         assert_eq!(m[2][2], 1);
         assert_eq!(m[0][3], 1);
+    }
+
+    #[test]
+    fn per_prey_jsd_different_distributions() {
+        let with = [[50, 0, 0, 0, 0], [0; 5]]; // always action 0 with signal
+        let without = [[0, 0, 0, 0, 50], [0; 5]]; // always action 4 without
+        let result = per_prey_receiver_jsd(&with, &without, 30);
+        assert!(result > 0.5, "Expected high JSD, got {result}");
+    }
+
+    #[test]
+    fn per_prey_jsd_identical_distributions() {
+        let dist = [[10, 10, 10, 10, 10], [0; 5]];
+        let result = per_prey_receiver_jsd(&dist, &dist, 30);
+        assert!(result < 1e-10, "Expected ~0 JSD, got {result}");
+    }
+
+    #[test]
+    fn per_prey_jsd_below_threshold_returns_zero() {
+        let with = [[5, 5, 5, 5, 5], [0; 5]]; // 25 total < 30 min
+        let without = [[10, 10, 10, 10, 10], [0; 5]];
+        assert!(per_prey_receiver_jsd(&with, &without, 30).abs() < 1e-10);
+    }
+
+    #[test]
+    fn silence_onset_detects_behavioral_shift() {
+        // At onset: all movement (action 0). During signal: all eating (action 4).
+        let onset = vec![[[50, 0, 0, 0, 0], [0; 5]]];
+        let present = vec![[[0, 0, 0, 0, 50], [0; 5]]];
+        let (jsd_val, move_delta) = compute_silence_onset_metrics(&onset, &present);
+        assert!(jsd_val > 0.5, "Expected high JSD, got {jsd_val}");
+        assert!(
+            move_delta > 0.5,
+            "Expected positive flight delta, got {move_delta}"
+        );
+    }
+
+    #[test]
+    fn silence_onset_no_shift() {
+        let dist = vec![[[10, 10, 10, 10, 10], [0; 5]]];
+        let (jsd_val, move_delta) = compute_silence_onset_metrics(&dist, &dist);
+        assert!(jsd_val < 1e-10, "Expected ~0 JSD, got {jsd_val}");
+        assert!(
+            move_delta.abs() < 1e-10,
+            "Expected ~0 delta, got {move_delta}"
+        );
+    }
+
+    #[test]
+    fn silence_onset_insufficient_data() {
+        let onset = vec![[[2, 2, 2, 2, 1], [0; 5]]]; // 9 total < 10 min
+        let present = vec![[[10, 10, 10, 10, 10], [0; 5]]];
+        let (jsd_val, move_delta) = compute_silence_onset_metrics(&onset, &present);
+        assert!(jsd_val.abs() < 1e-10);
+        assert!(move_delta.abs() < 1e-10);
     }
 }

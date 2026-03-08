@@ -60,6 +60,14 @@ pub struct Prey {
     pub brain: Brain,
     pub ticks_alive: u32,
     pub food_eaten: u32,
+    /// Per-prey action counts when receiving any signal, by context.
+    pub actions_with_signal: [[u32; 5]; 2],
+    /// Per-prey action counts when not receiving any signal, by context.
+    pub actions_without_signal: [[u32; 5]; 2],
+    /// Actions at the tick a signal disappears (onset of silence), by context.
+    pub silence_onset_actions: [[u32; 5]; 2],
+    /// Whether this prey received a signal on the previous tick (for onset detection).
+    pub had_signal_prev_tick: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -122,6 +130,10 @@ impl World {
                 brain,
                 ticks_alive: 0,
                 food_eaten: 0,
+                actions_with_signal: [[0; 5]; 2],
+                actions_without_signal: [[0; 5]; 2],
+                silence_onset_actions: [[0; 5]; 2],
+                had_signal_prev_tick: false,
             })
             .collect();
 
@@ -236,9 +248,21 @@ impl World {
                 self.receiver_counts_rnd[signal_state][context][action] += 1;
             }
 
+            // Per-prey receiver tracking for three-way coupling + silence onset
+            let has_signal = max_str > 0.0;
+            if has_signal {
+                self.prey[i].actions_with_signal[context][action] += 1;
+            } else {
+                self.prey[i].actions_without_signal[context][action] += 1;
+                if self.prey[i].had_signal_prev_tick {
+                    self.prey[i].silence_onset_actions[context][action] += 1;
+                }
+            }
+
             self.apply_outputs(i, &outputs, &inputs);
 
             self.prey[i].ticks_alive += 1;
+            self.prey[i].had_signal_prev_tick = has_signal;
         }
 
         self.move_predator(rng);
@@ -474,6 +498,10 @@ mod tests {
                 brain: zero_brain(),
                 ticks_alive: 0,
                 food_eaten: 0,
+                actions_with_signal: [[0; 5]; 2],
+                actions_without_signal: [[0; 5]; 2],
+                silence_onset_actions: [[0; 5]; 2],
+                had_signal_prev_tick: false,
             })
             .collect();
         World {
@@ -754,6 +782,68 @@ mod tests {
 
         // Should be populated (distance <= range, not strictly <)
         assert!(inputs[0] > 0.0 || inputs[2] > 0.0);
+    }
+
+    // --- Per-prey receiver tracking ---
+
+    #[test]
+    fn per_prey_tracking_accumulates_with_and_without_signal() {
+        // Prey at (5,5), predator far away, signal emitted at tick 0 from (5,5)
+        let mut world = minimal_world(&[(5, 5)], (15, 15));
+        world.food.push(Food { x: 10, y: 10 });
+        // Inject a signal receivable on tick 1 (1-tick delay)
+        world.signals.push(crate::signal::Signal {
+            x: 5,
+            y: 5,
+            symbol: 0,
+            tick_emitted: 0,
+        });
+        let mut rng = ChaCha8Rng::seed_from_u64(0);
+
+        // Tick 1: prey receives signal (same cell, max strength)
+        world.step(&mut rng);
+        let total_with: u32 = world.prey[0]
+            .actions_with_signal
+            .iter()
+            .flat_map(|c| c.iter())
+            .sum();
+        let total_without: u32 = world.prey[0]
+            .actions_without_signal
+            .iter()
+            .flat_map(|c| c.iter())
+            .sum();
+        assert_eq!(total_with, 1, "Should have 1 action with signal");
+        assert_eq!(total_without, 0, "Should have 0 actions without signal");
+        assert!(world.prey[0].had_signal_prev_tick);
+
+        // Remove signal so tick 2 has no signal -> silence onset
+        world.signals.clear();
+        world.step(&mut rng);
+        let total_onset: u32 = world.prey[0]
+            .silence_onset_actions
+            .iter()
+            .flat_map(|c| c.iter())
+            .sum();
+        let total_without_after: u32 = world.prey[0]
+            .actions_without_signal
+            .iter()
+            .flat_map(|c| c.iter())
+            .sum();
+        assert_eq!(total_onset, 1, "Should detect silence onset");
+        assert_eq!(
+            total_without_after, 1,
+            "Should have 1 action without signal"
+        );
+        assert!(!world.prey[0].had_signal_prev_tick);
+
+        // Tick 3: still no signal, but had_signal_prev_tick is false -> no new onset
+        world.step(&mut rng);
+        let total_onset_after: u32 = world.prey[0]
+            .silence_onset_actions
+            .iter()
+            .flat_map(|c| c.iter())
+            .sum();
+        assert_eq!(total_onset_after, 1, "Onset should not increment again");
     }
 
     #[test]
