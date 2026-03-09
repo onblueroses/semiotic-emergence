@@ -5,6 +5,7 @@ input_mi.csv
 divergence.csv
 output/
 nul
-commit.ps1
+*.ps1
+*.log
 CLAUDE.md
 .claude/

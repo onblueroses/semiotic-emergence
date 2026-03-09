@@ -51,7 +51,7 @@ impl SimParams {
         let scale = grid_size as f32 / 20.0;
         let prey_vision_range = 4.0 * scale;
         let signal_range = 8.0 * scale;
-        let predator_speed = (3.0 * scale).round() as u32;
+        let predator_speed = (1.5 * scale).round() as u32;
         let reproduction_radius = 6.0 * scale;
         let fallback_radius = 10.0 * scale;
         let mi_bins = [prey_vision_range, signal_range, signal_range * 1.375];
@@ -73,8 +73,8 @@ impl SimParams {
             tournament_size: 3,
             mutation_sigma: 0.1,
             base_drain: 0.0008,
-            neuron_cost: 0.0002,
-            signal_cost: 0.01,
+            neuron_cost: 0.00002,
+            signal_cost: 0.0,
             no_signals,
         }
     }

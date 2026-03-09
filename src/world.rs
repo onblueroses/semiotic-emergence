@@ -290,6 +290,18 @@ impl World {
 
             self.apply_outputs(i, &outputs, &inputs);
 
+            // Evasion boost: +1 movement when signaled AND predator nearby
+            let received_signal = inputs[6] > 0.0 || inputs[9] > 0.0 || inputs[12] > 0.0;
+            if received_signal && pdist <= self.signal_range && action < 4 {
+                match action {
+                    0 => self.prey[i].y = (self.prey[i].y - 1).rem_euclid(self.grid_size),
+                    1 => self.prey[i].y = (self.prey[i].y + 1).rem_euclid(self.grid_size),
+                    2 => self.prey[i].x = (self.prey[i].x + 1).rem_euclid(self.grid_size),
+                    3 => self.prey[i].x = (self.prey[i].x - 1).rem_euclid(self.grid_size),
+                    _ => {}
+                }
+            }
+
             self.prey[i].ticks_alive += 1;
             self.prey[i].had_signal_prev_tick = has_signal;
         }
@@ -503,10 +515,10 @@ mod tests {
     const TEST_FOOD: usize = 25;
     const TEST_VISION: f32 = 4.0;
     const TEST_SIGNAL_RANGE: f32 = 8.0;
-    const TEST_PRED_SPEED: u32 = 3;
+    const TEST_PRED_SPEED: u32 = 2;
     const TEST_BASE_DRAIN: f32 = 0.0008;
-    const TEST_NEURON_COST: f32 = 0.0002;
-    const TEST_SIGNAL_COST: f32 = 0.01;
+    const TEST_NEURON_COST: f32 = 0.00002;
+    const TEST_SIGNAL_COST: f32 = 0.0;
 
     fn minimal_world(prey_positions: &[(i32, i32)], predator: (i32, i32)) -> World {
         let prey = prey_positions
@@ -592,8 +604,8 @@ mod tests {
 
         world.move_predators();
 
-        // Predator at (5,5), prey at (10,5): dx=5, dy=0. Should move +x 3 times.
-        assert_eq!(world.predators[0].x, 8);
+        // Predator at (5,5), prey at (10,5): dx=5, dy=0. Should move +x 2 times.
+        assert_eq!(world.predators[0].x, 7);
         assert_eq!(world.predators[0].y, 5);
     }
 
@@ -603,7 +615,7 @@ mod tests {
 
         world.move_predators();
 
-        assert_eq!(world.predators[0].x, 18);
+        assert_eq!(world.predators[0].x, 19);
         assert_eq!(world.predators[0].y, 10);
     }
 
@@ -1007,12 +1019,12 @@ mod tests {
     }
 
     #[test]
-    fn default_hidden_drain_matches_old_baseline() {
-        // At hidden_size=6: BASE_DRAIN(0.0008) + 6 * NEURON_COST(0.0002) = 0.002
+    fn default_hidden_drain_with_cheap_neurons() {
+        // At hidden_size=6: BASE_DRAIN(0.0008) + 6 * NEURON_COST(0.00002) = 0.00092
         let drain = TEST_BASE_DRAIN + DEFAULT_HIDDEN as f32 * TEST_NEURON_COST;
         assert!(
-            (drain - 0.002).abs() < 1e-6,
-            "Default drain should match old ENERGY_DRAIN=0.002"
+            (drain - 0.00092).abs() < 1e-6,
+            "Default drain should be 0.00092 with cheap neurons"
         );
     }
 }
