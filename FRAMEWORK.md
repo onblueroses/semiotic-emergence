@@ -8,7 +8,7 @@ Every existing theory of signs starts from a world where meaning already exists 
 
 We don't have good theory for the beginning - the moment when the universe contained no meaning and then, for the first time, it did. This moment is empirically inaccessible in biology. It happened deep in evolutionary time and left no fossil record.
 
-This simulation is a telescope pointed at exactly that gap. Forty-eight neural networks on a toroidal grid, under predation pressure, with a 3-symbol broadcast channel. At generation 0, signals are noise. If meaning emerges at all, it emerges here, and we can watch every step of it.
+This simulation is a telescope pointed at exactly that gap. Hundreds of neural networks on a toroidal grid, under predation pressure, with a 3-symbol broadcast channel. At generation 0, signals are noise. If meaning emerges at all, it emerges here, and we can watch every step of it.
 
 **The question is not "do prey evolve alarm calls?" That's a biology question with known answers. The question is: what does it look like when meaning comes into existence for the first time in a world that previously contained none?**
 
