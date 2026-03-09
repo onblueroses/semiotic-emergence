@@ -7,18 +7,17 @@ mod world;
 use std::fs::File;
 use std::io::Write;
 
-use rand::seq::SliceRandom;
+use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
 use brain::{Brain, INPUTS};
-use world::{World, INPUT_NAMES};
+use evolution::Agent;
+use world::{World, GRID_SIZE, INPUT_NAMES};
 
-const EVAL_ROUNDS: usize = 5;
-const KIN_ROUNDS: usize = 2;
 const POP_SIZE: usize = 48;
-const GROUP_SIZE: usize = 8;
 const TICKS_PER_EVAL: u32 = 500;
+const NUM_PREDATORS: usize = 2;
 const FLUCT_WINDOW: usize = 10;
 const MIN_RECEIVER_SAMPLES: u32 = 30;
 
@@ -33,7 +32,6 @@ struct GenMetrics {
     avg_fitness: f32,
     max_fitness: f32,
     total_signals: u32,
-    confusion_ticks: u32,
     iconicity: f32,
     mutual_info: f32,
     jsd_no_pred: f32,
@@ -43,12 +41,6 @@ struct GenMetrics {
     gen_matrix: [[u32; 4]; 3],
     traj_jsd: f32,
     input_mi: [f32; INPUTS],
-    mi_kin: f32,
-    mi_rnd: f32,
-    jsd_no_pred_kin: f32,
-    jsd_no_pred_rnd: f32,
-    jsd_pred_kin: f32,
-    jsd_pred_rnd: f32,
     contrast: [f32; 3],
     sender_fit_corr: f32,
     traj_fluct_ratio: f32,
@@ -62,22 +54,15 @@ impl GenMetrics {
     fn write_csv(&self, f: &mut File, gen: usize) -> Result<(), Box<dyn std::error::Error>> {
         writeln!(
             f,
-            "{gen},{:.1},{:.1},{},{:.4},{:.4},{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4}",
+            "{gen},{:.1},{:.1},{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4}",
             self.avg_fitness,
             self.max_fitness,
             self.total_signals,
             self.iconicity,
             self.mutual_info,
-            self.confusion_ticks,
             self.jsd_no_pred,
             self.jsd_pred,
             self.silence_corr,
-            self.mi_kin,
-            self.mi_rnd,
-            self.jsd_no_pred_kin,
-            self.jsd_no_pred_rnd,
-            self.jsd_pred_kin,
-            self.jsd_pred_rnd,
             self.sender_fit_corr,
             self.traj_fluct_ratio,
             self.receiver_fit_corr,
@@ -127,9 +112,9 @@ impl GenMetrics {
 
     fn print_log(&self, gen: usize) {
         println!(
-            "gen {gen:>4} | avg {:>7.1} | max {:>7.1} | signals {} | icon {:.3} | MI {:.3} | conf {} | jsd {:.3}/{:.3} | sym [{:.3},{:.3},{:.3}] | sil {:.3}",
+            "gen {gen:>4} | avg {:>7.1} | max {:>7.1} | signals {} | icon {:.3} | MI {:.3} | jsd {:.3}/{:.3} | sym [{:.3},{:.3},{:.3}] | sil {:.3}",
             self.avg_fitness, self.max_fitness, self.total_signals,
-            self.iconicity, self.mutual_info, self.confusion_ticks,
+            self.iconicity, self.mutual_info,
             self.jsd_no_pred, self.jsd_pred,
             self.per_sym_jsd[0], self.per_sym_jsd[1], self.per_sym_jsd[2],
             self.silence_corr
@@ -143,141 +128,67 @@ struct EvalResult {
     total_signals: u32,
     ticks_near: u32,
     prey_ticks: u32,
-    confusion_ticks: u32,
     receiver_counts: [[[u32; 5]; 2]; 4],
-    receiver_counts_kin: [[[u32; 5]; 2]; 4],
-    receiver_counts_rnd: [[[u32; 5]; 2]; 4],
     signals_per_tick: Vec<f32>,
     min_pred_dist: Vec<f32>,
-    /// Per-prey signal rate (signals per tick alive) across all rounds.
     signal_rate_per_prey: Vec<f32>,
-    /// Per-prey action counts with/without signal, silence onset, and signal present.
     actions_with_signal: Vec<[[u32; 5]; 2]>,
     actions_without_signal: Vec<[[u32; 5]; 2]>,
     silence_onset_actions: Vec<[[u32; 5]; 2]>,
 }
 
-#[allow(clippy::too_many_lines)]
-fn evaluate_generation(population: &[Brain], rng: &mut ChaCha8Rng, no_signals: bool) -> EvalResult {
-    let mut fitness = vec![0.0_f32; POP_SIZE];
-    let mut signal_events: Vec<world::SignalEvent> = Vec::new();
-    let mut total_signals: u32 = 0;
-    let mut ticks_near: u32 = 0;
-    let mut prey_ticks: u32 = 0;
-    let mut confusion_ticks: u32 = 0;
-    let mut receiver_counts = [[[0u32; 5]; 2]; 4];
-    let mut receiver_counts_kin = [[[0u32; 5]; 2]; 4];
-    let mut receiver_counts_rnd = [[[0u32; 5]; 2]; 4];
-    let mut signals_per_tick: Vec<f32> = Vec::new();
-    let mut min_pred_dist: Vec<f32> = Vec::new();
-    let mut signal_counts_per_prey = [0.0_f32; POP_SIZE];
-    let mut ticks_alive_per_prey = [0.0_f32; POP_SIZE];
-    let mut actions_with_signal = vec![[[0u32; 5]; 2]; POP_SIZE];
-    let mut actions_without_signal = vec![[[0u32; 5]; 2]; POP_SIZE];
-    let mut silence_onset_actions = vec![[[0u32; 5]; 2]; POP_SIZE];
+fn evaluate_generation(population: &[Agent], rng: &mut ChaCha8Rng, no_signals: bool) -> EvalResult {
+    let mut world = World::new_with_positions(population, NUM_PREDATORS, rng, no_signals);
 
-    for round in 0..EVAL_ROUNDS {
-        let kin_round = round < KIN_ROUNDS;
-        let mut indices: Vec<usize> = (0..POP_SIZE).collect();
-        if kin_round {
-            indices.sort_by(|&a, &b| {
-                let sum_a: f32 = population[a].weights.iter().sum();
-                let sum_b: f32 = population[b].weights.iter().sum();
-                sum_a
-                    .partial_cmp(&sum_b)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-        } else {
-            indices.shuffle(rng);
+    for _ in 0..TICKS_PER_EVAL {
+        if !world.any_alive() {
+            break;
         }
-
-        for group_indices in indices.chunks(GROUP_SIZE) {
-            let brains: Vec<Brain> = group_indices
-                .iter()
-                .map(|&idx| population[idx].clone())
-                .collect();
-            let mut world = World::new(brains, rng, no_signals, kin_round);
-
-            for _ in 0..TICKS_PER_EVAL {
-                if !world.any_alive() {
-                    break;
-                }
-                world.step(rng);
-            }
-
-            total_signals += world.signals_emitted;
-            ticks_near += world.ticks_near_predator;
-            prey_ticks += world.total_prey_ticks;
-            confusion_ticks += world.confusion_ticks;
-            for event in &world.signal_events {
-                let pop_idx = group_indices[event.emitter_idx];
-                signal_counts_per_prey[pop_idx] += 1.0;
-            }
-            signal_events.append(&mut world.signal_events);
-
-            for (tc, wc) in receiver_counts.iter_mut().zip(&world.receiver_counts) {
-                for (tc_ctx, wc_ctx) in tc.iter_mut().zip(wc) {
-                    for (t, w) in tc_ctx.iter_mut().zip(wc_ctx) {
-                        *t += w;
-                    }
-                }
-            }
-            let target_counts = if kin_round {
-                &mut receiver_counts_kin
-            } else {
-                &mut receiver_counts_rnd
-            };
-            let source_counts = if kin_round {
-                &world.receiver_counts_kin
-            } else {
-                &world.receiver_counts_rnd
-            };
-            for (tc, wc) in target_counts.iter_mut().zip(source_counts) {
-                for (tc_ctx, wc_ctx) in tc.iter_mut().zip(wc) {
-                    for (t, w) in tc_ctx.iter_mut().zip(wc_ctx) {
-                        *t += w;
-                    }
-                }
-            }
-
-            signals_per_tick.extend(world.signals_per_tick.iter().map(|&s| s as f32));
-            min_pred_dist.extend_from_slice(&world.min_pred_dist_per_tick);
-
-            for (i, prey) in world.prey.iter().enumerate() {
-                let pop_idx = group_indices[i];
-                fitness[pop_idx] += prey.ticks_alive as f32 + prey.food_eaten as f32 * 10.0;
-                ticks_alive_per_prey[pop_idx] += prey.ticks_alive as f32;
-                for ctx in 0..2 {
-                    for a in 0..5 {
-                        actions_with_signal[pop_idx][ctx][a] += prey.actions_with_signal[ctx][a];
-                        actions_without_signal[pop_idx][ctx][a] +=
-                            prey.actions_without_signal[ctx][a];
-                        silence_onset_actions[pop_idx][ctx][a] +=
-                            prey.silence_onset_actions[ctx][a];
-                    }
-                }
-            }
-        }
+        world.step(rng);
     }
 
-    let signal_rate_per_prey: Vec<f32> = signal_counts_per_prey
+    let fitness: Vec<f32> = world
+        .prey
         .iter()
-        .zip(&ticks_alive_per_prey)
-        .map(|(&signals, &ticks)| if ticks > 0.0 { signals / ticks } else { 0.0 })
+        .map(|p| p.ticks_alive as f32 + p.food_eaten as f32 * 10.0)
         .collect();
+
+    let signal_rate_per_prey: Vec<f32> = world
+        .prey
+        .iter()
+        .enumerate()
+        .map(|(idx, prey)| {
+            if prey.ticks_alive == 0 {
+                return 0.0;
+            }
+            let count = world
+                .signal_events
+                .iter()
+                .filter(|e| e.emitter_idx == idx)
+                .count() as f32;
+            count / prey.ticks_alive as f32
+        })
+        .collect();
+
+    let actions_with_signal: Vec<[[u32; 5]; 2]> =
+        world.prey.iter().map(|p| p.actions_with_signal).collect();
+    let actions_without_signal: Vec<[[u32; 5]; 2]> = world
+        .prey
+        .iter()
+        .map(|p| p.actions_without_signal)
+        .collect();
+    let silence_onset_actions: Vec<[[u32; 5]; 2]> =
+        world.prey.iter().map(|p| p.silence_onset_actions).collect();
 
     EvalResult {
         fitness,
-        signal_events,
-        total_signals,
-        ticks_near,
-        prey_ticks,
-        confusion_ticks,
-        receiver_counts,
-        receiver_counts_kin,
-        receiver_counts_rnd,
-        signals_per_tick,
-        min_pred_dist,
+        signal_events: world.signal_events,
+        total_signals: world.signals_emitted,
+        ticks_near: world.ticks_near_predator,
+        prey_ticks: world.total_prey_ticks,
+        receiver_counts: world.receiver_counts,
+        signals_per_tick: world.signals_per_tick.iter().map(|&s| s as f32).collect(),
+        min_pred_dist: world.min_pred_dist_per_tick,
         signal_rate_per_prey,
         actions_with_signal,
         actions_without_signal,
@@ -287,7 +198,7 @@ fn evaluate_generation(population: &[Brain], rng: &mut ChaCha8Rng, no_signals: b
 
 fn compute_gen_metrics(
     ev: &EvalResult,
-    scored: &[(Brain, f32)],
+    scored: &[(Agent, f32)],
     prev_norm_matrix: &mut Option<[[f32; 4]; 3]>,
     traj_jsd_history: &mut Vec<f32>,
 ) -> GenMetrics {
@@ -302,14 +213,6 @@ fn compute_gen_metrics(
     let per_sym_jsd = metrics::compute_per_symbol_jsd(&ev.receiver_counts);
     let silence_corr = metrics::pearson(&ev.signals_per_tick, &ev.min_pred_dist);
     let input_mi = metrics::compute_input_mi(&ev.signal_events);
-    let kin_events: Vec<&world::SignalEvent> =
-        ev.signal_events.iter().filter(|e| e.kin_round).collect();
-    let rnd_events: Vec<&world::SignalEvent> =
-        ev.signal_events.iter().filter(|e| !e.kin_round).collect();
-    let mi_kin = metrics::compute_mutual_info_refs(&kin_events);
-    let mi_rnd = metrics::compute_mutual_info_refs(&rnd_events);
-    let (jsd_no_pred_kin, jsd_pred_kin) = metrics::compute_receiver_jsd(&ev.receiver_counts_kin);
-    let (jsd_no_pred_rnd, jsd_pred_rnd) = metrics::compute_receiver_jsd(&ev.receiver_counts_rnd);
     let gen_matrix = metrics::signal_context_matrix(&ev.signal_events);
     let curr_norm = metrics::normalize_matrix(&gen_matrix);
     let traj_jsd = match (&*prev_norm_matrix, &curr_norm) {
@@ -323,8 +226,8 @@ fn compute_gen_metrics(
         *prev_norm_matrix = Some(norm);
     }
 
-    let fitness_normalized: Vec<f32> = ev.fitness.iter().map(|f| f / EVAL_ROUNDS as f32).collect();
-    let sender_fit_corr = metrics::pearson(&ev.signal_rate_per_prey, &fitness_normalized);
+    let fitness_vec: Vec<f32> = ev.fitness.clone();
+    let sender_fit_corr = metrics::pearson(&ev.signal_rate_per_prey, &fitness_vec);
 
     traj_jsd_history.push(traj_jsd);
     let traj_fluct_ratio = metrics::rolling_fluctuation_ratio(traj_jsd_history, FLUCT_WINDOW);
@@ -345,7 +248,7 @@ fn compute_gen_metrics(
             }
         })
         .collect();
-    let receiver_fit_corr = metrics::pearson(&reception_rates, &fitness_normalized);
+    let receiver_fit_corr = metrics::pearson(&reception_rates, &fitness_vec);
 
     let per_prey_jsd_vec: Vec<f32> = ev
         .actions_with_signal
@@ -353,9 +256,8 @@ fn compute_gen_metrics(
         .zip(&ev.actions_without_signal)
         .map(|(w, wo)| metrics::per_prey_receiver_jsd(w, wo, MIN_RECEIVER_SAMPLES))
         .collect();
-    let response_fit_corr = metrics::pearson(&per_prey_jsd_vec, &fitness_normalized);
+    let response_fit_corr = metrics::pearson(&per_prey_jsd_vec, &fitness_vec);
 
-    // Silence onset metrics
     let (silence_onset_jsd, silence_move_delta) =
         metrics::compute_silence_onset_metrics(&ev.silence_onset_actions, &ev.actions_with_signal);
 
@@ -363,7 +265,6 @@ fn compute_gen_metrics(
         avg_fitness,
         max_fitness,
         total_signals: ev.total_signals,
-        confusion_ticks: ev.confusion_ticks,
         iconicity,
         mutual_info,
         jsd_no_pred,
@@ -373,12 +274,6 @@ fn compute_gen_metrics(
         gen_matrix,
         traj_jsd,
         input_mi,
-        mi_kin,
-        mi_rnd,
-        jsd_no_pred_kin,
-        jsd_no_pred_rnd,
-        jsd_pred_kin,
-        jsd_pred_rnd,
         contrast,
         sender_fit_corr,
         traj_fluct_ratio,
@@ -396,7 +291,13 @@ fn run_seed(
     write_csv: bool,
 ) -> Result<RunResult, Box<dyn std::error::Error>> {
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
-    let mut population: Vec<Brain> = (0..POP_SIZE).map(|_| Brain::random(&mut rng)).collect();
+    let mut population: Vec<Agent> = (0..POP_SIZE)
+        .map(|_| Agent {
+            brain: Brain::random(&mut rng),
+            x: rng.gen_range(0..GRID_SIZE),
+            y: rng.gen_range(0..GRID_SIZE),
+        })
+        .collect();
 
     let mut csv = write_csv.then(|| File::create("output.csv")).transpose()?;
     let mut traj_csv = write_csv
@@ -407,7 +308,7 @@ fn run_seed(
         .transpose()?;
 
     if let Some(ref mut f) = csv {
-        writeln!(f, "generation,avg_fitness,max_fitness,signals_emitted,iconicity,mutual_info,confusion_ticks,jsd_no_pred,jsd_pred,silence_corr,mi_kin,mi_rnd,jsd_no_pred_kin,jsd_no_pred_rnd,jsd_pred_kin,jsd_pred_rnd,sender_fit_corr,traj_fluct_ratio,receiver_fit_corr,response_fit_corr,silence_onset_jsd,silence_move_delta")?;
+        writeln!(f, "generation,avg_fitness,max_fitness,signals_emitted,iconicity,mutual_info,jsd_no_pred,jsd_pred,silence_corr,sender_fit_corr,traj_fluct_ratio,receiver_fit_corr,response_fit_corr,silence_onset_jsd,silence_move_delta")?;
     }
     if let Some(ref mut f) = traj_csv {
         writeln!(f, "generation,s0d0,s0d1,s0d2,s0d3,s1d0,s1d1,s1d2,s1d3,s2d0,s2d1,s2d2,s2d3,jsd_sym0,jsd_sym1,jsd_sym2,trajectory_jsd,contrast_01,contrast_02,contrast_12")?;
@@ -432,10 +333,10 @@ fn run_seed(
     for gen in 0..generations {
         let ev = evaluate_generation(&population, &mut rng, no_signals);
 
-        let mut scored: Vec<(Brain, f32)> = population
+        let mut scored: Vec<(Agent, f32)> = population
             .iter()
             .enumerate()
-            .map(|(i, brain)| (brain.clone(), ev.fitness[i] / EVAL_ROUNDS as f32))
+            .map(|(i, agent)| (agent.clone(), ev.fitness[i]))
             .collect();
 
         let gm = compute_gen_metrics(&ev, &scored, &mut prev_norm_matrix, &mut traj_jsd_history);
@@ -460,7 +361,7 @@ fn run_seed(
             mutual_info: gm.mutual_info,
         };
 
-        population = evolution::evolve(&mut scored, 8, 3, 0.1, &mut rng);
+        population = evolution::evolve_spatial(&mut scored, 8, 3, 0.1, &mut rng);
     }
 
     if write_csv {

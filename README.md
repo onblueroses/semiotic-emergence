@@ -4,7 +4,7 @@ Forty-eight tiny neural networks live on a 20x20 grid. A predator hunts them. Th
 
 I started this project because I wanted to watch meaning come into existence. We have theories for how meaning works once it already exists, but the moment before - when a world contains no signs, no reference, no communication, and then for the first time it does - nobody really has a good account of what that transition looks like. It happened deep in evolutionary history and left no fossil record.
 
-So I built the simplest world I could think of. Prey, predator, food, three words, and evolution. The prey have 158-weight neural networks for brains. They can see about 4 cells around them. They can signal up to 8. The predator is three times faster than they are. The only reliable survival strategy is to cluster near the predator until it gets confused and stumbles randomly, which means coordinating, which in theory means communicating.
+So I built the simplest world I could think of. Prey, predator, food, three words, and evolution. The prey have 158-weight neural networks for brains. They can see about 4 cells around them. They can signal up to 8. Two predators chase independently, each three times faster than prey. Spatial reproduction creates natural kin clusters - offspring appear near their parents - so communicator genes can persist through kinship proximity without artificial grouping.
 
 Whether they actually learn to talk to each other is still an open question. So far they've learned to shut up instead. They go silent when danger is near. Which might actually be the more interesting finding - silence as the first sign, the simplest possible meaning, requiring no coordination between sender and receiver about what any particular symbol means. Just the absence of background noise becoming informative.
 
@@ -23,7 +23,7 @@ Output goes to `output.csv` and `trajectory.csv`. Batch mode also writes `diverg
 
 ## What we can see
 
-The CSV tracks per generation: fitness, signal count, mutual information (does symbol choice correlate with predator distance?), iconicity (are signals concentrated near the predator?), confusion ticks (how often prey successfully group up to confuse the predator), receiver JSD (does hearing a signal change what a prey does?), and silence correlation (do signals drop when the predator is close?).
+The CSV tracks per generation: fitness, signal count, mutual information (does symbol choice correlate with predator distance?), iconicity (are signals concentrated near the predator?), receiver JSD (does hearing a signal change what a prey does?), silence correlation (do signals drop when the predator is close?), fitness coupling metrics, and silence onset detection.
 
 The receiver-side instruments are the recent addition. We now have five instruments covering both halves of the communication channel:
 
@@ -39,7 +39,7 @@ About 2100 lines of Rust across six files (including inline tests):
 
 ```
 src/brain.rs      - Neural network (16 inputs, 6 hidden, 8 outputs)
-src/evolution.rs  - Genetic algorithm (tournament, crossover, Gaussian mutation)
+src/evolution.rs  - Spatial evolution (Agent struct, local tournament, crossover, mutation)
 src/world.rs      - The grid, the physics, the predator, the food
 src/signal.rs     - Three symbols, linear decay, short range, one-tick delay
 src/metrics.rs    - All five FRAMEWORK instruments (MI, JSD, silence, trajectory, divergence)
@@ -48,9 +48,9 @@ src/main.rs       - Generation loop, batch mode, counterfactual mode, CSV output
 
 ## How the world works
 
-The grid is toroidal - no edges, no corners. 48 prey get evaluated in groups of 8. The predator moves 3 cells per tick, prey move 1. It kills only on the same cell, but gets confused and stumbles randomly when 3 or more prey are within 4 cells of it. Prey vision is 4 cells, signals travel 8. That 2:1 gap between sight and signal range is the whole reason communication could matter here: signals carry information further than eyes can see.
+The grid is toroidal - no edges, no corners. All 48 prey share a single world with 2 predators that chase independently. Each predator moves 3 cells per tick, prey move 1. Kill on same cell only - no random movement, no confusion mechanic. Prey vision is 4 cells, signals travel 8. That 2:1 gap between sight and signal range is the whole reason communication could matter here: signals carry information further than eyes can see.
 
-Two of five evaluation rounds group prey by genetic similarity. This is how the bootstrap problem might get solved. You can't have senders without receivers or receivers without senders, but genetically similar individuals are more likely to share complementary wiring for both. Kin rounds give them a chance to discover that.
+Spatial reproduction solves the bootstrap problem. Offspring inherit the positions of dead agents and are bred from nearby parents (within radius 6). This creates natural kin clusters where genetically similar individuals share overlapping signal ranges - no artificial grouping needed. You can't have senders without receivers or receivers without senders, but spatially proximate relatives are more likely to share complementary wiring for both.
 
 ## How to think about changes
 

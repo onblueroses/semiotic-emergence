@@ -22,20 +22,6 @@ pub fn compute_mutual_info(signal_events: &[SignalEvent]) -> f32 {
     mi_from_contingency(&counts)
 }
 
-/// MI from a slice of references (for kin/random split).
-pub fn compute_mutual_info_refs(signal_events: &[&SignalEvent]) -> f32 {
-    if signal_events.len() < 20 {
-        return 0.0;
-    }
-    let mut counts = [[0u32; 4]; 3];
-    for e in signal_events {
-        let sym = (e.symbol as usize).min(2);
-        let bin = predator_dist_bin(e.predator_dist);
-        counts[sym][bin] += 1;
-    }
-    mi_from_contingency(&counts)
-}
-
 /// Predator distance bin: [0-4), [4-8), [8-11), [11+).
 /// Single source of truth for distance binning across all MI functions.
 fn predator_dist_bin(dist: f32) -> usize {
@@ -525,7 +511,6 @@ mod tests {
                 symbol,
                 predator_dist: 5.0,
                 inputs,
-                kin_round: false,
                 emitter_idx: 0,
             });
         }
@@ -543,7 +528,6 @@ mod tests {
                 symbol: (i % 3) as u8,
                 predator_dist: 5.0,
                 inputs: [0.0; INPUTS],
-                kin_round: false,
                 emitter_idx: 0,
             })
             .collect();
@@ -558,28 +542,24 @@ mod tests {
                 symbol: 0,
                 predator_dist: 2.0,
                 inputs: [0.0; INPUTS],
-                kin_round: false,
                 emitter_idx: 0,
             },
             SignalEvent {
                 symbol: 1,
                 predator_dist: 6.0,
                 inputs: [0.0; INPUTS],
-                kin_round: false,
                 emitter_idx: 0,
             },
             SignalEvent {
                 symbol: 2,
                 predator_dist: 10.0,
                 inputs: [0.0; INPUTS],
-                kin_round: false,
                 emitter_idx: 0,
             },
             SignalEvent {
                 symbol: 0,
                 predator_dist: 15.0,
                 inputs: [0.0; INPUTS],
-                kin_round: false,
                 emitter_idx: 0,
             },
         ];

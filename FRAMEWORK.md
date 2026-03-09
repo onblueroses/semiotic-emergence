@@ -18,7 +18,7 @@ Strip away consciousness, intention, culture, syntax, shared history. Three thin
 
 **Differential production.** The signal varies with context. If the sender emits the same signal regardless of world state, it carries no information. This is the sender side. Mutual information measures it.
 
-**Differential reception.** The receiver acts differently depending on the signal. If the receiver responds identically to all signals or ignores them entirely, the signal makes no difference in the world. This is the receiver side. We have no metric for it yet, and it is the single largest blind spot in the current setup.
+**Differential reception.** The receiver acts differently depending on the signal. If the receiver responds identically to all signals or ignores them entirely, the signal makes no difference in the world. This is the receiver side. Receiver JSD measures it - comparing action distributions with vs without signal, split by context.
 
 **Fitness coupling.** The differential production and reception are linked to outcomes. The combination must matter for survival. Otherwise the pattern is an epiphenomenon - two clocks synchronized by coincidence, not connected by mechanism. The evolutionary feedback loop provides this coupling: signal-response patterns that improve survival get reinforced.
 
@@ -36,7 +36,7 @@ Between pure noise and genuine meaning, there is a region with no good name. The
 
 **Seeds.** Signal-response patterns too weak to be detected by current metrics but potentially amplifiable by selection. The precursor to meaning, not yet meaning itself.
 
-Our current metrics cannot distinguish between these. Mutual information captures all of them indiscriminately. The instruments we need are sensitive to the receiver side and to fitness coupling - the three-way relationship between signal, response, and outcome.
+Mutual information alone cannot distinguish between these. The receiver-side instruments (receiver JSD, silence onset, three-way coupling) help separate genuine communication from spandrels and ghosts by checking whether receivers actually change behavior in response to signals, and whether that change correlates with survival.
 
 ## The observer's Umwelt
 
@@ -82,7 +82,7 @@ Running multiple populations from different seeds samples this landscape. Conver
 
 The bootstrap problem - no sender without receiver, no receiver without sender - might be better understood as a phase transition.
 
-Below some critical level of genetic similarity, group size, or selection pressure, signal-response correlations are random fluctuations that don't persist. Above it, they lock in and become self-reinforcing. Kin-grouped evaluation rounds are the mechanism for local correlation: genetically similar individuals are more likely to have complementary sender-receiver weights.
+Below some critical level of genetic similarity, spatial proximity, or selection pressure, signal-response correlations are random fluctuations that don't persist. Above it, they lock in and become self-reinforcing. Spatial reproduction is the mechanism for local correlation: offspring inherit positions near their parents, creating natural kin clusters where genetically similar individuals share overlapping signal ranges. No artificial grouping is needed - the spatial structure itself generates the conditions for complementary sender-receiver weights to co-occur.
 
 If this is right, the emergence of meaning should show phase transition signatures: increasing fluctuations before the transition, a sharp change at the critical point, and hysteresis (once established, the system persists even if conditions partially revert).
 
@@ -96,7 +96,7 @@ Some populations might evolve communication that persists for hundreds of genera
 
 **Symmetry.** Systems where the sender benefits as much as the receiver are stickier than altruistic systems. Selfish communication is more durable than generous communication.
 
-**Population structure.** Meaning-making maintained by kin selection may be more fragile than population-wide convention, because kin groups are small and vulnerable to demographic fluctuation.
+**Population structure.** Meaning-making maintained by spatial kin clusters may be more fragile than population-wide convention, because local clusters are vulnerable to demographic fluctuation and predator pressure. But spatial reproduction continuously regenerates kin proximity, which may provide more durable support than artificial grouping.
 
 ## Dark semiotics
 
@@ -110,7 +110,7 @@ The semiotic processes happening in the simulation that our metrics cannot see.
 
 **Relational semiotics.** Not what a signal means in isolation, but relative to other signals. If symbol 0 is usually emitted at distance 3 and symbol 1 at distance 7, the contrast carries meaning even if neither one alone does.
 
-**Social semiotics.** Differences in signaling between kin-grouped rounds and random-shuffled rounds. If prey signal differently when surrounded by genetic relatives, that's audience-dependent communication.
+**Social semiotics.** Differences in signaling between spatially proximate kin clusters and interactions with distant non-relatives. If prey signal differently when surrounded by genetic relatives (which spatial reproduction creates naturally), that's audience-dependent communication.
 
 ## The five instruments
 
