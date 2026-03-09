@@ -1,35 +1,40 @@
 use crate::brain::INPUTS;
-use crate::world::{SignalEvent, PREY_VISION_RANGE};
+use crate::world::SignalEvent;
 
-pub fn compute_iconicity(signal_events: &[SignalEvent], ticks_near: u32, total_ticks: u32) -> f32 {
+pub fn compute_iconicity(
+    signal_events: &[SignalEvent],
+    ticks_near: u32,
+    total_ticks: u32,
+    prey_vision_range: f32,
+) -> f32 {
     if signal_events.is_empty() || total_ticks == 0 {
         return 0.0;
     }
     let signals_near = signal_events
         .iter()
-        .filter(|e| e.predator_dist < PREY_VISION_RANGE)
+        .filter(|e| e.predator_dist < prey_vision_range)
         .count() as f32;
     let signal_near_rate = signals_near / signal_events.len() as f32;
     let baseline_near_rate = ticks_near as f32 / total_ticks as f32;
     signal_near_rate - baseline_near_rate
 }
 
-pub fn compute_mutual_info(signal_events: &[SignalEvent]) -> f32 {
+pub fn compute_mutual_info(signal_events: &[SignalEvent], mi_bins: &[f32; 3]) -> f32 {
     if signal_events.len() < 20 {
         return 0.0;
     }
-    let counts = signal_context_matrix(signal_events);
+    let counts = signal_context_matrix(signal_events, mi_bins);
     mi_from_contingency(&counts)
 }
 
-/// Predator distance bin: [0-4), [4-8), [8-11), [11+).
-/// Single source of truth for distance binning across all MI functions.
-fn predator_dist_bin(dist: f32) -> usize {
-    if dist < 4.0 {
+/// Predator distance bin using configurable bin edges.
+/// Bins: [0, bins[0]), [bins[0], bins[1]), [bins[1], bins[2]), [bins[2], +inf).
+fn predator_dist_bin(dist: f32, bins: &[f32; 3]) -> usize {
+    if dist < bins[0] {
         0
-    } else if dist < 8.0 {
+    } else if dist < bins[1] {
         1
-    } else if dist < 11.0 {
+    } else if dist < bins[2] {
         2
     } else {
         3
@@ -37,12 +42,12 @@ fn predator_dist_bin(dist: f32) -> usize {
 }
 
 /// Build the 3x4 signal-context contingency matrix from signal events.
-/// Rows = symbols (0-2), columns = predator distance bins [0-4), [4-8), [8-11), [11+).
-pub fn signal_context_matrix(signal_events: &[SignalEvent]) -> [[u32; 4]; 3] {
+/// Rows = symbols (0-2), columns = predator distance bins.
+pub fn signal_context_matrix(signal_events: &[SignalEvent], mi_bins: &[f32; 3]) -> [[u32; 4]; 3] {
     let mut counts = [[0u32; 4]; 3];
     for e in signal_events {
         let sym = (e.symbol as usize).min(2);
-        counts[sym][predator_dist_bin(e.predator_dist)] += 1;
+        counts[sym][predator_dist_bin(e.predator_dist, mi_bins)] += 1;
     }
     counts
 }
@@ -537,6 +542,7 @@ mod tests {
 
     #[test]
     fn signal_context_matrix_bins_correctly() {
+        let bins = [4.0, 8.0, 11.0];
         let events = vec![
             SignalEvent {
                 symbol: 0,
@@ -563,7 +569,7 @@ mod tests {
                 emitter_idx: 0,
             },
         ];
-        let m = signal_context_matrix(&events);
+        let m = signal_context_matrix(&events, &bins);
         assert_eq!(m[0][0], 1);
         assert_eq!(m[1][1], 1);
         assert_eq!(m[2][2], 1);

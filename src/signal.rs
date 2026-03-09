@@ -1,19 +1,7 @@
-use crate::world::GRID_SIZE;
+use crate::world::wrap_delta;
 
-pub const SIGNAL_RANGE: f32 = 8.0;
 pub const SIGNAL_THRESHOLD: f32 = 0.5;
 pub const NUM_SYMBOLS: usize = 3;
-
-fn wrap_delta(a: i32, b: i32) -> f32 {
-    let d = b - a;
-    if d > GRID_SIZE / 2 {
-        (d - GRID_SIZE) as f32
-    } else if d < -(GRID_SIZE / 2) {
-        (d + GRID_SIZE) as f32
-    } else {
-        d as f32
-    }
-}
 
 #[derive(Clone, Debug)]
 pub struct Signal {
@@ -27,19 +15,26 @@ pub struct Signal {
 /// Returns strength per symbol `[0..NUM_SYMBOLS]`. Only signals from previous ticks
 /// are receivable (1-tick delay). Strongest-per-symbol wins.
 #[cfg(test)]
-pub fn receive(signals: &[Signal], rx: i32, ry: i32, current_tick: u32) -> [f32; NUM_SYMBOLS] {
+pub fn receive(
+    signals: &[Signal],
+    rx: i32,
+    ry: i32,
+    current_tick: u32,
+    signal_range: f32,
+    grid_size: i32,
+) -> [f32; NUM_SYMBOLS] {
     let mut strengths = [0.0_f32; NUM_SYMBOLS];
     for sig in signals {
         if sig.tick_emitted >= current_tick {
             continue; // 1-tick delay: only past signals
         }
-        let dx = wrap_delta(rx, sig.x);
-        let dy = wrap_delta(ry, sig.y);
+        let dx = wrap_delta(rx, sig.x, grid_size) as f32;
+        let dy = wrap_delta(ry, sig.y, grid_size) as f32;
         let dist = (dx * dx + dy * dy).sqrt();
-        if dist > SIGNAL_RANGE {
+        if dist > signal_range {
             continue;
         }
-        let strength = 1.0 - dist / SIGNAL_RANGE;
+        let strength = 1.0 - dist / signal_range;
         let sym = sig.symbol as usize;
         if sym < NUM_SYMBOLS && strength > strengths[sym] {
             strengths[sym] = strength;
@@ -62,7 +57,9 @@ pub fn receive_detailed(
     ry: i32,
     current_tick: u32,
     grid_size: f32,
+    signal_range: f32,
 ) -> [ReceivedSignal; NUM_SYMBOLS] {
+    let grid_size_i = grid_size as i32;
     let mut result = std::array::from_fn::<_, NUM_SYMBOLS, _>(|_| ReceivedSignal {
         strength: 0.0,
         dx: 0.0,
@@ -72,13 +69,13 @@ pub fn receive_detailed(
         if sig.tick_emitted >= current_tick {
             continue;
         }
-        let dx = wrap_delta(rx, sig.x);
-        let dy = wrap_delta(ry, sig.y);
+        let dx = wrap_delta(rx, sig.x, grid_size_i) as f32;
+        let dy = wrap_delta(ry, sig.y, grid_size_i) as f32;
         let dist = (dx * dx + dy * dy).sqrt();
-        if dist > SIGNAL_RANGE {
+        if dist > signal_range {
             continue;
         }
-        let strength = 1.0 - dist / SIGNAL_RANGE;
+        let strength = 1.0 - dist / signal_range;
         let sym = sig.symbol as usize;
         if sym < NUM_SYMBOLS && strength > result[sym].strength {
             result[sym].strength = strength;
@@ -108,6 +105,9 @@ pub fn maybe_emit(outputs: &[f32], threshold: f32) -> Option<u8> {
 mod tests {
     use super::*;
 
+    const TEST_SIGNAL_RANGE: f32 = 8.0;
+    const TEST_GRID_SIZE: i32 = 20;
+
     #[test]
     fn delay_blocks_same_tick() {
         let signals = vec![Signal {
@@ -116,7 +116,7 @@ mod tests {
             symbol: 0,
             tick_emitted: 5,
         }];
-        let strengths = receive(&signals, 1, 0, 5);
+        let strengths = receive(&signals, 1, 0, 5, TEST_SIGNAL_RANGE, TEST_GRID_SIZE);
         assert!(strengths[0].abs() < 1e-6);
     }
 
@@ -128,7 +128,7 @@ mod tests {
             symbol: 1,
             tick_emitted: 4,
         }];
-        let strengths = receive(&signals, 0, 0, 5);
+        let strengths = receive(&signals, 0, 0, 5, TEST_SIGNAL_RANGE, TEST_GRID_SIZE);
         assert!((strengths[1] - 1.0).abs() < 1e-6); // same cell = max strength
     }
 
@@ -141,7 +141,7 @@ mod tests {
             tick_emitted: 0,
         }];
         // Place receiver 10 cells away (> SIGNAL_RANGE of 8)
-        let strengths = receive(&signals, 10, 0, 1);
+        let strengths = receive(&signals, 10, 0, 1, TEST_SIGNAL_RANGE, TEST_GRID_SIZE);
         assert!(strengths[0].abs() < 1e-6);
     }
 
@@ -153,7 +153,7 @@ mod tests {
             symbol: 0,
             tick_emitted: 4,
         }];
-        let result = receive_detailed(&signals, 2, 1, 5, 20.0);
+        let result = receive_detailed(&signals, 2, 1, 5, 20.0, TEST_SIGNAL_RANGE);
         assert!(result[0].strength > 0.0);
         assert!((result[0].dx - 3.0 / 20.0).abs() < 1e-6);
         assert!((result[0].dy - 2.0 / 20.0).abs() < 1e-6);

@@ -24,13 +24,6 @@ pub const INPUT_NAMES: [&str; INPUTS] = [
     "energy",
 ];
 
-pub const GRID_SIZE: i32 = 20;
-pub const FOOD_COUNT: usize = 25;
-pub const PREY_VISION_RANGE: f32 = 4.0;
-pub const PREDATOR_SPEED: u32 = 3;
-pub const ENERGY_DRAIN: f32 = 0.002;
-pub const SIGNAL_COST: f32 = 0.01;
-
 /// Wrap-aware signed delta: shortest path on a toroidal grid.
 /// Returns value in (-size/2, size/2].
 pub(crate) fn wrap_delta(a: i32, b: i32, size: i32) -> i32 {
@@ -44,9 +37,9 @@ pub(crate) fn wrap_delta(a: i32, b: i32, size: i32) -> i32 {
     }
 }
 
-pub(crate) fn wrap_dist_sq(ax: i32, ay: i32, bx: i32, by: i32) -> f32 {
-    let dx = wrap_delta(ax, bx, GRID_SIZE) as f32;
-    let dy = wrap_delta(ay, by, GRID_SIZE) as f32;
+pub(crate) fn wrap_dist_sq(ax: i32, ay: i32, bx: i32, by: i32, grid_size: i32) -> f32 {
+    let dx = wrap_delta(ax, bx, grid_size) as f32;
+    let dy = wrap_delta(ay, by, grid_size) as f32;
     dx * dx + dy * dy
 }
 
@@ -109,14 +102,32 @@ pub struct World {
     pub min_pred_dist_per_tick: Vec<f32>,
     /// When true, signal emission is suppressed (counterfactual mode).
     pub no_signals: bool,
+    // Simulation parameters
+    pub grid_size: i32,
+    pub food_count: usize,
+    pub prey_vision_range: f32,
+    pub signal_range: f32,
+    pub predator_speed: u32,
+    pub base_drain: f32,
+    pub neuron_cost: f32,
+    pub signal_cost: f32,
 }
 
 impl World {
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_positions(
         agents: &[Agent],
         num_predators: usize,
         rng: &mut impl Rng,
         no_signals: bool,
+        grid_size: i32,
+        food_count: usize,
+        prey_vision_range: f32,
+        signal_range: f32,
+        predator_speed: u32,
+        base_drain: f32,
+        neuron_cost: f32,
+        signal_cost: f32,
     ) -> Self {
         let prey = agents
             .iter()
@@ -137,15 +148,15 @@ impl World {
 
         let predators = (0..num_predators)
             .map(|_| Predator {
-                x: rng.gen_range(0..GRID_SIZE),
-                y: rng.gen_range(0..GRID_SIZE),
+                x: rng.gen_range(0..grid_size),
+                y: rng.gen_range(0..grid_size),
             })
             .collect();
 
-        let food = (0..FOOD_COUNT)
+        let food = (0..food_count)
             .map(|_| Food {
-                x: rng.gen_range(0..GRID_SIZE),
-                y: rng.gen_range(0..GRID_SIZE),
+                x: rng.gen_range(0..grid_size),
+                y: rng.gen_range(0..grid_size),
             })
             .collect();
 
@@ -163,6 +174,14 @@ impl World {
             signals_per_tick: Vec::new(),
             min_pred_dist_per_tick: Vec::new(),
             no_signals,
+            grid_size,
+            food_count,
+            prey_vision_range,
+            signal_range,
+            predator_speed,
+            base_drain,
+            neuron_cost,
+            signal_cost,
         }
     }
 
@@ -170,16 +189,16 @@ impl World {
     fn nearest_predator_dist_sq(&self, x: i32, y: i32) -> f32 {
         self.predators
             .iter()
-            .map(|pred| wrap_dist_sq(x, y, pred.x, pred.y))
+            .map(|pred| wrap_dist_sq(x, y, pred.x, pred.y, self.grid_size))
             .fold(f32::MAX, f32::min)
     }
 
     /// Nearest predator's position. Caller guarantees at least one predator exists.
     fn nearest_predator(&self, x: i32, y: i32) -> &Predator {
         let mut best = &self.predators[0];
-        let mut best_d = wrap_dist_sq(x, y, best.x, best.y);
+        let mut best_d = wrap_dist_sq(x, y, best.x, best.y, self.grid_size);
         for pred in &self.predators[1..] {
-            let d = wrap_dist_sq(x, y, pred.x, pred.y);
+            let d = wrap_dist_sq(x, y, pred.x, pred.y, self.grid_size);
             if d < best_d {
                 best = pred;
                 best_d = d;
@@ -218,8 +237,9 @@ impl World {
                 continue;
             }
 
-            // Metabolism: drain energy each tick
-            self.prey[i].energy -= ENERGY_DRAIN;
+            // Metabolism: bigger brains cost more energy
+            let drain = self.base_drain + self.prey[i].brain.hidden_size as f32 * self.neuron_cost;
+            self.prey[i].energy -= drain;
             if self.prey[i].energy <= 0.0 {
                 self.prey[i].alive = false;
                 continue;
@@ -230,7 +250,7 @@ impl World {
                 .nearest_predator_dist_sq(self.prey[i].x, self.prey[i].y)
                 .sqrt();
             self.total_prey_ticks += 1;
-            if pdist <= PREY_VISION_RANGE {
+            if pdist <= self.prey_vision_range {
                 self.ticks_near_predator += 1;
             }
 
@@ -278,11 +298,11 @@ impl World {
         // Kill check runs once after all predator movement, not per sub-step.
         self.predator_kill();
 
-        if self.food.len() < FOOD_COUNT / 2 {
-            while self.food.len() < FOOD_COUNT {
+        if self.food.len() < self.food_count / 2 {
+            while self.food.len() < self.food_count {
                 self.food.push(Food {
-                    x: rng.gen_range(0..GRID_SIZE),
-                    y: rng.gen_range(0..GRID_SIZE),
+                    x: rng.gen_range(0..self.grid_size),
+                    y: rng.gen_range(0..self.grid_size),
                 });
             }
         }
@@ -294,23 +314,23 @@ impl World {
     fn build_inputs(&self, prey_idx: usize) -> [f32; INPUTS] {
         let p = &self.prey[prey_idx];
         let mut inp = [0.0_f32; INPUTS];
-        let gs = GRID_SIZE as f32;
+        let gs = self.grid_size as f32;
 
         // 0-2: Nearest predator relative dx, dy, distance (gated by vision range)
         let nearest_pred = self.nearest_predator(p.x, p.y);
-        let pdx = wrap_delta(p.x, nearest_pred.x, GRID_SIZE) as f32;
-        let pdy = wrap_delta(p.y, nearest_pred.y, GRID_SIZE) as f32;
+        let pdx = wrap_delta(p.x, nearest_pred.x, self.grid_size) as f32;
+        let pdy = wrap_delta(p.y, nearest_pred.y, self.grid_size) as f32;
         let pdist = (pdx * pdx + pdy * pdy).sqrt();
-        if pdist <= PREY_VISION_RANGE {
+        if pdist <= self.prey_vision_range {
             inp[0] = pdx / gs;
             inp[1] = pdy / gs;
-            inp[2] = (pdist / PREY_VISION_RANGE).min(1.0);
+            inp[2] = (pdist / self.prey_vision_range).min(1.0);
         }
 
         // 3-4: Nearest food dx, dy
         if let Some(f) = self.nearest_food(p.x, p.y) {
-            inp[3] = wrap_delta(p.x, f.x, GRID_SIZE) as f32 / gs;
-            inp[4] = wrap_delta(p.y, f.y, GRID_SIZE) as f32 / gs;
+            inp[3] = wrap_delta(p.x, f.x, self.grid_size) as f32 / gs;
+            inp[4] = wrap_delta(p.y, f.y, self.grid_size) as f32 / gs;
         }
 
         // 5: Nearest ally distance
@@ -319,7 +339,7 @@ impl World {
             if j == prey_idx || !other.alive {
                 continue;
             }
-            let d = wrap_dist_sq(p.x, p.y, other.x, other.y).sqrt();
+            let d = wrap_dist_sq(p.x, p.y, other.x, other.y, self.grid_size).sqrt();
             if d < min_ally {
                 min_ally = d;
             }
@@ -331,7 +351,8 @@ impl World {
         };
 
         // 6-14: Incoming signals (strength + direction per symbol)
-        let sig = signal::receive_detailed(&self.signals, p.x, p.y, self.tick, gs);
+        let sig =
+            signal::receive_detailed(&self.signals, p.x, p.y, self.tick, gs, self.signal_range);
         inp[6] = sig[0].strength;
         inp[7] = sig[0].dx;
         inp[8] = sig[0].dy;
@@ -356,10 +377,10 @@ impl World {
             .map_or(0, |(i, _)| i);
 
         match action {
-            0 => self.prey[prey_idx].y = (self.prey[prey_idx].y - 1).rem_euclid(GRID_SIZE),
-            1 => self.prey[prey_idx].y = (self.prey[prey_idx].y + 1).rem_euclid(GRID_SIZE),
-            2 => self.prey[prey_idx].x = (self.prey[prey_idx].x + 1).rem_euclid(GRID_SIZE),
-            3 => self.prey[prey_idx].x = (self.prey[prey_idx].x - 1).rem_euclid(GRID_SIZE),
+            0 => self.prey[prey_idx].y = (self.prey[prey_idx].y - 1).rem_euclid(self.grid_size),
+            1 => self.prey[prey_idx].y = (self.prey[prey_idx].y + 1).rem_euclid(self.grid_size),
+            2 => self.prey[prey_idx].x = (self.prey[prey_idx].x + 1).rem_euclid(self.grid_size),
+            3 => self.prey[prey_idx].x = (self.prey[prey_idx].x - 1).rem_euclid(self.grid_size),
             4 => {
                 let px = self.prey[prey_idx].x;
                 let py = self.prey[prey_idx].y;
@@ -376,9 +397,9 @@ impl World {
         // Suppressed in counterfactual mode (--no-signals)
         let px = self.prey[prey_idx].x;
         let py = self.prey[prey_idx].y;
-        if !self.no_signals && self.prey[prey_idx].energy > SIGNAL_COST {
+        if !self.no_signals && self.prey[prey_idx].energy > self.signal_cost {
             if let Some(symbol) = signal::maybe_emit(outputs.as_slice(), SIGNAL_THRESHOLD) {
-                self.prey[prey_idx].energy -= SIGNAL_COST;
+                self.prey[prey_idx].energy -= self.signal_cost;
                 let predator_dist = self.nearest_predator_dist_sq(px, py).sqrt();
                 self.signal_events.push(SignalEvent {
                     symbol,
@@ -399,7 +420,7 @@ impl World {
 
     fn move_predators(&mut self) {
         for pred_idx in 0..self.predators.len() {
-            for _ in 0..PREDATOR_SPEED {
+            for _ in 0..self.predator_speed {
                 let mut nearest: Option<(i32, i32, f32)> = None;
                 for p in &self.prey {
                     if !p.alive {
@@ -410,6 +431,7 @@ impl World {
                         self.predators[pred_idx].y,
                         p.x,
                         p.y,
+                        self.grid_size,
                     );
                     if nearest.is_none() || d < nearest.unwrap_or((0, 0, f32::MAX)).2 {
                         nearest = Some((p.x, p.y, d));
@@ -417,15 +439,17 @@ impl World {
                 }
 
                 if let Some((tx, ty, _)) = nearest {
-                    let dx = wrap_delta(self.predators[pred_idx].x, tx, GRID_SIZE);
-                    let dy = wrap_delta(self.predators[pred_idx].y, ty, GRID_SIZE);
+                    let dx = wrap_delta(self.predators[pred_idx].x, tx, self.grid_size);
+                    let dy = wrap_delta(self.predators[pred_idx].y, ty, self.grid_size);
                     if dx.abs() >= dy.abs() {
                         self.predators[pred_idx].x += dx.signum();
                     } else {
                         self.predators[pred_idx].y += dy.signum();
                     }
-                    self.predators[pred_idx].x = self.predators[pred_idx].x.rem_euclid(GRID_SIZE);
-                    self.predators[pred_idx].y = self.predators[pred_idx].y.rem_euclid(GRID_SIZE);
+                    self.predators[pred_idx].x =
+                        self.predators[pred_idx].x.rem_euclid(self.grid_size);
+                    self.predators[pred_idx].y =
+                        self.predators[pred_idx].y.rem_euclid(self.grid_size);
                 }
             }
         }
@@ -437,8 +461,8 @@ impl World {
                 continue;
             }
             for pred in &self.predators {
-                let dx = wrap_delta(pred.x, p.x, GRID_SIZE).abs();
-                let dy = wrap_delta(pred.y, p.y, GRID_SIZE).abs();
+                let dx = wrap_delta(pred.x, p.x, self.grid_size).abs();
+                let dy = wrap_delta(pred.y, p.y, self.grid_size).abs();
                 if dx == 0 && dy == 0 {
                     p.alive = false;
                     break;
@@ -448,22 +472,21 @@ impl World {
     }
 
     fn nearest_food(&self, x: i32, y: i32) -> Option<&Food> {
-        self.food.iter().min_by_key(|f| {
-            wrap_delta(x, f.x, GRID_SIZE).abs() + wrap_delta(y, f.y, GRID_SIZE).abs()
-        })
+        let gs = self.grid_size;
+        self.food
+            .iter()
+            .min_by_key(|f| wrap_delta(x, f.x, gs).abs() + wrap_delta(y, f.y, gs).abs())
     }
 
     fn nearest_food_idx(&self, x: i32, y: i32, max_dist: i32) -> Option<usize> {
+        let gs = self.grid_size;
         self.food
             .iter()
             .enumerate()
             .filter(|(_, f)| {
-                wrap_delta(x, f.x, GRID_SIZE).abs() + wrap_delta(y, f.y, GRID_SIZE).abs()
-                    <= max_dist
+                wrap_delta(x, f.x, gs).abs() + wrap_delta(y, f.y, gs).abs() <= max_dist
             })
-            .min_by_key(|(_, f)| {
-                wrap_delta(x, f.x, GRID_SIZE).abs() + wrap_delta(y, f.y, GRID_SIZE).abs()
-            })
+            .min_by_key(|(_, f)| wrap_delta(x, f.x, gs).abs() + wrap_delta(y, f.y, gs).abs())
             .map(|(i, _)| i)
     }
 }
@@ -471,15 +494,19 @@ impl World {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::brain::{Brain, GENOME_LEN, INPUTS};
+    use crate::brain::{Brain, DEFAULT_HIDDEN, INPUTS, MAX_GENOME_LEN};
     use rand::SeedableRng;
     use rand_chacha::ChaCha8Rng;
 
-    fn zero_brain() -> Brain {
-        Brain {
-            weights: [0.0; GENOME_LEN],
-        }
-    }
+    // Test defaults matching old constants
+    const TEST_GRID: i32 = 20;
+    const TEST_FOOD: usize = 25;
+    const TEST_VISION: f32 = 4.0;
+    const TEST_SIGNAL_RANGE: f32 = 8.0;
+    const TEST_PRED_SPEED: u32 = 3;
+    const TEST_BASE_DRAIN: f32 = 0.0008;
+    const TEST_NEURON_COST: f32 = 0.0002;
+    const TEST_SIGNAL_COST: f32 = 0.01;
 
     fn minimal_world(prey_positions: &[(i32, i32)], predator: (i32, i32)) -> World {
         let prey = prey_positions
@@ -489,7 +516,7 @@ mod tests {
                 y,
                 energy: 1.0,
                 alive: true,
-                brain: zero_brain(),
+                brain: Brain::zero(),
                 ticks_alive: 0,
                 food_eaten: 0,
                 actions_with_signal: [[0; 5]; 2],
@@ -515,6 +542,14 @@ mod tests {
             signals_per_tick: Vec::new(),
             min_pred_dist_per_tick: Vec::new(),
             no_signals: true,
+            grid_size: TEST_GRID,
+            food_count: TEST_FOOD,
+            prey_vision_range: TEST_VISION,
+            signal_range: TEST_SIGNAL_RANGE,
+            predator_speed: TEST_PRED_SPEED,
+            base_drain: TEST_BASE_DRAIN,
+            neuron_cost: TEST_NEURON_COST,
+            signal_cost: TEST_SIGNAL_COST,
         }
     }
 
@@ -522,30 +557,30 @@ mod tests {
 
     #[test]
     fn wrap_delta_no_wrap() {
-        assert_eq!(wrap_delta(3, 7, GRID_SIZE), 4);
-        assert_eq!(wrap_delta(7, 3, GRID_SIZE), -4);
+        assert_eq!(wrap_delta(3, 7, TEST_GRID), 4);
+        assert_eq!(wrap_delta(7, 3, TEST_GRID), -4);
     }
 
     #[test]
     fn wrap_delta_across_boundary() {
-        assert_eq!(wrap_delta(18, 1, GRID_SIZE), 3);
-        assert_eq!(wrap_delta(1, 18, GRID_SIZE), -3);
+        assert_eq!(wrap_delta(18, 1, TEST_GRID), 3);
+        assert_eq!(wrap_delta(1, 18, TEST_GRID), -3);
     }
 
     #[test]
     fn wrap_delta_half_grid() {
-        assert_eq!(wrap_delta(0, 10, GRID_SIZE), 10);
-        assert_eq!(wrap_delta(10, 0, GRID_SIZE), -10);
+        assert_eq!(wrap_delta(0, 10, TEST_GRID), 10);
+        assert_eq!(wrap_delta(10, 0, TEST_GRID), -10);
     }
 
     #[test]
     fn wrap_dist_sq_same_cell_is_zero() {
-        assert!((wrap_dist_sq(5, 5, 5, 5) - 0.0).abs() < 1e-6);
+        assert!((wrap_dist_sq(5, 5, 5, 5, TEST_GRID) - 0.0).abs() < 1e-6);
     }
 
     #[test]
     fn wrap_dist_sq_across_boundary() {
-        let d = wrap_dist_sq(19, 0, 1, 0);
+        let d = wrap_dist_sq(19, 0, 1, 0, TEST_GRID);
         assert!((d - 4.0).abs() < 1e-6);
     }
 
@@ -588,10 +623,10 @@ mod tests {
         // not randomly. Since all 4 are equidistant, it picks whichever is first in
         // iteration order, but it definitely moves purposefully.
         let pred = &world.predators[0];
-        let moved_dist = wrap_dist_sq(px, py, pred.x, pred.y).sqrt();
+        let moved_dist = wrap_dist_sq(px, py, pred.x, pred.y, TEST_GRID).sqrt();
         assert!(moved_dist > 0.0, "Predator should have moved");
         assert!(
-            moved_dist <= PREDATOR_SPEED as f32,
+            moved_dist <= TEST_PRED_SPEED as f32,
             "Predator moved too far"
         );
     }
@@ -637,7 +672,7 @@ mod tests {
                 y: 0,
                 energy: 1.0,
                 alive: true,
-                brain: zero_brain(),
+                brain: Brain::zero(),
                 ticks_alive: 0,
                 food_eaten: 0,
                 actions_with_signal: [[0; 5]; 2],
@@ -650,7 +685,7 @@ mod tests {
                 y: 19,
                 energy: 1.0,
                 alive: true,
-                brain: zero_brain(),
+                brain: Brain::zero(),
                 ticks_alive: 0,
                 food_eaten: 0,
                 actions_with_signal: [[0; 5]; 2],
@@ -676,6 +711,14 @@ mod tests {
             signals_per_tick: Vec::new(),
             min_pred_dist_per_tick: Vec::new(),
             no_signals: true,
+            grid_size: TEST_GRID,
+            food_count: TEST_FOOD,
+            prey_vision_range: TEST_VISION,
+            signal_range: TEST_SIGNAL_RANGE,
+            predator_speed: TEST_PRED_SPEED,
+            base_drain: TEST_BASE_DRAIN,
+            neuron_cost: TEST_NEURON_COST,
+            signal_cost: TEST_SIGNAL_COST,
         };
 
         world.move_predators();
@@ -696,21 +739,36 @@ mod tests {
         let agents = vec![
             Agent {
                 brain: Brain {
-                    weights: [0.1; GENOME_LEN],
+                    weights: [0.1; MAX_GENOME_LEN],
+                    hidden_size: DEFAULT_HIDDEN,
                 },
                 x: 3,
                 y: 7,
             },
             Agent {
                 brain: Brain {
-                    weights: [0.2; GENOME_LEN],
+                    weights: [0.2; MAX_GENOME_LEN],
+                    hidden_size: DEFAULT_HIDDEN,
                 },
                 x: 15,
                 y: 2,
             },
         ];
         let mut rng = ChaCha8Rng::seed_from_u64(0);
-        let world = World::new_with_positions(&agents, 1, &mut rng, false);
+        let world = World::new_with_positions(
+            &agents,
+            1,
+            &mut rng,
+            false,
+            TEST_GRID,
+            TEST_FOOD,
+            TEST_VISION,
+            TEST_SIGNAL_RANGE,
+            TEST_PRED_SPEED,
+            TEST_BASE_DRAIN,
+            TEST_NEURON_COST,
+            TEST_SIGNAL_COST,
+        );
 
         assert_eq!(world.prey[0].x, 3);
         assert_eq!(world.prey[0].y, 7);
@@ -731,7 +789,8 @@ mod tests {
         world.step(&mut rng);
         let after = world.prey[0].energy;
 
-        assert!((before - after - ENERGY_DRAIN).abs() < 1e-6);
+        let expected_drain = TEST_BASE_DRAIN + DEFAULT_HIDDEN as f32 * TEST_NEURON_COST;
+        assert!((before - after - expected_drain).abs() < 1e-6);
     }
 
     #[test]
@@ -765,7 +824,8 @@ mod tests {
     #[test]
     fn energy_death_at_zero() {
         let mut world = minimal_world(&[(0, 0)], (15, 15));
-        world.prey[0].energy = ENERGY_DRAIN * 0.5;
+        let drain = TEST_BASE_DRAIN + DEFAULT_HIDDEN as f32 * TEST_NEURON_COST;
+        world.prey[0].energy = drain * 0.5;
         world.food.push(Food { x: 10, y: 10 });
         let mut rng = ChaCha8Rng::seed_from_u64(0);
 
@@ -786,7 +846,7 @@ mod tests {
 
         world.step(&mut rng);
 
-        assert_eq!(world.food.len(), FOOD_COUNT);
+        assert_eq!(world.food.len(), TEST_FOOD);
     }
 
     #[test]
@@ -904,5 +964,55 @@ mod tests {
         let inputs = world.build_inputs(0);
 
         assert_eq!(inputs.len(), INPUTS);
+    }
+
+    #[test]
+    fn larger_brain_drains_more() {
+        use crate::brain::MAX_HIDDEN;
+        let mut world = minimal_world(&[(0, 0), (5, 5)], (15, 15));
+        world.food.push(Food { x: 10, y: 10 });
+        world.prey[0].brain.hidden_size = DEFAULT_HIDDEN;
+        world.prey[1].brain.hidden_size = MAX_HIDDEN;
+
+        let mut rng = ChaCha8Rng::seed_from_u64(0);
+        world.step(&mut rng);
+
+        // Larger brain should have less energy remaining
+        assert!(
+            world.prey[1].energy < world.prey[0].energy,
+            "Larger brain ({}) should drain more than default ({})",
+            world.prey[1].energy,
+            world.prey[0].energy
+        );
+    }
+
+    #[test]
+    fn min_brain_drains_less() {
+        use crate::brain::MIN_HIDDEN;
+        let mut world = minimal_world(&[(0, 0), (5, 5)], (15, 15));
+        world.food.push(Food { x: 10, y: 10 });
+        world.prey[0].brain.hidden_size = DEFAULT_HIDDEN;
+        world.prey[1].brain.hidden_size = MIN_HIDDEN;
+
+        let mut rng = ChaCha8Rng::seed_from_u64(0);
+        world.step(&mut rng);
+
+        // Smaller brain should have more energy remaining
+        assert!(
+            world.prey[1].energy > world.prey[0].energy,
+            "Min brain ({}) should drain less than default ({})",
+            world.prey[1].energy,
+            world.prey[0].energy
+        );
+    }
+
+    #[test]
+    fn default_hidden_drain_matches_old_baseline() {
+        // At hidden_size=6: BASE_DRAIN(0.0008) + 6 * NEURON_COST(0.0002) = 0.002
+        let drain = TEST_BASE_DRAIN + DEFAULT_HIDDEN as f32 * TEST_NEURON_COST;
+        assert!(
+            (drain - 0.002).abs() < 1e-6,
+            "Default drain should match old ENERGY_DRAIN=0.002"
+        );
     }
 }

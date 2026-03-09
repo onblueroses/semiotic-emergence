@@ -13,13 +13,79 @@ use rand_chacha::ChaCha8Rng;
 
 use brain::{Brain, INPUTS};
 use evolution::Agent;
-use world::{World, GRID_SIZE, INPUT_NAMES};
+use world::{World, INPUT_NAMES};
 
-const POP_SIZE: usize = 48;
-const TICKS_PER_EVAL: u32 = 500;
-const NUM_PREDATORS: usize = 2;
 const FLUCT_WINDOW: usize = 10;
 const MIN_RECEIVER_SAMPLES: u32 = 30;
+
+struct SimParams {
+    pop_size: usize,
+    grid_size: i32,
+    num_predators: usize,
+    food_count: usize,
+    ticks_per_eval: u32,
+    prey_vision_range: f32,
+    signal_range: f32,
+    predator_speed: u32,
+    reproduction_radius: f32,
+    fallback_radius: f32,
+    mi_bins: [f32; 3],
+    elite_count: usize,
+    tournament_size: usize,
+    mutation_sigma: f32,
+    base_drain: f32,
+    neuron_cost: f32,
+    signal_cost: f32,
+    no_signals: bool,
+}
+
+impl SimParams {
+    fn from_cli(args: &[String]) -> Self {
+        let pop_size = parse_flag(args, "--pop").unwrap_or(384);
+        let grid_size = parse_flag::<i32>(args, "--grid").unwrap_or(56);
+        let num_predators = parse_flag(args, "--pred").unwrap_or(16);
+        let food_count = parse_flag(args, "--food").unwrap_or(200);
+        let ticks_per_eval = parse_flag(args, "--ticks").unwrap_or(500);
+        let no_signals = args.iter().any(|a| a == "--no-signals");
+
+        let scale = grid_size as f32 / 20.0;
+        let prey_vision_range = 4.0 * scale;
+        let signal_range = 8.0 * scale;
+        let predator_speed = (3.0 * scale).round() as u32;
+        let reproduction_radius = 6.0 * scale;
+        let fallback_radius = 10.0 * scale;
+        let mi_bins = [prey_vision_range, signal_range, signal_range * 1.375];
+        let elite_count = (pop_size / 6).max(2);
+
+        SimParams {
+            pop_size,
+            grid_size,
+            num_predators,
+            food_count,
+            ticks_per_eval,
+            prey_vision_range,
+            signal_range,
+            predator_speed,
+            reproduction_radius,
+            fallback_radius,
+            mi_bins,
+            elite_count,
+            tournament_size: 3,
+            mutation_sigma: 0.1,
+            base_drain: 0.0008,
+            neuron_cost: 0.0002,
+            signal_cost: 0.01,
+            no_signals,
+        }
+    }
+}
+
+fn parse_flag<T: std::str::FromStr>(args: &[String], flag: &str) -> Option<T> {
+    args.iter()
+        .position(|a| a == flag)
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse().ok())
+}
 
 struct RunResult {
     final_matrix: [[u32; 4]; 3],
@@ -48,13 +114,16 @@ struct GenMetrics {
     response_fit_corr: f32,
     silence_onset_jsd: f32,
     silence_move_delta: f32,
+    avg_hidden: f32,
+    min_hidden: usize,
+    max_hidden: usize,
 }
 
 impl GenMetrics {
     fn write_csv(&self, f: &mut File, gen: usize) -> Result<(), Box<dyn std::error::Error>> {
         writeln!(
             f,
-            "{gen},{:.1},{:.1},{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4}",
+            "{gen},{:.1},{:.1},{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.1},{},{}",
             self.avg_fitness,
             self.max_fitness,
             self.total_signals,
@@ -68,7 +137,10 @@ impl GenMetrics {
             self.receiver_fit_corr,
             self.response_fit_corr,
             self.silence_onset_jsd,
-            self.silence_move_delta
+            self.silence_move_delta,
+            self.avg_hidden,
+            self.min_hidden,
+            self.max_hidden
         )?;
         Ok(())
     }
@@ -112,12 +184,13 @@ impl GenMetrics {
 
     fn print_log(&self, gen: usize) {
         println!(
-            "gen {gen:>4} | avg {:>7.1} | max {:>7.1} | signals {} | icon {:.3} | MI {:.3} | jsd {:.3}/{:.3} | sym [{:.3},{:.3},{:.3}] | sil {:.3}",
+            "gen {gen:>4} | avg {:>7.1} | max {:>7.1} | signals {} | icon {:.3} | MI {:.3} | jsd {:.3}/{:.3} | sym [{:.3},{:.3},{:.3}] | sil {:.3} | brain {:.1} [{}-{}]",
             self.avg_fitness, self.max_fitness, self.total_signals,
             self.iconicity, self.mutual_info,
             self.jsd_no_pred, self.jsd_pred,
             self.per_sym_jsd[0], self.per_sym_jsd[1], self.per_sym_jsd[2],
-            self.silence_corr
+            self.silence_corr,
+            self.avg_hidden, self.min_hidden, self.max_hidden
         );
     }
 }
@@ -137,10 +210,27 @@ struct EvalResult {
     silence_onset_actions: Vec<[[u32; 5]; 2]>,
 }
 
-fn evaluate_generation(population: &[Agent], rng: &mut ChaCha8Rng, no_signals: bool) -> EvalResult {
-    let mut world = World::new_with_positions(population, NUM_PREDATORS, rng, no_signals);
+fn evaluate_generation(
+    population: &[Agent],
+    rng: &mut ChaCha8Rng,
+    params: &SimParams,
+) -> EvalResult {
+    let mut world = World::new_with_positions(
+        population,
+        params.num_predators,
+        rng,
+        params.no_signals,
+        params.grid_size,
+        params.food_count,
+        params.prey_vision_range,
+        params.signal_range,
+        params.predator_speed,
+        params.base_drain,
+        params.neuron_cost,
+        params.signal_cost,
+    );
 
-    for _ in 0..TICKS_PER_EVAL {
+    for _ in 0..params.ticks_per_eval {
         if !world.any_alive() {
             break;
         }
@@ -201,19 +291,25 @@ fn compute_gen_metrics(
     scored: &[(Agent, f32)],
     prev_norm_matrix: &mut Option<[[f32; 4]; 3]>,
     traj_jsd_history: &mut Vec<f32>,
+    params: &SimParams,
 ) -> GenMetrics {
     let avg_fitness = scored.iter().map(|(_, f)| f).sum::<f32>() / scored.len() as f32;
     let max_fitness = scored
         .iter()
         .map(|(_, f)| *f)
         .fold(f32::NEG_INFINITY, f32::max);
-    let iconicity = metrics::compute_iconicity(&ev.signal_events, ev.ticks_near, ev.prey_ticks);
-    let mutual_info = metrics::compute_mutual_info(&ev.signal_events);
+    let iconicity = metrics::compute_iconicity(
+        &ev.signal_events,
+        ev.ticks_near,
+        ev.prey_ticks,
+        params.prey_vision_range,
+    );
+    let mutual_info = metrics::compute_mutual_info(&ev.signal_events, &params.mi_bins);
     let (jsd_no_pred, jsd_pred) = metrics::compute_receiver_jsd(&ev.receiver_counts);
     let per_sym_jsd = metrics::compute_per_symbol_jsd(&ev.receiver_counts);
     let silence_corr = metrics::pearson(&ev.signals_per_tick, &ev.min_pred_dist);
     let input_mi = metrics::compute_input_mi(&ev.signal_events);
-    let gen_matrix = metrics::signal_context_matrix(&ev.signal_events);
+    let gen_matrix = metrics::signal_context_matrix(&ev.signal_events, &params.mi_bins);
     let curr_norm = metrics::normalize_matrix(&gen_matrix);
     let traj_jsd = match (&*prev_norm_matrix, &curr_norm) {
         (Some(prev), Some(curr)) => metrics::trajectory_jsd(prev, curr),
@@ -261,6 +357,12 @@ fn compute_gen_metrics(
     let (silence_onset_jsd, silence_move_delta) =
         metrics::compute_silence_onset_metrics(&ev.silence_onset_actions, &ev.actions_with_signal);
 
+    // Brain size stats from scored population
+    let hidden_sizes: Vec<usize> = scored.iter().map(|(a, _)| a.brain.hidden_size).collect();
+    let avg_hidden = hidden_sizes.iter().sum::<usize>() as f32 / hidden_sizes.len() as f32;
+    let min_hidden = hidden_sizes.iter().copied().min().unwrap_or(0);
+    let max_hidden = hidden_sizes.iter().copied().max().unwrap_or(0);
+
     GenMetrics {
         avg_fitness,
         max_fitness,
@@ -281,21 +383,24 @@ fn compute_gen_metrics(
         response_fit_corr,
         silence_onset_jsd,
         silence_move_delta,
+        avg_hidden,
+        min_hidden,
+        max_hidden,
     }
 }
 
 fn run_seed(
     seed: u64,
     generations: usize,
-    no_signals: bool,
+    params: &SimParams,
     write_csv: bool,
 ) -> Result<RunResult, Box<dyn std::error::Error>> {
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
-    let mut population: Vec<Agent> = (0..POP_SIZE)
+    let mut population: Vec<Agent> = (0..params.pop_size)
         .map(|_| Agent {
             brain: Brain::random(&mut rng),
-            x: rng.gen_range(0..GRID_SIZE),
-            y: rng.gen_range(0..GRID_SIZE),
+            x: rng.gen_range(0..params.grid_size),
+            y: rng.gen_range(0..params.grid_size),
         })
         .collect();
 
@@ -308,7 +413,7 @@ fn run_seed(
         .transpose()?;
 
     if let Some(ref mut f) = csv {
-        writeln!(f, "generation,avg_fitness,max_fitness,signals_emitted,iconicity,mutual_info,jsd_no_pred,jsd_pred,silence_corr,sender_fit_corr,traj_fluct_ratio,receiver_fit_corr,response_fit_corr,silence_onset_jsd,silence_move_delta")?;
+        writeln!(f, "generation,avg_fitness,max_fitness,signals_emitted,iconicity,mutual_info,jsd_no_pred,jsd_pred,silence_corr,sender_fit_corr,traj_fluct_ratio,receiver_fit_corr,response_fit_corr,silence_onset_jsd,silence_move_delta,avg_hidden,min_hidden,max_hidden")?;
     }
     if let Some(ref mut f) = traj_csv {
         writeln!(f, "generation,s0d0,s0d1,s0d2,s0d3,s1d0,s1d1,s1d2,s1d3,s2d0,s2d1,s2d2,s2d3,jsd_sym0,jsd_sym1,jsd_sym2,trajectory_jsd,contrast_01,contrast_02,contrast_12")?;
@@ -331,7 +436,7 @@ fn run_seed(
     let mut traj_jsd_history: Vec<f32> = Vec::new();
 
     for gen in 0..generations {
-        let ev = evaluate_generation(&population, &mut rng, no_signals);
+        let ev = evaluate_generation(&population, &mut rng, params);
 
         let mut scored: Vec<(Agent, f32)> = population
             .iter()
@@ -339,7 +444,13 @@ fn run_seed(
             .map(|(i, agent)| (agent.clone(), ev.fitness[i]))
             .collect();
 
-        let gm = compute_gen_metrics(&ev, &scored, &mut prev_norm_matrix, &mut traj_jsd_history);
+        let gm = compute_gen_metrics(
+            &ev,
+            &scored,
+            &mut prev_norm_matrix,
+            &mut traj_jsd_history,
+            params,
+        );
 
         if let Some(ref mut f) = csv {
             gm.write_csv(f, gen)?;
@@ -361,7 +472,16 @@ fn run_seed(
             mutual_info: gm.mutual_info,
         };
 
-        population = evolution::evolve_spatial(&mut scored, 8, 3, 0.1, &mut rng);
+        population = evolution::evolve_spatial(
+            &mut scored,
+            params.elite_count,
+            params.tournament_size,
+            params.mutation_sigma,
+            params.grid_size,
+            params.reproduction_radius,
+            params.fallback_radius,
+            &mut rng,
+        );
     }
 
     if write_csv {
@@ -372,7 +492,7 @@ fn run_seed(
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
-    let no_signals = args.iter().any(|a| a == "--no-signals");
+    let params = SimParams::from_cli(&args);
     let batch_mode = args.iter().position(|a| a == "--batch");
 
     if let Some(pos) = batch_mode {
@@ -382,11 +502,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .and_then(|s| s.parse().ok())
             .unwrap_or(200);
 
+        println!(
+            "Config: pop={} grid={} pred={} food={} ticks={}",
+            params.pop_size,
+            params.grid_size,
+            params.num_predators,
+            params.food_count,
+            params.ticks_per_eval
+        );
         println!("Batch mode: {n} seeds x {generations} generations");
         let mut results: Vec<RunResult> = Vec::new();
         for seed in 0..n as u64 {
             println!("--- seed {seed} ---");
-            results.push(run_seed(seed, generations, no_signals, false)?);
+            results.push(run_seed(seed, generations, &params, false)?);
         }
 
         let norm_matrices: Vec<Option<[[f32; 4]; 3]>> = results
@@ -432,7 +560,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         println!("Divergence matrix saved to divergence.csv");
     } else {
-        let positional: Vec<&String> = args[1..].iter().filter(|a| !a.starts_with("--")).collect();
+        let positional: Vec<&String> = args[1..]
+            .iter()
+            .filter(|a| !a.starts_with("--"))
+            .filter(|a| {
+                // Skip values that follow -- flags
+                let idx = args.iter().position(|x| x == *a).unwrap_or(0);
+                idx == 0
+                    || !args
+                        .get(idx.wrapping_sub(1))
+                        .is_some_and(|prev| prev.starts_with("--"))
+            })
+            .collect();
         let seed: u64 = positional
             .first()
             .and_then(|s| s.parse().ok())
@@ -442,10 +581,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .and_then(|s| s.parse().ok())
             .unwrap_or(200);
 
-        if no_signals {
+        println!(
+            "Config: pop={} grid={} pred={} food={} ticks={}",
+            params.pop_size,
+            params.grid_size,
+            params.num_predators,
+            params.food_count,
+            params.ticks_per_eval
+        );
+        if params.no_signals {
             println!("Counterfactual mode: signals disabled");
         }
-        run_seed(seed, generations, no_signals, true)?;
+        run_seed(seed, generations, &params, true)?;
     }
 
     Ok(())
