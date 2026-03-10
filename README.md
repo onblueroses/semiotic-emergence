@@ -4,7 +4,7 @@
 
 I started this project because I wanted to watch meaning come into existence. We have theories for how meaning works once it already exists, but the moment before - when a world contains no signs, no reference, no communication, and then for the first time it does - nobody really has a good account of what that transition looks like. It happened deep in evolutionary history and left no fossil record.
 
-So I built the simplest world I could think of. Prey, predator, food, three words, and evolution. The prey have evolvable neural networks (4-16 hidden neurons, selected by evolution). They can see about 11 cells around them. They can signal up to 22. Sixteen predators chase independently. Signals are free to emit, and a prey that hears a signal while a predator is nearby gets an evasion boost - moving two cells instead of one. Spatial reproduction creates natural kin clusters - offspring appear near their parents - so communicator genes can persist through kinship proximity without artificial grouping.
+So I built the simplest world I could think of. Prey, predator, food, three words, and evolution. The prey have evolvable neural networks (4-124 hidden neurons, selected by evolution). They can see about 11 cells around them. They can signal up to 22. Sixteen predators chase independently. Signals are free to emit, and a prey that hears a signal while a predator is nearby gets an evasion boost - moving two cells instead of one. Spatial reproduction creates natural kin clusters - offspring appear near their parents - so communicator genes can persist through kinship proximity without artificial grouping.
 
 Whether they actually learn to talk to each other is still an open question. So far they've learned to shut up instead. They go silent when danger is near. Which might actually be the more interesting finding - silence as the first sign, the simplest possible meaning, requiring no coordination between sender and receiver about what any particular symbol means. Just the absence of background noise becoming informative.
 
@@ -35,10 +35,10 @@ The receiver-side instruments are the recent addition. We now have five instrume
 
 ## The code
 
-About 2100 lines of Rust across six files (including inline tests):
+About 3300 lines of Rust across six files (including inline tests):
 
 ```
-src/brain.rs      - Neural network (16 inputs, 4-16 evolvable hidden, 8 outputs)
+src/brain.rs      - Neural network (16 inputs, 4-124 evolvable hidden, 8 outputs)
 src/evolution.rs  - Spatial evolution (Agent struct, local tournament, crossover, mutation)
 src/world.rs      - The grid, the physics, predators, food, evasion boost
 src/signal.rs     - Three symbols, linear decay, short range, one-tick delay
