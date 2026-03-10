@@ -1,7 +1,7 @@
 use crate::world::wrap_delta;
 
 pub const SIGNAL_THRESHOLD: f32 = 0.5;
-pub const NUM_SYMBOLS: usize = 3;
+pub const NUM_SYMBOLS: usize = 6;
 
 #[derive(Clone, Debug)]
 pub struct Signal {
@@ -86,10 +86,10 @@ pub fn receive_detailed(
     result
 }
 
-/// Decide whether to emit a signal based on NN outputs 5-7.
+/// Decide whether to emit a signal based on NN signal outputs.
 /// Returns Some(symbol) if max output > threshold, None otherwise.
 pub fn maybe_emit(outputs: &[f32], threshold: f32) -> Option<u8> {
-    let signal_outs = &outputs[5..8];
+    let signal_outs = &outputs[5..5 + NUM_SYMBOLS];
     let (max_idx, &max_val) = signal_outs
         .iter()
         .enumerate()
@@ -164,13 +164,13 @@ mod tests {
 
     #[test]
     fn emit_below_threshold() {
-        let outputs = [0.0; 8];
+        let outputs = [0.0; 5 + NUM_SYMBOLS];
         assert!(maybe_emit(&outputs, SIGNAL_THRESHOLD).is_none());
     }
 
     #[test]
     fn emit_above_threshold() {
-        let mut outputs = [0.0; 8];
+        let mut outputs = [0.0; 5 + NUM_SYMBOLS];
         outputs[6] = 0.8; // signal symbol 1
         assert_eq!(maybe_emit(&outputs, SIGNAL_THRESHOLD), Some(1));
     }

@@ -13,6 +13,7 @@ use rand_chacha::ChaCha8Rng;
 
 use brain::{Brain, INPUTS};
 use evolution::Agent;
+use signal::NUM_SYMBOLS;
 use world::{World, INPUT_NAMES};
 
 const FLUCT_WINDOW: usize = 10;
@@ -49,7 +50,7 @@ impl SimParams {
         let no_signals = args.iter().any(|a| a == "--no-signals");
 
         let scale = grid_size as f32 / 20.0;
-        let prey_vision_range = 4.0 * scale;
+        let prey_vision_range = 2.0 * scale;
         let signal_range = 8.0 * scale;
         let predator_speed = (1.5 * scale).round() as u32;
         let reproduction_radius = 6.0 * scale;
@@ -73,7 +74,7 @@ impl SimParams {
             tournament_size: 3,
             mutation_sigma: 0.1,
             base_drain: 0.0008,
-            neuron_cost: 0.00002,
+            neuron_cost: 0.00001,
             signal_cost: 0.002,
             no_signals,
         }
@@ -88,7 +89,7 @@ fn parse_flag<T: std::str::FromStr>(args: &[String], flag: &str) -> Option<T> {
 }
 
 struct RunResult {
-    final_matrix: [[u32; 4]; 3],
+    final_matrix: [[u32; 4]; NUM_SYMBOLS],
     avg_fitness: f32,
     max_fitness: f32,
     mutual_info: f32,
@@ -102,12 +103,12 @@ struct GenMetrics {
     mutual_info: f32,
     jsd_no_pred: f32,
     jsd_pred: f32,
-    per_sym_jsd: [f32; 3],
+    per_sym_jsd: [f32; NUM_SYMBOLS],
     silence_corr: f32,
-    gen_matrix: [[u32; 4]; 3],
+    gen_matrix: [[u32; 4]; NUM_SYMBOLS],
     traj_jsd: f32,
     input_mi: [f32; INPUTS],
-    contrast: [f32; 3],
+    contrast: Vec<f32>,
     sender_fit_corr: f32,
     traj_fluct_ratio: f32,
     receiver_fit_corr: f32,
@@ -155,40 +156,35 @@ impl GenMetrics {
     }
 
     fn write_trajectory(&self, f: &mut File, gen: usize) -> Result<(), Box<dyn std::error::Error>> {
-        let m = &self.gen_matrix;
-        writeln!(
-            f,
-            "{gen},{},{},{},{},{},{},{},{},{},{},{},{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4}",
-            m[0][0],
-            m[0][1],
-            m[0][2],
-            m[0][3],
-            m[1][0],
-            m[1][1],
-            m[1][2],
-            m[1][3],
-            m[2][0],
-            m[2][1],
-            m[2][2],
-            m[2][3],
-            self.per_sym_jsd[0],
-            self.per_sym_jsd[1],
-            self.per_sym_jsd[2],
-            self.traj_jsd,
-            self.contrast[0],
-            self.contrast[1],
-            self.contrast[2]
-        )?;
+        write!(f, "{gen}")?;
+        for row in &self.gen_matrix {
+            for &val in row {
+                write!(f, ",{val}")?;
+            }
+        }
+        for &v in &self.per_sym_jsd {
+            write!(f, ",{v:.4}")?;
+        }
+        write!(f, ",{:.4}", self.traj_jsd)?;
+        for v in &self.contrast {
+            write!(f, ",{v:.4}")?;
+        }
+        writeln!(f)?;
         Ok(())
     }
 
     fn print_log(&self, gen: usize) {
+        let sym_str: String = self
+            .per_sym_jsd
+            .iter()
+            .map(|v| format!("{v:.3}"))
+            .collect::<Vec<_>>()
+            .join(",");
         println!(
-            "gen {gen:>4} | avg {:>7.1} | max {:>7.1} | signals {} | icon {:.3} | MI {:.3} | jsd {:.3}/{:.3} | sym [{:.3},{:.3},{:.3}] | sil {:.3} | brain {:.1} [{}-{}]",
+            "gen {gen:>4} | avg {:>7.1} | max {:>7.1} | signals {} | icon {:.3} | MI {:.3} | jsd {:.3}/{:.3} | sym [{sym_str}] | sil {:.3} | brain {:.1} [{}-{}]",
             self.avg_fitness, self.max_fitness, self.total_signals,
             self.iconicity, self.mutual_info,
             self.jsd_no_pred, self.jsd_pred,
-            self.per_sym_jsd[0], self.per_sym_jsd[1], self.per_sym_jsd[2],
             self.silence_corr,
             self.avg_hidden, self.min_hidden, self.max_hidden
         );
@@ -201,7 +197,7 @@ struct EvalResult {
     total_signals: u32,
     ticks_near: u32,
     prey_ticks: u32,
-    receiver_counts: [[[u32; 5]; 2]; 4],
+    receiver_counts: [[[u32; 5]; 2]; 1 + NUM_SYMBOLS],
     signals_per_tick: Vec<f32>,
     min_pred_dist: Vec<f32>,
     signal_rate_per_prey: Vec<f32>,
@@ -289,7 +285,7 @@ fn evaluate_generation(
 fn compute_gen_metrics(
     ev: &EvalResult,
     population: &[Agent],
-    prev_norm_matrix: &mut Option<[[f32; 4]; 3]>,
+    prev_norm_matrix: &mut Option<[[f32; 4]; NUM_SYMBOLS]>,
     traj_jsd_history: &mut Vec<f32>,
     params: &SimParams,
 ) -> GenMetrics {
@@ -312,9 +308,10 @@ fn compute_gen_metrics(
         (Some(prev), Some(curr)) => metrics::trajectory_jsd(prev, curr),
         _ => 0.0,
     };
+    let n_pairs = NUM_SYMBOLS * (NUM_SYMBOLS - 1) / 2;
     let contrast = curr_norm
         .as_ref()
-        .map_or([0.0; 3], metrics::inter_symbol_jsd);
+        .map_or(vec![0.0; n_pairs], metrics::inter_symbol_jsd);
     if let Some(norm) = curr_norm {
         *prev_norm_matrix = Some(norm);
     }
@@ -412,7 +409,22 @@ fn run_seed(
         writeln!(f, "generation,avg_fitness,max_fitness,signals_emitted,iconicity,mutual_info,jsd_no_pred,jsd_pred,silence_corr,sender_fit_corr,traj_fluct_ratio,receiver_fit_corr,response_fit_corr,silence_onset_jsd,silence_move_delta,avg_hidden,min_hidden,max_hidden")?;
     }
     if let Some(ref mut f) = traj_csv {
-        writeln!(f, "generation,s0d0,s0d1,s0d2,s0d3,s1d0,s1d1,s1d2,s1d3,s2d0,s2d1,s2d2,s2d3,jsd_sym0,jsd_sym1,jsd_sym2,trajectory_jsd,contrast_01,contrast_02,contrast_12")?;
+        write!(f, "generation")?;
+        for s in 0..NUM_SYMBOLS {
+            for d in 0..4 {
+                write!(f, ",s{s}d{d}")?;
+            }
+        }
+        for s in 0..NUM_SYMBOLS {
+            write!(f, ",jsd_sym{s}")?;
+        }
+        write!(f, ",trajectory_jsd")?;
+        for i in 0..NUM_SYMBOLS {
+            for j in (i + 1)..NUM_SYMBOLS {
+                write!(f, ",contrast_{i}{j}")?;
+            }
+        }
+        writeln!(f)?;
     }
     if let Some(ref mut f) = input_mi_csv {
         write!(f, "generation")?;
@@ -423,12 +435,12 @@ fn run_seed(
     }
 
     let mut last_result = RunResult {
-        final_matrix: [[0; 4]; 3],
+        final_matrix: [[0; 4]; NUM_SYMBOLS],
         avg_fitness: 0.0,
         max_fitness: 0.0,
         mutual_info: 0.0,
     };
-    let mut prev_norm_matrix: Option<[[f32; 4]; 3]> = None;
+    let mut prev_norm_matrix: Option<[[f32; 4]; NUM_SYMBOLS]> = None;
     let mut traj_jsd_history: Vec<f32> = Vec::new();
 
     for gen in 0..generations {
@@ -515,7 +527,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             results.push(run_seed(seed, generations, &params, false)?);
         }
 
-        let norm_matrices: Vec<Option<[[f32; 4]; 3]>> = results
+        let norm_matrices: Vec<Option<[[f32; 4]; NUM_SYMBOLS]>> = results
             .iter()
             .map(|r| metrics::normalize_matrix(&r.final_matrix))
             .collect();

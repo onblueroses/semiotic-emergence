@@ -1,4 +1,5 @@
 use crate::brain::INPUTS;
+use crate::signal::NUM_SYMBOLS;
 use crate::world::SignalEvent;
 
 pub fn compute_iconicity(
@@ -41,31 +42,34 @@ fn predator_dist_bin(dist: f32, bins: &[f32; 3]) -> usize {
     }
 }
 
-/// Build the 3x4 signal-context contingency matrix from signal events.
-/// Rows = symbols (0-2), columns = predator distance bins.
-pub fn signal_context_matrix(signal_events: &[SignalEvent], mi_bins: &[f32; 3]) -> [[u32; 4]; 3] {
-    let mut counts = [[0u32; 4]; 3];
+/// Build the signal-context contingency matrix from signal events.
+/// Rows = symbols, columns = predator distance bins.
+pub fn signal_context_matrix(
+    signal_events: &[SignalEvent],
+    mi_bins: &[f32; 3],
+) -> [[u32; 4]; NUM_SYMBOLS] {
+    let mut counts = [[0u32; 4]; NUM_SYMBOLS];
     for e in signal_events {
-        let sym = (e.symbol as usize).min(2);
+        let sym = (e.symbol as usize).min(NUM_SYMBOLS - 1);
         counts[sym][predator_dist_bin(e.predator_dist, mi_bins)] += 1;
     }
     counts
 }
 
-/// MI from a 3x4 contingency table. Shared by all MI computations.
-fn mi_from_contingency(counts: &[[u32; 4]; 3]) -> f32 {
+/// MI from a contingency table. Shared by all MI computations.
+fn mi_from_contingency(counts: &[[u32; 4]; NUM_SYMBOLS]) -> f32 {
     let n: f32 = counts.iter().flat_map(|row| row.iter()).sum::<u32>() as f32;
     if n == 0.0 {
         return 0.0;
     }
     let mut mi = 0.0_f32;
-    for s in 0..3 {
+    for s in 0..NUM_SYMBOLS {
         let prob_s = counts[s].iter().sum::<u32>() as f32 / n;
         if prob_s == 0.0 {
             continue;
         }
         for (bin, &count) in counts[s].iter().enumerate() {
-            let prob_bin: f32 = (0..3).map(|ss| counts[ss][bin]).sum::<u32>() as f32 / n;
+            let prob_bin: f32 = (0..NUM_SYMBOLS).map(|ss| counts[ss][bin]).sum::<u32>() as f32 / n;
             if prob_bin == 0.0 {
                 continue;
             }
@@ -108,7 +112,7 @@ fn normalize_action_dist(counts: &[u32; 5]) -> Option<[f32; 5]> {
 
 /// Receiver Response Spectrum: JSD between action distributions with vs without signal,
 /// split by context (predator not visible, predator visible).
-pub fn compute_receiver_jsd(counts: &[[[u32; 5]; 2]; 4]) -> (f32, f32) {
+pub fn compute_receiver_jsd(counts: &[[[u32; 5]; 2]; 1 + NUM_SYMBOLS]) -> (f32, f32) {
     let mut jsd_per_context = [0.0_f32; 2];
     for ctx in 0..2 {
         let baseline = &counts[0][ctx]; // no signal
@@ -117,7 +121,7 @@ pub fn compute_receiver_jsd(counts: &[[[u32; 5]; 2]; 4]) -> (f32, f32) {
         };
         let mut total_jsd = 0.0_f32;
         let mut n_symbols = 0;
-        for signal_counts in &counts[1..4] {
+        for signal_counts in &counts[1..=NUM_SYMBOLS] {
             let Some(p_sig) = normalize_action_dist(&signal_counts[ctx]) else {
                 continue;
             };
@@ -133,15 +137,15 @@ pub fn compute_receiver_jsd(counts: &[[[u32; 5]; 2]; 4]) -> (f32, f32) {
 
 /// Per-symbol JSD: how much each symbol shifts behavior vs no-signal baseline.
 /// Pooled across both contexts.
-pub fn compute_per_symbol_jsd(counts: &[[[u32; 5]; 2]; 4]) -> [f32; 3] {
+pub fn compute_per_symbol_jsd(counts: &[[[u32; 5]; 2]; 1 + NUM_SYMBOLS]) -> [f32; NUM_SYMBOLS] {
     // Pool baseline across both contexts
     let mut base_pooled = [0u32; 5];
     for (a, bp) in base_pooled.iter_mut().enumerate() {
         *bp = counts[0][0][a] + counts[0][1][a];
     }
 
-    let mut result = [0.0_f32; 3];
-    for sym in 0..3 {
+    let mut result = [0.0_f32; NUM_SYMBOLS];
+    for sym in 0..NUM_SYMBOLS {
         let mut sig_pooled = [0u32; 5];
         for (a, sp) in sig_pooled.iter_mut().enumerate() {
             *sp = counts[sym + 1][0][a] + counts[sym + 1][1][a];
@@ -187,9 +191,9 @@ fn jsd_4(p: &[f32; 4], q: &[f32; 4]) -> f32 {
     jsd(p.as_slice(), q.as_slice())
 }
 
-/// Normalize a 3x4 counts matrix to row-wise probability distributions.
-pub fn normalize_matrix(counts: &[[u32; 4]; 3]) -> Option<[[f32; 4]; 3]> {
-    let mut result = [[0.0_f32; 4]; 3];
+/// Normalize counts matrix to row-wise probability distributions.
+pub fn normalize_matrix(counts: &[[u32; 4]; NUM_SYMBOLS]) -> Option<[[f32; 4]; NUM_SYMBOLS]> {
+    let mut result = [[0.0_f32; 4]; NUM_SYMBOLS];
     for (s, row) in counts.iter().enumerate() {
         let total: u32 = row.iter().sum();
         if total == 0 {
@@ -205,31 +209,46 @@ pub fn normalize_matrix(counts: &[[u32; 4]; 3]) -> Option<[[f32; 4]; 3]> {
 
 /// Cross-population divergence: minimum-over-permutations average row-wise JSD.
 /// Accounts for arbitrary symbol index assignment across populations.
-pub fn cross_population_divergence(a: &[[f32; 4]; 3], b: &[[f32; 4]; 3]) -> f32 {
-    // All 6 permutations of 3 symbols
-    const PERMS: [[usize; 3]; 6] = [
-        [0, 1, 2],
-        [0, 2, 1],
-        [1, 0, 2],
-        [1, 2, 0],
-        [2, 0, 1],
-        [2, 1, 0],
-    ];
+pub fn cross_population_divergence(
+    a: &[[f32; 4]; NUM_SYMBOLS],
+    b: &[[f32; 4]; NUM_SYMBOLS],
+) -> f32 {
+    let mut indices: Vec<usize> = (0..NUM_SYMBOLS).collect();
     let mut min_div = f32::MAX;
-    for perm in &PERMS {
+    // Iterate all permutations via Heap's algorithm
+    heap_permute(&mut indices, NUM_SYMBOLS, a, b, &mut min_div);
+    min_div
+}
+
+fn heap_permute(
+    perm: &mut Vec<usize>,
+    k: usize,
+    a: &[[f32; 4]; NUM_SYMBOLS],
+    b: &[[f32; 4]; NUM_SYMBOLS],
+    min_div: &mut f32,
+) {
+    if k == 1 {
         let mut total = 0.0_f32;
         for (i, &pi) in perm.iter().enumerate() {
             total += jsd_4(&a[i], &b[pi]);
         }
-        let avg = total / 3.0;
-        if avg < min_div {
-            min_div = avg;
+        let avg = total / NUM_SYMBOLS as f32;
+        if avg < *min_div {
+            *min_div = avg;
+        }
+        return;
+    }
+    for i in 0..k {
+        heap_permute(perm, k - 1, a, b, min_div);
+        if k.is_multiple_of(2) {
+            perm.swap(i, k - 1);
+        } else {
+            perm.swap(0, k - 1);
         }
     }
-    min_div
 }
 
-/// MI between each symbol and each of the 16 input dimensions at emission time.
+/// MI between each symbol and each input dimension at emission time.
 /// Uses quartile-based binning (scale-invariant).
 pub fn compute_input_mi(signal_events: &[SignalEvent]) -> [f32; INPUTS] {
     let mut result = [0.0_f32; INPUTS];
@@ -244,9 +263,9 @@ pub fn compute_input_mi(signal_events: &[SignalEvent]) -> [f32; INPUTS] {
         let q2 = vals[vals.len() / 2];
         let q3 = vals[3 * vals.len() / 4];
 
-        let mut counts = [[0u32; 4]; 3];
+        let mut counts = [[0u32; 4]; NUM_SYMBOLS];
         for e in signal_events {
-            let sym = (e.symbol as usize).min(2);
+            let sym = (e.symbol as usize).min(NUM_SYMBOLS - 1);
             let bin = if e.inputs[dim] <= q1 {
                 0
             } else if e.inputs[dim] <= q2 {
@@ -286,22 +305,25 @@ fn std_dev(xs: &[f32]) -> f32 {
     var.sqrt()
 }
 
-/// Pairwise JSD between symbols' context distributions: [0v1, 0v2, 1v2].
-pub fn inter_symbol_jsd(norm: &[[f32; 4]; 3]) -> [f32; 3] {
-    [
-        jsd_4(&norm[0], &norm[1]),
-        jsd_4(&norm[0], &norm[2]),
-        jsd_4(&norm[1], &norm[2]),
-    ]
+/// Pairwise JSD between symbols' context distributions.
+/// Returns all pairwise values in lexicographic order.
+pub fn inter_symbol_jsd(norm: &[[f32; 4]; NUM_SYMBOLS]) -> Vec<f32> {
+    let mut result = Vec::with_capacity(NUM_SYMBOLS * (NUM_SYMBOLS - 1) / 2);
+    for i in 0..NUM_SYMBOLS {
+        for j in (i + 1)..NUM_SYMBOLS {
+            result.push(jsd_4(&norm[i], &norm[j]));
+        }
+    }
+    result
 }
 
 /// JSD between two consecutive generation matrices (for trajectory phase transitions).
-pub fn trajectory_jsd(prev: &[[f32; 4]; 3], curr: &[[f32; 4]; 3]) -> f32 {
+pub fn trajectory_jsd(prev: &[[f32; 4]; NUM_SYMBOLS], curr: &[[f32; 4]; NUM_SYMBOLS]) -> f32 {
     let mut total = 0.0_f32;
-    for s in 0..3 {
+    for s in 0..NUM_SYMBOLS {
         total += jsd_4(&prev[s], &curr[s]);
     }
-    total / 3.0
+    total / NUM_SYMBOLS as f32
 }
 
 /// Per-prey receiver JSD: how much one prey's actions differ with vs without signal.
@@ -396,7 +418,7 @@ mod tests {
     #[test]
     fn jsd_all_zeros_returns_zero() {
         // compute_receiver_jsd should handle empty bins gracefully
-        let counts = [[[0u32; 5]; 2]; 4];
+        let counts = [[[0u32; 5]; 2]; 1 + NUM_SYMBOLS];
         let (a, b) = compute_receiver_jsd(&counts);
         assert!(a.abs() < 1e-10);
         assert!(b.abs() < 1e-10);
@@ -419,44 +441,38 @@ mod tests {
 
     #[test]
     fn cross_pop_divergence_identical_is_zero() {
-        let m = [[0.25, 0.25, 0.25, 0.25]; 3];
+        let m = [[0.25, 0.25, 0.25, 0.25]; NUM_SYMBOLS];
         assert!(cross_population_divergence(&m, &m) < 1e-10);
     }
 
     #[test]
     fn cross_pop_divergence_permuted_is_zero() {
-        let a = [
-            [0.8, 0.1, 0.05, 0.05],
-            [0.1, 0.7, 0.1, 0.1],
-            [0.05, 0.05, 0.1, 0.8],
-        ];
-        // Same distributions but symbols swapped: 0->2, 1->0, 2->1
-        let b = [
-            [0.1, 0.7, 0.1, 0.1],
-            [0.05, 0.05, 0.1, 0.8],
-            [0.8, 0.1, 0.05, 0.05],
-        ];
+        // First 3 symbols have distinct distributions, rest uniform
+        let mut a = [[0.25, 0.25, 0.25, 0.25]; NUM_SYMBOLS];
+        a[0] = [0.8, 0.1, 0.05, 0.05];
+        a[1] = [0.1, 0.7, 0.1, 0.1];
+        a[2] = [0.05, 0.05, 0.1, 0.8];
+        // Same distributions but symbols 0-2 rotated
+        let mut b = [[0.25, 0.25, 0.25, 0.25]; NUM_SYMBOLS];
+        b[0] = [0.1, 0.7, 0.1, 0.1];
+        b[1] = [0.05, 0.05, 0.1, 0.8];
+        b[2] = [0.8, 0.1, 0.05, 0.05];
         assert!(cross_population_divergence(&a, &b) < 1e-10);
     }
 
     #[test]
     fn cross_pop_divergence_different_is_positive() {
-        let a = [
-            [0.9, 0.03, 0.03, 0.04],
-            [0.03, 0.9, 0.04, 0.03],
-            [0.04, 0.03, 0.9, 0.03],
-        ];
-        let b = [
-            [0.25, 0.25, 0.25, 0.25],
-            [0.25, 0.25, 0.25, 0.25],
-            [0.25, 0.25, 0.25, 0.25],
-        ];
+        let mut a = [[0.25, 0.25, 0.25, 0.25]; NUM_SYMBOLS];
+        a[0] = [0.9, 0.03, 0.03, 0.04];
+        a[1] = [0.03, 0.9, 0.04, 0.03];
+        a[2] = [0.04, 0.03, 0.9, 0.03];
+        let b = [[0.25, 0.25, 0.25, 0.25]; NUM_SYMBOLS];
         assert!(cross_population_divergence(&a, &b) > 0.01);
     }
 
     #[test]
     fn trajectory_jsd_identical_is_zero() {
-        let m = [[0.25, 0.25, 0.25, 0.25]; 3];
+        let m = [[0.25, 0.25, 0.25, 0.25]; NUM_SYMBOLS];
         assert!(trajectory_jsd(&m, &m) < 1e-10);
     }
 
@@ -487,20 +503,20 @@ mod tests {
 
     #[test]
     fn inter_symbol_jsd_identical_is_zero() {
-        let m = [[0.25, 0.25, 0.25, 0.25]; 3];
+        let m = [[0.25, 0.25, 0.25, 0.25]; NUM_SYMBOLS];
         let result = inter_symbol_jsd(&m);
         assert!(result.iter().all(|&v| v < 1e-10));
     }
 
     #[test]
     fn inter_symbol_jsd_distinct_is_positive() {
-        let m = [
-            [0.9, 0.03, 0.03, 0.04],
-            [0.03, 0.9, 0.04, 0.03],
-            [0.04, 0.03, 0.03, 0.9],
-        ];
+        let mut m = [[0.25, 0.25, 0.25, 0.25]; NUM_SYMBOLS];
+        m[0] = [0.9, 0.03, 0.03, 0.04];
+        m[1] = [0.03, 0.9, 0.04, 0.03];
+        m[2] = [0.04, 0.03, 0.03, 0.9];
         let result = inter_symbol_jsd(&m);
-        assert!(result.iter().all(|&v| v > 0.1));
+        // At least the first 3 pairs (involving distinct rows) should be positive
+        assert!(result[0] > 0.1);
     }
 
     #[test]

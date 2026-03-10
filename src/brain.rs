@@ -1,16 +1,16 @@
 use rand::Rng;
 
-pub const INPUTS: usize = 16;
+pub const INPUTS: usize = 25;
 pub const MAX_HIDDEN: usize = 124;
 pub const MIN_HIDDEN: usize = 4;
 pub const DEFAULT_HIDDEN: usize = 18;
-pub const OUTPUTS: usize = 8;
+pub const OUTPUTS: usize = 11;
 /// Fixed genome length sized for `MAX_HIDDEN`. Dormant neurons are "junk DNA".
 pub const MAX_GENOME_LEN: usize = INPUTS * MAX_HIDDEN + MAX_HIDDEN + MAX_HIDDEN * OUTPUTS + OUTPUTS;
 
 #[derive(Clone, Debug)]
 pub struct Brain {
-    /// Weights: [input->hidden (I*MH=1984), hidden biases (MH=124), hidden->output (MH*O=992), output biases (O=8)]
+    /// Weights: [input->hidden (I*MH=3100), hidden biases (MH=124), hidden->output (MH*O=1364), output biases (O=11)]
     pub weights: [f32; MAX_GENOME_LEN],
     /// Number of active hidden neurons (`MIN_HIDDEN..=MAX_HIDDEN`). Heritable, mutable.
     pub hidden_size: usize,
@@ -33,7 +33,7 @@ impl Brain {
         }
     }
 
-    /// Feed-forward: 16 inputs -> `hidden_size` hidden (tanh) -> 8 outputs (raw).
+    /// Feed-forward: 25 inputs -> `hidden_size` hidden (tanh) -> 11 outputs (raw).
     /// Stride is `MAX_HIDDEN` so weight indices are stable regardless of active `hidden_size`.
     pub fn forward(&self, inputs: &[f32; INPUTS]) -> [f32; OUTPUTS] {
         let w = &self.weights;
@@ -70,8 +70,8 @@ mod tests {
 
     #[test]
     fn genome_length() {
-        // 16*124 + 124 + 124*8 + 8 = 1984 + 124 + 992 + 8 = 3108
-        assert_eq!(MAX_GENOME_LEN, 3108);
+        // 25*124 + 124 + 124*11 + 11 = 3100 + 124 + 1364 + 11 = 4599
+        assert_eq!(MAX_GENOME_LEN, 4599);
     }
 
     #[test]

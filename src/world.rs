@@ -4,7 +4,7 @@ use rayon::prelude::*;
 
 use crate::brain::{Brain, INPUTS, OUTPUTS};
 use crate::evolution::Agent;
-use crate::signal::{self, Signal, SIGNAL_THRESHOLD};
+use crate::signal::{self, Signal, NUM_SYMBOLS, SIGNAL_THRESHOLD};
 
 pub const INPUT_NAMES: [&str; INPUTS] = [
     "pred_dx",
@@ -22,6 +22,15 @@ pub const INPUT_NAMES: [&str; INPUTS] = [
     "sig2_str",
     "sig2_dx",
     "sig2_dy",
+    "sig3_str",
+    "sig3_dx",
+    "sig3_dy",
+    "sig4_str",
+    "sig4_dx",
+    "sig4_dy",
+    "sig5_str",
+    "sig5_dx",
+    "sig5_dy",
     "energy",
 ];
 
@@ -198,10 +207,10 @@ pub struct World {
     pub ticks_near_predator: u32,
     pub total_prey_ticks: u32,
     /// Receiver response spectrum: `[signal_state][context][action]` counts.
-    /// `signal_state`: 0=none, 1=sym0, 2=sym1, 3=sym2 (strongest received).
+    /// `signal_state`: 0=none, `1..=NUM_SYMBOLS` for each symbol (strongest received).
     /// `context`: 0=no predator, 1=predator visible.
     /// `action`: 0-4 (up/down/right/left/eat).
-    pub receiver_counts: [[[u32; 5]; 2]; 4],
+    pub receiver_counts: [[[u32; 5]; 2]; 1 + NUM_SYMBOLS],
     /// Signal count per tick (for silence correlation).
     pub signals_per_tick: Vec<u32>,
     /// Minimum predator-to-alive-prey distance per tick.
@@ -292,7 +301,7 @@ impl World {
             signal_events: Vec::new(),
             ticks_near_predator: 0,
             total_prey_ticks: 0,
-            receiver_counts: [[[0u32; 5]; 2]; 4],
+            receiver_counts: [[[0u32; 5]; 2]; 1 + NUM_SYMBOLS],
             signals_per_tick: Vec::new(),
             min_pred_dist_per_tick: Vec::new(),
             no_signals,
@@ -438,20 +447,16 @@ impl World {
             }
 
             // Receiver response spectrum: classify signal state, context, and chosen action
-            let strengths = [inputs[6], inputs[9], inputs[12]];
-            let max_str = strengths[0].max(strengths[1]).max(strengths[2]);
-            let signal_state: usize = if max_str > 0.0 {
-                let mut best = 0;
-                if strengths[1] >= strengths[best] {
-                    best = 1;
+            let mut max_str = 0.0_f32;
+            let mut best_sym = 0;
+            for s in 0..NUM_SYMBOLS {
+                let str_val = inputs[6 + s * 3];
+                if str_val > max_str {
+                    max_str = str_val;
+                    best_sym = s;
                 }
-                if strengths[2] >= strengths[best] {
-                    best = 2;
-                }
-                1 + best
-            } else {
-                0
-            };
+            }
+            let signal_state: usize = if max_str > 0.0 { 1 + best_sym } else { 0 };
             let context = usize::from(inputs[2] > 0.0);
             let mut action = 0;
             let mut best_val = outputs[0];
@@ -546,21 +551,18 @@ impl World {
             1.0
         };
 
-        // 6-14: Incoming signals (strength + direction per symbol)
+        // 6..6+NUM_SYMBOLS*3: Incoming signals (strength + direction per symbol)
         let sig =
             signal::receive_detailed(&self.signals, p.x, p.y, self.tick, gs, self.signal_range);
-        inp[6] = sig[0].strength;
-        inp[7] = sig[0].dx;
-        inp[8] = sig[0].dy;
-        inp[9] = sig[1].strength;
-        inp[10] = sig[1].dx;
-        inp[11] = sig[1].dy;
-        inp[12] = sig[2].strength;
-        inp[13] = sig[2].dx;
-        inp[14] = sig[2].dy;
+        for (s, rs) in sig.iter().enumerate() {
+            let base = 6 + s * 3;
+            inp[base] = rs.strength;
+            inp[base + 1] = rs.dx;
+            inp[base + 2] = rs.dy;
+        }
 
-        // 15: Own energy
-        inp[15] = p.energy.clamp(0.0, 1.0);
+        // Last input: Own energy
+        inp[6 + NUM_SYMBOLS * 3] = p.energy.clamp(0.0, 1.0);
 
         inp
     }
@@ -627,7 +629,7 @@ impl World {
             _ => {}
         }
 
-        // Signal emission (outputs 5-7) - costs energy
+        // Signal emission (outputs 5..5+NUM_SYMBOLS) - costs energy
         // Suppressed in counterfactual mode (--no-signals)
         let px = self.prey[prey_idx].x;
         let py = self.prey[prey_idx].y;
@@ -784,7 +786,7 @@ mod tests {
             signal_events: Vec::new(),
             ticks_near_predator: 0,
             total_prey_ticks: 0,
-            receiver_counts: [[[0u32; 5]; 2]; 4],
+            receiver_counts: [[[0u32; 5]; 2]; 1 + NUM_SYMBOLS],
             signals_per_tick: Vec::new(),
             min_pred_dist_per_tick: Vec::new(),
             no_signals: true,
@@ -965,7 +967,7 @@ mod tests {
             signal_events: Vec::new(),
             ticks_near_predator: 0,
             total_prey_ticks: 0,
-            receiver_counts: [[[0u32; 5]; 2]; 4],
+            receiver_counts: [[[0u32; 5]; 2]; 1 + NUM_SYMBOLS],
             signals_per_tick: Vec::new(),
             min_pred_dist_per_tick: Vec::new(),
             no_signals: true,
