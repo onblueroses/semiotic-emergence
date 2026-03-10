@@ -211,9 +211,13 @@ pub struct World {
     // Spatial indices (rebuilt each tick for prey, maintained incrementally for food)
     prey_grid: CellGrid,
     food_grid: CellGrid,
-    // Pre-allocated per-tick buffers
+    // Pre-allocated per-tick buffers (reused across ticks to avoid allocation)
     shuffled_indices: Vec<usize>,
     prey_positions: Vec<(i32, i32)>,
+    order_scratch: Vec<usize>,
+    cached_pred: Vec<(usize, f32)>,
+    alive_scratch: Vec<usize>,
+    computed_scratch: Vec<(usize, [f32; INPUTS], [f32; OUTPUTS], f32)>,
     // Simulation parameters
     pub grid_size: i32,
     pub food_count: usize,
@@ -296,6 +300,10 @@ impl World {
             food_grid,
             shuffled_indices: (0..prey_count).collect(),
             prey_positions: Vec::with_capacity(prey_count),
+            order_scratch: Vec::with_capacity(prey_count),
+            cached_pred: Vec::with_capacity(prey_count),
+            alive_scratch: Vec::with_capacity(prey_count),
+            computed_scratch: Vec::with_capacity(prey_count),
             grid_size,
             food_count,
             prey_vision_range,
@@ -361,11 +369,11 @@ impl World {
         self.shuffled_indices.extend(0..self.prey.len());
         self.shuffled_indices.shuffle(rng);
 
-        // Cache nearest predator per prey (avoids 2-3 redundant scans per prey)
-        let mut cached_pred: Vec<(usize, f32)> = Vec::with_capacity(self.prey.len());
+        // Cache nearest predator per prey (reuse buffer across ticks)
+        self.cached_pred.clear();
         for p in &self.prey {
             if !p.alive {
-                cached_pred.push((0, f32::MAX));
+                self.cached_pred.push((0, f32::MAX));
                 continue;
             }
             let mut best_idx = 0;
@@ -377,11 +385,13 @@ impl World {
                     best_idx = pi;
                 }
             }
-            cached_pred.push((best_idx, best_d));
+            self.cached_pred.push((best_idx, best_d));
         }
 
-        // Need a stable copy of the order for the borrow-splitting loop
-        let order: Vec<usize> = self.shuffled_indices.clone();
+        // Copy shuffled order into scratch buffer, then take it out for borrow splitting
+        self.order_scratch.clear();
+        self.order_scratch.extend_from_slice(&self.shuffled_indices);
+        let order = std::mem::take(&mut self.order_scratch);
 
         // Apply metabolism sequentially (mutates prey energy/alive, cheap)
         for &i in &order {
@@ -395,21 +405,30 @@ impl World {
             }
         }
 
+        // Pre-filter alive indices for indexed parallel iteration
+        self.alive_scratch.clear();
+        for &i in &order {
+            if self.prey[i].alive {
+                self.alive_scratch.push(i);
+            }
+        }
+        self.order_scratch = order;
+
         // Parallel compute: build inputs + run brain forward for all alive prey
-        // All reads are from immutable &self state (grids, predators, signals, food)
-        let computed: Vec<(usize, [f32; INPUTS], [f32; OUTPUTS], f32)> = order
+        // Take scratch buffers out of self so the closure can borrow self immutably
+        let alive = std::mem::take(&mut self.alive_scratch);
+        let mut computed = std::mem::take(&mut self.computed_scratch);
+        alive
             .par_iter()
-            .filter_map(|&i| {
-                if !self.prey[i].alive {
-                    return None;
-                }
-                let (pred_idx, pred_dist_sq) = cached_pred[i];
+            .map(|&i| {
+                let (pred_idx, pred_dist_sq) = self.cached_pred[i];
                 let pdist = pred_dist_sq.sqrt();
                 let inputs = self.build_inputs_fast(i, pred_idx, pdist, &self.prey_positions);
                 let outputs = self.prey[i].brain.forward(&inputs);
-                Some((i, inputs, outputs, pdist))
+                (i, inputs, outputs, pdist)
             })
-            .collect();
+            .collect_into_vec(&mut computed);
+        self.alive_scratch = alive;
 
         // Sequential apply: mutations to world state
         for &(i, ref inputs, ref outputs, pdist) in &computed {
@@ -422,20 +441,26 @@ impl World {
             let strengths = [inputs[6], inputs[9], inputs[12]];
             let max_str = strengths[0].max(strengths[1]).max(strengths[2]);
             let signal_state: usize = if max_str > 0.0 {
-                1 + strengths
-                    .iter()
-                    .enumerate()
-                    .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-                    .map_or(0, |(i, _)| i)
+                let mut best = 0;
+                if strengths[1] >= strengths[best] {
+                    best = 1;
+                }
+                if strengths[2] >= strengths[best] {
+                    best = 2;
+                }
+                1 + best
             } else {
                 0
             };
             let context = usize::from(inputs[2] > 0.0);
-            let action = outputs[..5]
-                .iter()
-                .enumerate()
-                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-                .map_or(0, |(i, _)| i);
+            let mut action = 0;
+            let mut best_val = outputs[0];
+            for (j, &val) in outputs[1..5].iter().enumerate() {
+                if val >= best_val {
+                    best_val = val;
+                    action = j + 1;
+                }
+            }
             self.receiver_counts[signal_state][context][action] += 1;
 
             // Per-prey receiver tracking for three-way coupling + silence onset
@@ -449,11 +474,12 @@ impl World {
                 }
             }
 
-            self.apply_outputs(i, outputs, inputs, pdist);
+            self.apply_outputs(i, action, outputs, inputs, pdist);
 
             self.prey[i].ticks_alive += 1;
             self.prey[i].had_signal_prev_tick = has_signal;
         }
+        self.computed_scratch = computed;
 
         self.move_predators();
         // Kill check runs once after all predator movement, not per sub-step.
@@ -570,16 +596,11 @@ impl World {
     fn apply_outputs(
         &mut self,
         prey_idx: usize,
+        action: usize,
         outputs: &[f32; OUTPUTS],
         inputs: &[f32; INPUTS],
         predator_dist: f32,
     ) {
-        let action = outputs[..5]
-            .iter()
-            .enumerate()
-            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-            .map_or(0, |(i, _)| i);
-
         match action {
             0 => self.prey[prey_idx].y = (self.prey[prey_idx].y - 1).rem_euclid(self.grid_size),
             1 => self.prey[prey_idx].y = (self.prey[prey_idx].y + 1).rem_euclid(self.grid_size),
@@ -792,6 +813,10 @@ mod tests {
             food_grid: CellGrid::new(TEST_GRID),
             shuffled_indices: (0..prey_count).collect(),
             prey_positions: Vec::with_capacity(prey_count),
+            order_scratch: Vec::with_capacity(prey_count),
+            cached_pred: Vec::with_capacity(prey_count),
+            alive_scratch: Vec::with_capacity(prey_count),
+            computed_scratch: Vec::with_capacity(prey_count),
             grid_size: TEST_GRID,
             food_count: TEST_FOOD,
             prey_vision_range: TEST_VISION,
@@ -969,6 +994,10 @@ mod tests {
             food_grid: CellGrid::new(TEST_GRID),
             shuffled_indices: (0..prey_count).collect(),
             prey_positions: Vec::with_capacity(prey_count),
+            order_scratch: Vec::with_capacity(prey_count),
+            cached_pred: Vec::with_capacity(prey_count),
+            alive_scratch: Vec::with_capacity(prey_count),
+            computed_scratch: Vec::with_capacity(prey_count),
             grid_size: TEST_GRID,
             food_count: TEST_FOOD,
             prey_vision_range: TEST_VISION,
@@ -1062,7 +1091,7 @@ mod tests {
         let mut outputs = [0.0_f32; crate::brain::OUTPUTS];
         outputs[4] = 1.0;
         let inputs = [0.0_f32; INPUTS];
-        world.apply_outputs(0, &outputs, &inputs, f32::MAX);
+        world.apply_outputs(0, 4, &outputs, &inputs, f32::MAX);
 
         assert!((world.prey[0].energy - 0.8).abs() < 1e-6);
     }
@@ -1077,7 +1106,7 @@ mod tests {
         let mut outputs = [0.0_f32; crate::brain::OUTPUTS];
         outputs[4] = 1.0;
         let inputs = [0.0_f32; INPUTS];
-        world.apply_outputs(0, &outputs, &inputs, f32::MAX);
+        world.apply_outputs(0, 4, &outputs, &inputs, f32::MAX);
 
         assert!((world.prey[0].energy - 1.0).abs() < 1e-6);
     }

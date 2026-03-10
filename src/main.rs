@@ -288,16 +288,13 @@ fn evaluate_generation(
 
 fn compute_gen_metrics(
     ev: &EvalResult,
-    scored: &[(Agent, f32)],
+    population: &[Agent],
     prev_norm_matrix: &mut Option<[[f32; 4]; 3]>,
     traj_jsd_history: &mut Vec<f32>,
     params: &SimParams,
 ) -> GenMetrics {
-    let avg_fitness = scored.iter().map(|(_, f)| f).sum::<f32>() / scored.len() as f32;
-    let max_fitness = scored
-        .iter()
-        .map(|(_, f)| *f)
-        .fold(f32::NEG_INFINITY, f32::max);
+    let avg_fitness = ev.fitness.iter().sum::<f32>() / ev.fitness.len() as f32;
+    let max_fitness = ev.fitness.iter().copied().fold(f32::NEG_INFINITY, f32::max);
     let iconicity = metrics::compute_iconicity(
         &ev.signal_events,
         ev.ticks_near,
@@ -322,8 +319,7 @@ fn compute_gen_metrics(
         *prev_norm_matrix = Some(norm);
     }
 
-    let fitness_vec: Vec<f32> = ev.fitness.clone();
-    let sender_fit_corr = metrics::pearson(&ev.signal_rate_per_prey, &fitness_vec);
+    let sender_fit_corr = metrics::pearson(&ev.signal_rate_per_prey, &ev.fitness);
 
     traj_jsd_history.push(traj_jsd);
     let traj_fluct_ratio = metrics::rolling_fluctuation_ratio(traj_jsd_history, FLUCT_WINDOW);
@@ -344,7 +340,7 @@ fn compute_gen_metrics(
             }
         })
         .collect();
-    let receiver_fit_corr = metrics::pearson(&reception_rates, &fitness_vec);
+    let receiver_fit_corr = metrics::pearson(&reception_rates, &ev.fitness);
 
     let per_prey_jsd_vec: Vec<f32> = ev
         .actions_with_signal
@@ -352,13 +348,13 @@ fn compute_gen_metrics(
         .zip(&ev.actions_without_signal)
         .map(|(w, wo)| metrics::per_prey_receiver_jsd(w, wo, MIN_RECEIVER_SAMPLES))
         .collect();
-    let response_fit_corr = metrics::pearson(&per_prey_jsd_vec, &fitness_vec);
+    let response_fit_corr = metrics::pearson(&per_prey_jsd_vec, &ev.fitness);
 
     let (silence_onset_jsd, silence_move_delta) =
         metrics::compute_silence_onset_metrics(&ev.silence_onset_actions, &ev.actions_with_signal);
 
-    // Brain size stats from scored population
-    let hidden_sizes: Vec<usize> = scored.iter().map(|(a, _)| a.brain.hidden_size).collect();
+    // Brain size stats
+    let hidden_sizes: Vec<usize> = population.iter().map(|a| a.brain.hidden_size).collect();
     let avg_hidden = hidden_sizes.iter().sum::<usize>() as f32 / hidden_sizes.len() as f32;
     let min_hidden = hidden_sizes.iter().copied().min().unwrap_or(0);
     let max_hidden = hidden_sizes.iter().copied().max().unwrap_or(0);
@@ -438,15 +434,16 @@ fn run_seed(
     for gen in 0..generations {
         let ev = evaluate_generation(&population, &mut rng, params);
 
-        let mut scored: Vec<(Agent, f32)> = population
+        let mut scored: Vec<(usize, f32)> = ev
+            .fitness
             .iter()
             .enumerate()
-            .map(|(i, agent)| (agent.clone(), ev.fitness[i]))
+            .map(|(i, &f)| (i, f))
             .collect();
 
         let gm = compute_gen_metrics(
             &ev,
-            &scored,
+            &population,
             &mut prev_norm_matrix,
             &mut traj_jsd_history,
             params,
@@ -473,6 +470,7 @@ fn run_seed(
         };
 
         population = evolution::evolve_spatial(
+            &population,
             &mut scored,
             params.elite_count,
             params.tournament_size,

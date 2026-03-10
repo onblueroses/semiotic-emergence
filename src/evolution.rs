@@ -17,24 +17,27 @@ const HIDDEN_SIZE_MUTATION_RATE: f32 = 0.05;
 const MUTATION_HEADROOM: usize = 4;
 
 fn tournament_select<'a>(
-    candidates: &'a [(Agent, f32)],
+    population: &'a [Agent],
+    scored: &[(usize, f32)],
     tournament_size: usize,
     rng: &mut impl Rng,
 ) -> &'a Agent {
-    let mut best_idx = rng.gen_range(0..candidates.len());
-    let mut best_fit = candidates[best_idx].1;
+    let mut best_idx = rng.gen_range(0..scored.len());
+    let mut best_fit = scored[best_idx].1;
     for _ in 1..tournament_size {
-        let idx = rng.gen_range(0..candidates.len());
-        if candidates[idx].1 > best_fit {
+        let idx = rng.gen_range(0..scored.len());
+        if scored[idx].1 > best_fit {
             best_idx = idx;
-            best_fit = candidates[idx].1;
+            best_fit = scored[idx].1;
         }
     }
-    &candidates[best_idx].0
+    &population[scored[best_idx].0]
 }
 
+#[allow(clippy::too_many_arguments)]
 fn local_tournament_select<'a>(
-    candidates: &'a [(Agent, f32)],
+    population: &'a [Agent],
+    scored: &[(usize, f32)],
     center_x: i32,
     center_y: i32,
     radius: f32,
@@ -43,10 +46,11 @@ fn local_tournament_select<'a>(
     rng: &mut impl Rng,
 ) -> Option<&'a Agent> {
     let radius_sq = radius * radius;
-    let nearby: Vec<usize> = candidates
+    let nearby: Vec<usize> = scored
         .iter()
         .enumerate()
-        .filter(|(_, (agent, _))| {
+        .filter(|(_, &(pop_idx, _))| {
+            let agent = &population[pop_idx];
             wrap_dist_sq(agent.x, agent.y, center_x, center_y, grid_size) <= radius_sq
         })
         .map(|(i, _)| i)
@@ -57,15 +61,15 @@ fn local_tournament_select<'a>(
     }
 
     let mut best_idx = nearby[rng.gen_range(0..nearby.len())];
-    let mut best_fit = candidates[best_idx].1;
+    let mut best_fit = scored[best_idx].1;
     for _ in 1..tournament_size {
         let idx = nearby[rng.gen_range(0..nearby.len())];
-        if candidates[idx].1 > best_fit {
+        if scored[idx].1 > best_fit {
             best_idx = idx;
-            best_fit = candidates[idx].1;
+            best_fit = scored[idx].1;
         }
     }
-    Some(&candidates[best_idx].0)
+    Some(&population[scored[best_idx].0])
 }
 
 pub fn crossover(a: &Brain, b: &Brain, rng: &mut impl Rng) -> Brain {
@@ -135,7 +139,8 @@ pub fn mutate_hidden_size(brain: &mut Brain, rng: &mut impl Rng) {
 
 #[allow(clippy::too_many_arguments)]
 fn select_parent<'a>(
-    top_pool: &'a [(Agent, f32)],
+    population: &'a [Agent],
+    scored: &[(usize, f32)],
     sx: i32,
     sy: i32,
     tournament_size: usize,
@@ -145,7 +150,8 @@ fn select_parent<'a>(
     rng: &mut impl Rng,
 ) -> &'a Agent {
     if let Some(a) = local_tournament_select(
-        top_pool,
+        population,
+        scored,
         sx,
         sy,
         reproduction_radius,
@@ -156,7 +162,8 @@ fn select_parent<'a>(
         return a;
     }
     if let Some(a) = local_tournament_select(
-        top_pool,
+        population,
+        scored,
         sx,
         sy,
         fallback_radius,
@@ -166,7 +173,7 @@ fn select_parent<'a>(
     ) {
         return a;
     }
-    tournament_select(top_pool, tournament_size, rng)
+    tournament_select(population, scored, tournament_size, rng)
 }
 
 /// Spatial evolution:
@@ -176,7 +183,8 @@ fn select_parent<'a>(
 /// - Offspring selected from nearby parents via local tournament
 #[allow(clippy::too_many_arguments)]
 pub fn evolve_spatial(
-    scored: &mut [(Agent, f32)],
+    population: &[Agent],
+    scored: &mut [(usize, f32)],
     elite_count: usize,
     tournament_size: usize,
     sigma: f32,
@@ -192,16 +200,17 @@ pub fn evolve_spatial(
     let mut next_gen: Vec<Agent> = Vec::with_capacity(pop_size);
 
     // Elites keep brain AND position
-    for (agent, _) in scored.iter().take(elite_count) {
-        next_gen.push(agent.clone());
+    for &(pop_idx, _) in scored.iter().take(elite_count) {
+        next_gen.push(population[pop_idx].clone());
     }
 
     // Fill remaining slots at dead agents' positions
-    for (agent, _) in scored.iter().skip(elite_count) {
-        let sx = agent.x;
-        let sy = agent.y;
+    for &(pop_idx, _) in scored.iter().skip(elite_count) {
+        let sx = population[pop_idx].x;
+        let sy = population[pop_idx].y;
 
         let parent_a = select_parent(
+            population,
             scored,
             sx,
             sy,
@@ -212,6 +221,7 @@ pub fn evolve_spatial(
             rng,
         );
         let parent_b = select_parent(
+            population,
             scored,
             sx,
             sy,
@@ -306,19 +316,16 @@ mod tests {
     #[test]
     fn evolve_spatial_preserves_population_size() {
         let mut rng = rand::thread_rng();
-        let mut scored: Vec<(Agent, f32)> = (0..20)
-            .map(|i| {
-                (
-                    Agent {
-                        brain: Brain::random(&mut rng),
-                        x: rng.gen_range(0..TEST_GRID),
-                        y: rng.gen_range(0..TEST_GRID),
-                    },
-                    i as f32,
-                )
+        let population: Vec<Agent> = (0..20)
+            .map(|_| Agent {
+                brain: Brain::random(&mut rng),
+                x: rng.gen_range(0..TEST_GRID),
+                y: rng.gen_range(0..TEST_GRID),
             })
             .collect();
+        let mut scored: Vec<(usize, f32)> = (0..20).map(|i| (i, i as f32)).collect();
         let next = evolve_spatial(
+            &population,
             &mut scored,
             4,
             3,
@@ -336,30 +343,27 @@ mod tests {
         use rand::SeedableRng;
         use rand_chacha::ChaCha8Rng;
         let mut rng = ChaCha8Rng::seed_from_u64(99);
-        let mut scored: Vec<(Agent, f32)> = (0..20)
-            .map(|i| {
-                (
-                    Agent {
-                        brain: Brain::random(&mut rng),
-                        x: i as i32,
-                        y: i as i32 + 1,
-                    },
-                    (20 - i) as f32, // highest fitness first
-                )
+        let population: Vec<Agent> = (0..20)
+            .map(|i| Agent {
+                brain: Brain::random(&mut rng),
+                x: i as i32,
+                y: i as i32 + 1,
             })
             .collect();
+        let mut scored: Vec<(usize, f32)> = (0..20).map(|i| (i, (20 - i) as f32)).collect();
         let elite_count = 4;
         // Save elite positions before evolve
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         let elite_positions: Vec<(i32, i32)> = scored
             .iter()
             .take(elite_count)
-            .map(|(a, _)| (a.x, a.y))
+            .map(|&(idx, _)| (population[idx].x, population[idx].y))
             .collect();
         // Re-scramble so evolve_spatial does its own sort
         scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
         let next = evolve_spatial(
+            &population,
             &mut scored,
             elite_count,
             3,
@@ -382,22 +386,21 @@ mod tests {
         use rand_chacha::ChaCha8Rng;
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let mut scored: Vec<(Agent, f32)> = (0..20)
-            .map(|i| {
+        let population: Vec<Agent> = (0..20)
+            .map(|_| {
                 let mut brain = Brain::random(&mut rng);
                 brain.hidden_size = 10;
-                (
-                    Agent {
-                        brain,
-                        x: rng.gen_range(0..TEST_GRID),
-                        y: rng.gen_range(0..TEST_GRID),
-                    },
-                    i as f32,
-                )
+                Agent {
+                    brain,
+                    x: rng.gen_range(0..TEST_GRID),
+                    y: rng.gen_range(0..TEST_GRID),
+                }
             })
             .collect();
+        let mut scored: Vec<(usize, f32)> = (0..20).map(|i| (i, i as f32)).collect();
 
         let next = evolve_spatial(
+            &population,
             &mut scored,
             4,
             3,
@@ -428,35 +431,28 @@ mod tests {
         use rand_chacha::ChaCha8Rng;
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let candidates: Vec<(Agent, f32)> = vec![
-            (
-                Agent {
-                    brain: Brain::zero(),
-                    x: 0,
-                    y: 0,
-                },
-                10.0,
-            ),
-            (
-                Agent {
-                    brain: Brain::zero(),
-                    x: 1,
-                    y: 0,
-                },
-                5.0,
-            ),
-            (
-                Agent {
-                    brain: Brain::zero(),
-                    x: 15,
-                    y: 15,
-                },
-                100.0,
-            ),
+        let population: Vec<Agent> = vec![
+            Agent {
+                brain: Brain::zero(),
+                x: 0,
+                y: 0,
+            },
+            Agent {
+                brain: Brain::zero(),
+                x: 1,
+                y: 0,
+            },
+            Agent {
+                brain: Brain::zero(),
+                x: 15,
+                y: 15,
+            },
         ];
+        let scored: Vec<(usize, f32)> = vec![(0, 10.0), (1, 5.0), (2, 100.0)];
 
         // Center at (0,0), radius 3.0 - should only see agents at (0,0) and (1,0)
-        let result = local_tournament_select(&candidates, 0, 0, 3.0, 5, TEST_GRID, &mut rng);
+        let result =
+            local_tournament_select(&population, &scored, 0, 0, 3.0, 5, TEST_GRID, &mut rng);
         assert!(result.is_some());
         let selected = result.unwrap();
         // Should be one of the two nearby agents, never the far one at (15,15)
