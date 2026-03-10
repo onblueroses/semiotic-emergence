@@ -43,8 +43,8 @@ impl SimParams {
     fn from_cli(args: &[String]) -> Self {
         let pop_size = parse_flag(args, "--pop").unwrap_or(384);
         let grid_size = parse_flag::<i32>(args, "--grid").unwrap_or(56);
-        let num_predators = parse_flag(args, "--pred").unwrap_or(16);
-        let food_count = parse_flag(args, "--food").unwrap_or(200);
+        let num_predators = parse_flag(args, "--pred").unwrap_or(3);
+        let food_count = parse_flag(args, "--food").unwrap_or(100);
         let ticks_per_eval = parse_flag(args, "--ticks").unwrap_or(500);
         let no_signals = args.iter().any(|a| a == "--no-signals");
 
@@ -74,7 +74,7 @@ impl SimParams {
             mutation_sigma: 0.1,
             base_drain: 0.0008,
             neuron_cost: 0.00002,
-            signal_cost: 0.0,
+            signal_cost: 0.002,
             no_signals,
         }
     }

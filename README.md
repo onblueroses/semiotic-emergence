@@ -1,10 +1,10 @@
 # semiotic-emergence
 
-384 neural networks live on a 56x56 toroidal grid. Sixteen predators hunt them. They can broadcast one of three symbols to each other. At generation zero, those symbols mean nothing.
+384 neural networks live on a 56x56 toroidal grid. Predators hunt them. They can broadcast one of three symbols to each other. At generation zero, those symbols mean nothing.
 
 I started this project because I wanted to watch meaning come into existence. We have theories for how meaning works once it already exists, but the moment before - when a world contains no signs, no reference, no communication, and then for the first time it does - nobody really has a good account of what that transition looks like. It happened deep in evolutionary history and left no fossil record.
 
-So I built the simplest world I could think of. Prey, predator, food, three words, and evolution. The prey have evolvable neural networks (4-124 hidden neurons, selected by evolution). They can see about 11 cells around them. They can signal up to 22. Sixteen predators chase independently. Signals are free to emit, and a prey that hears a signal while a predator is nearby gets an evasion boost - moving two cells instead of one. Spatial reproduction creates natural kin clusters - offspring appear near their parents - so communicator genes can persist through kinship proximity without artificial grouping.
+So I built the simplest world I could think of. Prey, predator, food, three words, and evolution. The prey have evolvable neural networks (4-124 hidden neurons, selected by evolution). They can see about 11 cells around them. They can signal up to 22. Predators chase independently. Signals cost energy to emit, creating selective pressure against noise. Spatial reproduction creates natural kin clusters - offspring appear near their parents - so communicator genes can persist through kinship proximity without artificial grouping.
 
 Whether they actually learn to talk to each other is still an open question. So far they've learned to shut up instead. They go silent when danger is near. Which might actually be the more interesting finding - silence as the first sign, the simplest possible meaning, requiring no coordination between sender and receiver about what any particular symbol means. Just the absence of background noise becoming informative.
 
@@ -40,7 +40,7 @@ About 3300 lines of Rust across six files (including inline tests):
 ```
 src/brain.rs      - Neural network (16 inputs, 4-124 evolvable hidden, 8 outputs)
 src/evolution.rs  - Spatial evolution (Agent struct, local tournament, crossover, mutation)
-src/world.rs      - The grid, the physics, predators, food, evasion boost
+src/world.rs      - The grid, the physics, predators, food, energy economy
 src/signal.rs     - Three symbols, linear decay, short range, one-tick delay
 src/metrics.rs    - All five FRAMEWORK instruments (MI, JSD, silence, trajectory, divergence)
 src/main.rs       - Generation loop, batch mode, counterfactual mode, CSV output
@@ -50,7 +50,7 @@ src/main.rs       - Generation loop, batch mode, counterfactual mode, CSV output
 
 The grid is toroidal - no edges, no corners. All prey share a single world with multiple predators that chase independently. Kill on same cell only - no random movement, no confusion mechanic. Prey vision is `4 * scale` cells, signals travel `8 * scale` (where `scale = grid/20`). That 2:1 gap between sight and signal range is the whole reason communication could matter here: signals carry information further than eyes can see.
 
-When a prey receives a signal and a predator is within signal range, it gets an evasion boost - moving two cells that tick instead of one. This creates a direct fitness benefit for signal-responsive prey: honest signals near real danger help receivers escape. Signals are free to emit, so the only selection pressure against noise is informational - bad signals degrade neighbor decisions.
+Signals cost energy to emit. The selection pressure against noise is both metabolic (wasted energy) and informational (bad signals degrade neighbor decisions). For signals to persist, they must provide enough benefit - through kin selection or reciprocity - to offset their cost.
 
 Spatial reproduction solves the bootstrap problem. Offspring inherit the positions of dead agents and are bred from nearby parents. This creates natural kin clusters where genetically similar individuals share overlapping signal ranges - no artificial grouping needed. You can't have senders without receivers or receivers without senders, but spatially proximate relatives are more likely to share complementary wiring for both.
 

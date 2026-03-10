@@ -451,18 +451,6 @@ impl World {
 
             self.apply_outputs(i, outputs, inputs, pdist);
 
-            // Evasion boost: +1 movement when signaled AND predator nearby
-            let received_signal = inputs[6] > 0.0 || inputs[9] > 0.0 || inputs[12] > 0.0;
-            if received_signal && pdist <= self.signal_range && action < 4 {
-                match action {
-                    0 => self.prey[i].y = (self.prey[i].y - 1).rem_euclid(self.grid_size),
-                    1 => self.prey[i].y = (self.prey[i].y + 1).rem_euclid(self.grid_size),
-                    2 => self.prey[i].x = (self.prey[i].x + 1).rem_euclid(self.grid_size),
-                    3 => self.prey[i].x = (self.prey[i].x - 1).rem_euclid(self.grid_size),
-                    _ => {}
-                }
-            }
-
             self.prey[i].ticks_alive += 1;
             self.prey[i].had_signal_prev_tick = has_signal;
         }
