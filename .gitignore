@@ -8,4 +8,5 @@ nul
 *.ps1
 *.log
 CLAUDE.md
+profile*.txt
 .claude/

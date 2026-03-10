@@ -1,5 +1,6 @@
 use rand::seq::SliceRandom;
 use rand::Rng;
+use rayon::prelude::*;
 
 use crate::brain::{Brain, INPUTS, OUTPUTS};
 use crate::evolution::Agent;
@@ -43,6 +44,111 @@ pub(crate) fn wrap_dist_sq(ax: i32, ay: i32, bx: i32, by: i32, grid_size: i32) -
     dx * dx + dy * dy
 }
 
+/// Spatial index: uniform grid for O(1) neighbor lookups on a toroidal grid.
+struct CellGrid {
+    cells: Vec<Vec<u16>>,
+    grid_size: i32,
+}
+
+impl CellGrid {
+    fn new(grid_size: i32) -> Self {
+        let n = (grid_size * grid_size) as usize;
+        Self {
+            cells: (0..n).map(|_| Vec::new()).collect(),
+            grid_size,
+        }
+    }
+
+    fn clear(&mut self) {
+        for cell in &mut self.cells {
+            cell.clear();
+        }
+    }
+
+    fn cell_idx(&self, x: i32, y: i32) -> usize {
+        (y * self.grid_size + x) as usize
+    }
+
+    fn insert(&mut self, x: i32, y: i32, idx: u16) {
+        let ci = (y * self.grid_size + x) as usize;
+        self.cells[ci].push(idx);
+    }
+
+    fn remove(&mut self, x: i32, y: i32, idx: u16) {
+        let ci = (y * self.grid_size + x) as usize;
+        let cell = &mut self.cells[ci];
+        if let Some(pos) = cell.iter().position(|&v| v == idx) {
+            cell.swap_remove(pos);
+        }
+    }
+
+    /// Expanding Chebyshev ring search with toroidal wrapping.
+    /// Finds nearest entity within `max_radius` cells. Returns index and squared distance.
+    #[allow(clippy::similar_names)]
+    fn nearest(&self, x: i32, y: i32, max_radius: i32, skip_idx: u16) -> Option<(u16, f32)> {
+        let gs = self.grid_size;
+        let mut best: Option<(u16, f32)> = None;
+
+        for r in 0..=max_radius {
+            // Once we find something, no ring further out can beat it
+            // (Chebyshev distance r means all cells are at least r away)
+            if best.is_some() && r > 0 {
+                // Check: could any entity in ring r be closer than current best?
+                // Min possible squared dist at Chebyshev r is r*r (on axis)
+                let min_possible = (r * r) as f32;
+                if let Some((_, bd)) = best {
+                    if min_possible >= bd {
+                        break;
+                    }
+                }
+            }
+
+            if r == 0 {
+                let ci = self.cell_idx(x, y);
+                for &idx in &self.cells[ci] {
+                    if idx == skip_idx {
+                        continue;
+                    }
+                    // Same cell = distance 0
+                    match best {
+                        None => best = Some((idx, 0.0)),
+                        Some(_) => return best, // Can't beat 0
+                    }
+                }
+            } else {
+                // Walk the 4 edges of the Chebyshev ring at distance r
+                for edge in 0..4 {
+                    let (start_dx, start_dy, step_dx, step_dy) = match edge {
+                        0 => (-r, -r, 1, 0), // top edge: left to right
+                        1 => (r, -r, 0, 1),  // right edge: top to bottom
+                        2 => (r, r, -1, 0),  // bottom edge: right to left
+                        _ => (-r, r, 0, -1), // left edge: bottom to top
+                    };
+                    for step in 0..(2 * r) {
+                        let dx = start_dx + step * step_dx;
+                        let dy = start_dy + step * step_dy;
+                        let cx = (x + dx).rem_euclid(gs);
+                        let cy = (y + dy).rem_euclid(gs);
+                        let ci = self.cell_idx(cx, cy);
+                        for &idx in &self.cells[ci] {
+                            if idx == skip_idx {
+                                continue;
+                            }
+                            let d = wrap_dist_sq(x, y, cx, cy, gs);
+                            match best {
+                                None => best = Some((idx, d)),
+                                Some((_, bd)) if d < bd => best = Some((idx, d)),
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        best
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Prey {
     pub x: i32,
@@ -68,7 +174,7 @@ pub struct Predator {
     pub y: i32,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct Food {
     pub x: i32,
     pub y: i32,
@@ -102,6 +208,12 @@ pub struct World {
     pub min_pred_dist_per_tick: Vec<f32>,
     /// When true, signal emission is suppressed (counterfactual mode).
     pub no_signals: bool,
+    // Spatial indices (rebuilt each tick for prey, maintained incrementally for food)
+    prey_grid: CellGrid,
+    food_grid: CellGrid,
+    // Pre-allocated per-tick buffers
+    shuffled_indices: Vec<usize>,
+    prey_positions: Vec<(i32, i32)>,
     // Simulation parameters
     pub grid_size: i32,
     pub food_count: usize,
@@ -129,7 +241,7 @@ impl World {
         neuron_cost: f32,
         signal_cost: f32,
     ) -> Self {
-        let prey = agents
+        let prey: Vec<Prey> = agents
             .iter()
             .map(|agent| Prey {
                 x: agent.x,
@@ -153,13 +265,19 @@ impl World {
             })
             .collect();
 
-        let food = (0..food_count)
+        let food: Vec<Food> = (0..food_count)
             .map(|_| Food {
                 x: rng.gen_range(0..grid_size),
                 y: rng.gen_range(0..grid_size),
             })
             .collect();
 
+        let mut food_grid = CellGrid::new(grid_size);
+        for (i, f) in food.iter().enumerate() {
+            food_grid.insert(f.x, f.y, i as u16);
+        }
+
+        let prey_count = prey.len();
         Self {
             prey,
             predators,
@@ -174,6 +292,10 @@ impl World {
             signals_per_tick: Vec::new(),
             min_pred_dist_per_tick: Vec::new(),
             no_signals,
+            prey_grid: CellGrid::new(grid_size),
+            food_grid,
+            shuffled_indices: (0..prey_count).collect(),
+            prey_positions: Vec::with_capacity(prey_count),
             grid_size,
             food_count,
             prey_vision_range,
@@ -185,15 +307,7 @@ impl World {
         }
     }
 
-    /// Distance from a point to the nearest predator (squared).
-    fn nearest_predator_dist_sq(&self, x: i32, y: i32) -> f32 {
-        self.predators
-            .iter()
-            .map(|pred| wrap_dist_sq(x, y, pred.x, pred.y, self.grid_size))
-            .fold(f32::MAX, f32::min)
-    }
-
-    /// Nearest predator's position. Caller guarantees at least one predator exists.
+    #[cfg(test)]
     fn nearest_predator(&self, x: i32, y: i32) -> &Predator {
         let mut best = &self.predators[0];
         let mut best_d = wrap_dist_sq(x, y, best.x, best.y, self.grid_size);
@@ -211,6 +325,7 @@ impl World {
         self.prey.iter().any(|p| p.alive)
     }
 
+    #[allow(clippy::too_many_lines)]
     pub fn step(&mut self, rng: &mut impl Rng) {
         self.tick += 1;
 
@@ -219,43 +334,89 @@ impl World {
         self.signals
             .retain(|s| self.tick.saturating_sub(s.tick_emitted) <= 4);
 
-        // Track minimum predator-to-alive-prey distance this tick (any predator)
-        let min_pred_dist = self
-            .prey
-            .iter()
-            .filter(|p| p.alive)
-            .map(|p| self.nearest_predator_dist_sq(p.x, p.y).sqrt())
-            .fold(f32::MAX, f32::min);
+        // Build prey spatial grid and position snapshot
+        self.rebuild_prey_grid();
+        self.prey_positions.clear();
+        for p in &self.prey {
+            self.prey_positions.push((p.x, p.y));
+        }
+
+        // Track minimum predator-to-alive-prey distance this tick
+        let mut min_pred_dist = f32::MAX;
+        for p in &self.prey {
+            if !p.alive {
+                continue;
+            }
+            for pred in &self.predators {
+                let d = wrap_dist_sq(p.x, p.y, pred.x, pred.y, self.grid_size).sqrt();
+                if d < min_pred_dist {
+                    min_pred_dist = d;
+                }
+            }
+        }
         self.min_pred_dist_per_tick.push(min_pred_dist);
 
         // Shuffle prey processing order to prevent index bias
-        let mut order: Vec<usize> = (0..self.prey.len()).collect();
-        order.shuffle(rng);
+        self.shuffled_indices.clear();
+        self.shuffled_indices.extend(0..self.prey.len());
+        self.shuffled_indices.shuffle(rng);
 
+        // Cache nearest predator per prey (avoids 2-3 redundant scans per prey)
+        let mut cached_pred: Vec<(usize, f32)> = Vec::with_capacity(self.prey.len());
+        for p in &self.prey {
+            if !p.alive {
+                cached_pred.push((0, f32::MAX));
+                continue;
+            }
+            let mut best_idx = 0;
+            let mut best_d = f32::MAX;
+            for (pi, pred) in self.predators.iter().enumerate() {
+                let d = wrap_dist_sq(p.x, p.y, pred.x, pred.y, self.grid_size);
+                if d < best_d {
+                    best_d = d;
+                    best_idx = pi;
+                }
+            }
+            cached_pred.push((best_idx, best_d));
+        }
+
+        // Need a stable copy of the order for the borrow-splitting loop
+        let order: Vec<usize> = self.shuffled_indices.clone();
+
+        // Apply metabolism sequentially (mutates prey energy/alive, cheap)
         for &i in &order {
             if !self.prey[i].alive {
                 continue;
             }
-
-            // Metabolism: bigger brains cost more energy
             let drain = self.base_drain + self.prey[i].brain.hidden_size as f32 * self.neuron_cost;
             self.prey[i].energy -= drain;
             if self.prey[i].energy <= 0.0 {
                 self.prey[i].alive = false;
-                continue;
             }
+        }
 
-            // Track proximity to nearest predator
-            let pdist = self
-                .nearest_predator_dist_sq(self.prey[i].x, self.prey[i].y)
-                .sqrt();
+        // Parallel compute: build inputs + run brain forward for all alive prey
+        // All reads are from immutable &self state (grids, predators, signals, food)
+        let computed: Vec<(usize, [f32; INPUTS], [f32; OUTPUTS], f32)> = order
+            .par_iter()
+            .filter_map(|&i| {
+                if !self.prey[i].alive {
+                    return None;
+                }
+                let (pred_idx, pred_dist_sq) = cached_pred[i];
+                let pdist = pred_dist_sq.sqrt();
+                let inputs = self.build_inputs_fast(i, pred_idx, pdist, &self.prey_positions);
+                let outputs = self.prey[i].brain.forward(&inputs);
+                Some((i, inputs, outputs, pdist))
+            })
+            .collect();
+
+        // Sequential apply: mutations to world state
+        for &(i, ref inputs, ref outputs, pdist) in &computed {
             self.total_prey_ticks += 1;
             if pdist <= self.prey_vision_range {
                 self.ticks_near_predator += 1;
             }
-
-            let inputs = self.build_inputs(i);
-            let outputs = self.prey[i].brain.forward(&inputs);
 
             // Receiver response spectrum: classify signal state, context, and chosen action
             let strengths = [inputs[6], inputs[9], inputs[12]];
@@ -288,7 +449,7 @@ impl World {
                 }
             }
 
-            self.apply_outputs(i, &outputs, &inputs);
+            self.apply_outputs(i, outputs, inputs, pdist);
 
             // Evasion boost: +1 movement when signaled AND predator nearby
             let received_signal = inputs[6] > 0.0 || inputs[9] > 0.0 || inputs[12] > 0.0;
@@ -312,10 +473,13 @@ impl World {
 
         if self.food.len() < self.food_count / 2 {
             while self.food.len() < self.food_count {
-                self.food.push(Food {
+                let f = Food {
                     x: rng.gen_range(0..self.grid_size),
                     y: rng.gen_range(0..self.grid_size),
-                });
+                };
+                let idx = self.food.len() as u16;
+                self.food_grid.insert(f.x, f.y, idx);
+                self.food.push(f);
             }
         }
 
@@ -323,41 +487,47 @@ impl World {
             .push(self.signals_emitted - signals_before);
     }
 
-    fn build_inputs(&self, prey_idx: usize) -> [f32; INPUTS] {
+    /// Build input vector using cached predator info and spatial grid for ally lookup.
+    #[allow(clippy::similar_names)]
+    fn build_inputs_fast(
+        &self,
+        prey_idx: usize,
+        pred_idx: usize,
+        pdist: f32,
+        positions: &[(i32, i32)],
+    ) -> [f32; INPUTS] {
         let p = &self.prey[prey_idx];
         let mut inp = [0.0_f32; INPUTS];
         let gs = self.grid_size as f32;
 
-        // 0-2: Nearest predator relative dx, dy, distance (gated by vision range)
-        let nearest_pred = self.nearest_predator(p.x, p.y);
-        let pdx = wrap_delta(p.x, nearest_pred.x, self.grid_size) as f32;
-        let pdy = wrap_delta(p.y, nearest_pred.y, self.grid_size) as f32;
-        let pdist = (pdx * pdx + pdy * pdy).sqrt();
+        // 0-2: Nearest predator (from cache, gated by vision range)
         if pdist <= self.prey_vision_range {
+            let pred = &self.predators[pred_idx];
+            let pdx = wrap_delta(p.x, pred.x, self.grid_size) as f32;
+            let pdy = wrap_delta(p.y, pred.y, self.grid_size) as f32;
             inp[0] = pdx / gs;
             inp[1] = pdy / gs;
             inp[2] = (pdist / self.prey_vision_range).min(1.0);
         }
 
-        // 3-4: Nearest food dx, dy
-        if let Some(f) = self.nearest_food(p.x, p.y) {
+        // 3-4: Nearest food via spatial grid
+        if let Some((fi, _)) = self
+            .food_grid
+            .nearest(p.x, p.y, self.grid_size / 2, u16::MAX)
+        {
+            let f = &self.food[fi as usize];
             inp[3] = wrap_delta(p.x, f.x, self.grid_size) as f32 / gs;
             inp[4] = wrap_delta(p.y, f.y, self.grid_size) as f32 / gs;
         }
 
-        // 5: Nearest ally distance
-        let mut min_ally = f32::MAX;
-        for (j, other) in self.prey.iter().enumerate() {
-            if j == prey_idx || !other.alive {
-                continue;
-            }
-            let d = wrap_dist_sq(p.x, p.y, other.x, other.y, self.grid_size).sqrt();
-            if d < min_ally {
-                min_ally = d;
-            }
-        }
-        inp[5] = if min_ally < f32::MAX {
-            (min_ally / gs).min(1.0)
+        // 5: Nearest ally via prey grid (uses start-of-tick positions)
+        let _ = positions; // positions captured for borrow-checker; grid uses cell coords
+        let vision_cells = (gs / 2.0).ceil() as i32;
+        let ally = self
+            .prey_grid
+            .nearest(p.x, p.y, vision_cells, prey_idx as u16);
+        inp[5] = if let Some((_, d_sq)) = ally {
+            (d_sq.sqrt() / gs).min(1.0)
         } else {
             1.0
         };
@@ -381,7 +551,41 @@ impl World {
         inp
     }
 
-    fn apply_outputs(&mut self, prey_idx: usize, outputs: &[f32; OUTPUTS], inputs: &[f32; INPUTS]) {
+    /// Rebuild prey spatial grid from current positions. Used by tests that
+    /// call `move_predators()` directly without going through `step()`.
+    fn rebuild_prey_grid(&mut self) {
+        self.prey_grid.clear();
+        for (i, p) in self.prey.iter().enumerate() {
+            if p.alive {
+                self.prey_grid.insert(p.x, p.y, i as u16);
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn build_inputs(&self, prey_idx: usize) -> [f32; INPUTS] {
+        let p = &self.prey[prey_idx];
+        let nearest_pred = self.nearest_predator(p.x, p.y);
+        let pred_idx = self
+            .predators
+            .iter()
+            .position(|pr| std::ptr::eq(pr, nearest_pred))
+            .unwrap_or(0);
+        let pdx = wrap_delta(p.x, nearest_pred.x, self.grid_size) as f32;
+        let pdy = wrap_delta(p.y, nearest_pred.y, self.grid_size) as f32;
+        let pdist = (pdx * pdx + pdy * pdy).sqrt();
+
+        // Need food grid populated for tests using build_inputs directly
+        self.build_inputs_fast(prey_idx, pred_idx, pdist, &[])
+    }
+
+    fn apply_outputs(
+        &mut self,
+        prey_idx: usize,
+        outputs: &[f32; OUTPUTS],
+        inputs: &[f32; INPUTS],
+        predator_dist: f32,
+    ) {
         let action = outputs[..5]
             .iter()
             .enumerate()
@@ -396,8 +600,17 @@ impl World {
             4 => {
                 let px = self.prey[prey_idx].x;
                 let py = self.prey[prey_idx].y;
-                if let Some(fi) = self.nearest_food_idx(px, py, 1) {
-                    self.food.remove(fi);
+                if let Some(fi) = self.nearest_food_grid(px, py, 1) {
+                    let old_food = self.food[fi];
+                    self.food_grid.remove(old_food.x, old_food.y, fi as u16);
+                    self.food.swap_remove(fi);
+                    // swap_remove moved the last element to fi - update its grid entry
+                    if fi < self.food.len() {
+                        let moved = &self.food[fi];
+                        self.food_grid
+                            .remove(moved.x, moved.y, self.food.len() as u16);
+                        self.food_grid.insert(moved.x, moved.y, fi as u16);
+                    }
                     self.prey[prey_idx].energy = (self.prey[prey_idx].energy + 0.3).min(1.0);
                     self.prey[prey_idx].food_eaten += 1;
                 }
@@ -412,7 +625,6 @@ impl World {
         if !self.no_signals && self.prey[prey_idx].energy > self.signal_cost {
             if let Some(symbol) = signal::maybe_emit(outputs.as_slice(), SIGNAL_THRESHOLD) {
                 self.prey[prey_idx].energy -= self.signal_cost;
-                let predator_dist = self.nearest_predator_dist_sq(px, py).sqrt();
                 self.signal_events.push(SignalEvent {
                     symbol,
                     predator_dist,
@@ -431,28 +643,17 @@ impl World {
     }
 
     fn move_predators(&mut self) {
+        // prey_grid is stale (from tick start) but acceptable for predator chasing
         for pred_idx in 0..self.predators.len() {
             for _ in 0..self.predator_speed {
-                let mut nearest: Option<(i32, i32, f32)> = None;
-                for p in &self.prey {
-                    if !p.alive {
-                        continue;
-                    }
-                    let d = wrap_dist_sq(
-                        self.predators[pred_idx].x,
-                        self.predators[pred_idx].y,
-                        p.x,
-                        p.y,
-                        self.grid_size,
-                    );
-                    if nearest.is_none() || d < nearest.unwrap_or((0, 0, f32::MAX)).2 {
-                        nearest = Some((p.x, p.y, d));
-                    }
-                }
+                let px = self.predators[pred_idx].x;
+                let py = self.predators[pred_idx].y;
+                let nearest = self.prey_grid.nearest(px, py, self.grid_size / 2, u16::MAX);
 
-                if let Some((tx, ty, _)) = nearest {
-                    let dx = wrap_delta(self.predators[pred_idx].x, tx, self.grid_size);
-                    let dy = wrap_delta(self.predators[pred_idx].y, ty, self.grid_size);
+                if let Some((prey_idx, _)) = nearest {
+                    let tp = &self.prey[prey_idx as usize];
+                    let dx = wrap_delta(px, tp.x, self.grid_size);
+                    let dy = wrap_delta(py, tp.y, self.grid_size);
                     if dx.abs() >= dy.abs() {
                         self.predators[pred_idx].x += dx.signum();
                     } else {
@@ -483,6 +684,49 @@ impl World {
         }
     }
 
+    /// Grid-based nearest food within `max_dist` Manhattan distance.
+    fn nearest_food_grid(&self, x: i32, y: i32, max_dist: i32) -> Option<usize> {
+        // Search expanding rings up to max_dist
+        for r in 0..=max_dist {
+            let mut best: Option<(usize, i32)> = None;
+            if r == 0 {
+                let ci = self.food_grid.cell_idx(x, y);
+                if let Some(&idx) = self.food_grid.cells[ci].first() {
+                    return Some(idx as usize);
+                }
+            } else {
+                // Check all cells at Chebyshev distance <= r (Manhattan can differ)
+                for dy in -r..=r {
+                    for dx in -r..=r {
+                        if dx.abs().max(dy.abs()) != r {
+                            continue; // Only the new ring
+                        }
+                        let cx = (x + dx).rem_euclid(self.grid_size);
+                        let cy = (y + dy).rem_euclid(self.grid_size);
+                        let ci = self.food_grid.cell_idx(cx, cy);
+                        for &idx in &self.food_grid.cells[ci] {
+                            let f = &self.food[idx as usize];
+                            let md = wrap_delta(x, f.x, self.grid_size).abs()
+                                + wrap_delta(y, f.y, self.grid_size).abs();
+                            if md <= max_dist {
+                                match best {
+                                    None => best = Some((idx as usize, md)),
+                                    Some((_, bd)) if md < bd => best = Some((idx as usize, md)),
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
+                if best.is_some() {
+                    return best.map(|(i, _)| i);
+                }
+            }
+        }
+        None
+    }
+
+    #[cfg(test)]
     fn nearest_food(&self, x: i32, y: i32) -> Option<&Food> {
         let gs = self.grid_size;
         self.food
@@ -490,6 +734,7 @@ impl World {
             .min_by_key(|f| wrap_delta(x, f.x, gs).abs() + wrap_delta(y, f.y, gs).abs())
     }
 
+    #[cfg(test)]
     fn nearest_food_idx(&self, x: i32, y: i32, max_dist: i32) -> Option<usize> {
         let gs = self.grid_size;
         self.food
@@ -521,7 +766,7 @@ mod tests {
     const TEST_SIGNAL_COST: f32 = 0.0;
 
     fn minimal_world(prey_positions: &[(i32, i32)], predator: (i32, i32)) -> World {
-        let prey = prey_positions
+        let prey: Vec<Prey> = prey_positions
             .iter()
             .map(|&(x, y)| Prey {
                 x,
@@ -537,6 +782,7 @@ mod tests {
                 had_signal_prev_tick: false,
             })
             .collect();
+        let prey_count = prey.len();
         World {
             prey,
             predators: vec![Predator {
@@ -554,6 +800,10 @@ mod tests {
             signals_per_tick: Vec::new(),
             min_pred_dist_per_tick: Vec::new(),
             no_signals: true,
+            prey_grid: CellGrid::new(TEST_GRID),
+            food_grid: CellGrid::new(TEST_GRID),
+            shuffled_indices: (0..prey_count).collect(),
+            prey_positions: Vec::with_capacity(prey_count),
             grid_size: TEST_GRID,
             food_count: TEST_FOOD,
             prey_vision_range: TEST_VISION,
@@ -601,6 +851,7 @@ mod tests {
     #[test]
     fn predator_moves_toward_nearest_prey() {
         let mut world = minimal_world(&[(10, 5)], (5, 5));
+        world.rebuild_prey_grid();
 
         world.move_predators();
 
@@ -612,6 +863,7 @@ mod tests {
     #[test]
     fn predator_chases_through_wrap_boundary() {
         let mut world = minimal_world(&[(18, 10)], (1, 10));
+        world.rebuild_prey_grid();
 
         world.move_predators();
 
@@ -628,6 +880,7 @@ mod tests {
             &[(px + 1, py), (px - 1, py), (px, py + 1), (px, py - 1)],
             (px, py),
         );
+        world.rebuild_prey_grid();
 
         world.move_predators();
 
@@ -706,6 +959,7 @@ mod tests {
                 had_signal_prev_tick: false,
             },
         ];
+        let prey_count = prey.len();
         let mut world = World {
             prey,
             predators: vec![
@@ -723,6 +977,10 @@ mod tests {
             signals_per_tick: Vec::new(),
             min_pred_dist_per_tick: Vec::new(),
             no_signals: true,
+            prey_grid: CellGrid::new(TEST_GRID),
+            food_grid: CellGrid::new(TEST_GRID),
+            shuffled_indices: (0..prey_count).collect(),
+            prey_positions: Vec::with_capacity(prey_count),
             grid_size: TEST_GRID,
             food_count: TEST_FOOD,
             prey_vision_range: TEST_VISION,
@@ -732,6 +990,7 @@ mod tests {
             neuron_cost: TEST_NEURON_COST,
             signal_cost: TEST_SIGNAL_COST,
         };
+        world.rebuild_prey_grid();
 
         world.move_predators();
 
@@ -810,11 +1069,12 @@ mod tests {
         let mut world = minimal_world(&[(5, 5)], (15, 15));
         world.prey[0].energy = 0.5;
         world.food.push(Food { x: 5, y: 5 });
+        world.food_grid.insert(5, 5, 0);
 
         let mut outputs = [0.0_f32; crate::brain::OUTPUTS];
         outputs[4] = 1.0;
         let inputs = [0.0_f32; INPUTS];
-        world.apply_outputs(0, &outputs, &inputs);
+        world.apply_outputs(0, &outputs, &inputs, f32::MAX);
 
         assert!((world.prey[0].energy - 0.8).abs() < 1e-6);
     }
@@ -824,11 +1084,12 @@ mod tests {
         let mut world = minimal_world(&[(5, 5)], (15, 15));
         world.prey[0].energy = 0.9;
         world.food.push(Food { x: 5, y: 5 });
+        world.food_grid.insert(5, 5, 0);
 
         let mut outputs = [0.0_f32; crate::brain::OUTPUTS];
         outputs[4] = 1.0;
         let inputs = [0.0_f32; INPUTS];
-        world.apply_outputs(0, &outputs, &inputs);
+        world.apply_outputs(0, &outputs, &inputs, f32::MAX);
 
         assert!((world.prey[0].energy - 1.0).abs() < 1e-6);
     }
