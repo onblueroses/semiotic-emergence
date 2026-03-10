@@ -734,27 +734,6 @@ impl World {
         }
         None
     }
-
-    #[cfg(test)]
-    fn nearest_food(&self, x: i32, y: i32) -> Option<&Food> {
-        let gs = self.grid_size;
-        self.food
-            .iter()
-            .min_by_key(|f| wrap_delta(x, f.x, gs).abs() + wrap_delta(y, f.y, gs).abs())
-    }
-
-    #[cfg(test)]
-    fn nearest_food_idx(&self, x: i32, y: i32, max_dist: i32) -> Option<usize> {
-        let gs = self.grid_size;
-        self.food
-            .iter()
-            .enumerate()
-            .filter(|(_, f)| {
-                wrap_delta(x, f.x, gs).abs() + wrap_delta(y, f.y, gs).abs() <= max_dist
-            })
-            .min_by_key(|(_, f)| wrap_delta(x, f.x, gs).abs() + wrap_delta(y, f.y, gs).abs())
-            .map(|(i, _)| i)
-    }
 }
 
 #[cfg(test)]
