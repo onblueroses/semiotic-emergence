@@ -356,7 +356,7 @@ pub fn compute_silence_onset_metrics(
 
     let total_onset: u32 = onset_pooled.iter().sum();
     let total_present: u32 = present_pooled.iter().sum();
-    if total_onset < 10 || total_present < 10 {
+    if total_onset < 5 || total_present < 10 {
         return (0.0, 0.0);
     }
 
@@ -580,22 +580,22 @@ mod tests {
     fn per_prey_jsd_different_distributions() {
         let with = [[50, 0, 0, 0, 0], [0; 5]]; // always action 0 with signal
         let without = [[0, 0, 0, 0, 50], [0; 5]]; // always action 4 without
-        let result = per_prey_receiver_jsd(&with, &without, 30);
+        let result = per_prey_receiver_jsd(&with, &without, 10);
         assert!(result > 0.5, "Expected high JSD, got {result}");
     }
 
     #[test]
     fn per_prey_jsd_identical_distributions() {
         let dist = [[10, 10, 10, 10, 10], [0; 5]];
-        let result = per_prey_receiver_jsd(&dist, &dist, 30);
+        let result = per_prey_receiver_jsd(&dist, &dist, 10);
         assert!(result < 1e-10, "Expected ~0 JSD, got {result}");
     }
 
     #[test]
     fn per_prey_jsd_below_threshold_returns_zero() {
-        let with = [[5, 5, 5, 5, 5], [0; 5]]; // 25 total < 30 min
+        let with = [[1, 1, 1, 1, 1], [0; 5]]; // 5 total < 10 min
         let without = [[10, 10, 10, 10, 10], [0; 5]];
-        assert!(per_prey_receiver_jsd(&with, &without, 30).abs() < 1e-10);
+        assert!(per_prey_receiver_jsd(&with, &without, 10).abs() < 1e-10);
     }
 
     #[test]
@@ -624,7 +624,7 @@ mod tests {
 
     #[test]
     fn silence_onset_insufficient_data() {
-        let onset = vec![[[2, 2, 2, 2, 1], [0; 5]]]; // 9 total < 10 min
+        let onset = vec![[[1, 1, 1, 1, 0], [0; 5]]]; // 4 total < 5 min
         let present = vec![[[10, 10, 10, 10, 10], [0; 5]]];
         let (jsd_val, move_delta) = compute_silence_onset_metrics(&onset, &present);
         assert!(jsd_val.abs() < 1e-10);

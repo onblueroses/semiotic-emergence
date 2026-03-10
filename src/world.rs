@@ -1281,11 +1281,11 @@ mod tests {
 
     #[test]
     fn default_hidden_drain_with_cheap_neurons() {
-        // At hidden_size=6: BASE_DRAIN(0.0008) + 6 * NEURON_COST(0.00002) = 0.00092
+        // At hidden_size=18: BASE_DRAIN(0.0008) + 18 * NEURON_COST(0.00002) = 0.00116
         let drain = TEST_BASE_DRAIN + DEFAULT_HIDDEN as f32 * TEST_NEURON_COST;
         assert!(
-            (drain - 0.00092).abs() < 1e-6,
-            "Default drain should be 0.00092 with cheap neurons"
+            (drain - 0.00116).abs() < 1e-6,
+            "Default drain should be 0.00116 with cheap neurons"
         );
     }
 }

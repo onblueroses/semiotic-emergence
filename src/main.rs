@@ -16,7 +16,7 @@ use evolution::Agent;
 use world::{World, INPUT_NAMES};
 
 const FLUCT_WINDOW: usize = 10;
-const MIN_RECEIVER_SAMPLES: u32 = 30;
+const MIN_RECEIVER_SAMPLES: u32 = 10;
 
 struct SimParams {
     pop_size: usize,

@@ -1,6 +1,6 @@
 use rand::Rng;
 
-use crate::brain::{Brain, MAX_GENOME_LEN, MAX_HIDDEN, MIN_HIDDEN};
+use crate::brain::{Brain, INPUTS, MAX_GENOME_LEN, MAX_HIDDEN, MIN_HIDDEN, OUTPUTS};
 use crate::world::wrap_dist_sq;
 
 #[derive(Clone, Debug)]
@@ -12,6 +12,9 @@ pub struct Agent {
 
 const OFFSPRING_JITTER: i32 = 1;
 const HIDDEN_SIZE_MUTATION_RATE: f32 = 0.05;
+/// Mutate weights up to `hidden_size` + `MUTATION_HEADROOM` neurons.
+/// Keeps dormant weights pre-seeded for when `hidden_size` grows.
+const MUTATION_HEADROOM: usize = 4;
 
 fn tournament_select<'a>(
     candidates: &'a [(Agent, f32)],
@@ -81,13 +84,42 @@ pub fn crossover(a: &Brain, b: &Brain, rng: &mut impl Rng) -> Brain {
     }
 }
 
+fn gaussian_noise(sigma: f32, rng: &mut impl Rng) -> f32 {
+    let u1: f32 = rng.gen::<f32>().max(f32::MIN_POSITIVE);
+    let u2: f32 = rng.gen();
+    (-2.0 * u1.ln()).sqrt() * (2.0 * std::f32::consts::PI * u2).cos() * sigma
+}
+
 pub fn mutate(brain: &mut Brain, sigma: f32, rng: &mut impl Rng) {
-    for w in &mut brain.weights {
-        // Box-Muller transform: Gaussian with mean 0, std dev sigma
-        let u1: f32 = rng.gen::<f32>().max(f32::MIN_POSITIVE);
-        let u2: f32 = rng.gen();
-        let z = (-2.0 * u1.ln()).sqrt() * (2.0 * std::f32::consts::PI * u2).cos();
-        *w += z * sigma;
+    let scope = (brain.hidden_size + MUTATION_HEADROOM).min(MAX_HIDDEN);
+    let w = &mut brain.weights;
+
+    // Input->hidden: for each input row, mutate only columns 0..scope
+    for i in 0..INPUTS {
+        let row_start = i * MAX_HIDDEN;
+        for h in 0..scope {
+            w[row_start + h] += gaussian_noise(sigma, rng);
+        }
+    }
+
+    // Hidden biases: 0..scope
+    let bias_start = INPUTS * MAX_HIDDEN;
+    for h in 0..scope {
+        w[bias_start + h] += gaussian_noise(sigma, rng);
+    }
+
+    // Hidden->output: neurons 0..scope, all 8 outputs each
+    let ho_start = bias_start + MAX_HIDDEN;
+    for h in 0..scope {
+        for o in 0..OUTPUTS {
+            w[ho_start + h * OUTPUTS + o] += gaussian_noise(sigma, rng);
+        }
+    }
+
+    // Output biases: always mutate
+    let ob_start = ho_start + MAX_HIDDEN * OUTPUTS;
+    for o in 0..OUTPUTS {
+        w[ob_start + o] += gaussian_noise(sigma, rng);
     }
 }
 
@@ -154,6 +186,7 @@ pub fn evolve_spatial(
     rng: &mut impl Rng,
 ) -> Vec<Agent> {
     scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    let scored = &*scored; // reborrow as immutable - no more mutation needed
 
     let pop_size = scored.len();
     let mut next_gen: Vec<Agent> = Vec::with_capacity(pop_size);
@@ -163,20 +196,13 @@ pub fn evolve_spatial(
         next_gen.push(agent.clone());
     }
 
-    // Top pool for parent selection (the elites + other survivors)
-    let top_pool: Vec<(Agent, f32)> = scored
-        .iter()
-        .take(pop_size.max(elite_count))
-        .cloned()
-        .collect();
-
     // Fill remaining slots at dead agents' positions
     for (agent, _) in scored.iter().skip(elite_count) {
         let sx = agent.x;
         let sy = agent.y;
 
         let parent_a = select_parent(
-            &top_pool,
+            scored,
             sx,
             sy,
             tournament_size,
@@ -186,7 +212,7 @@ pub fn evolve_spatial(
             rng,
         );
         let parent_b = select_parent(
-            &top_pool,
+            scored,
             sx,
             sy,
             tournament_size,

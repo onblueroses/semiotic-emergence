@@ -1,16 +1,16 @@
 use rand::Rng;
 
 pub const INPUTS: usize = 16;
-pub const MAX_HIDDEN: usize = 16;
+pub const MAX_HIDDEN: usize = 124;
 pub const MIN_HIDDEN: usize = 4;
-pub const DEFAULT_HIDDEN: usize = 6;
+pub const DEFAULT_HIDDEN: usize = 18;
 pub const OUTPUTS: usize = 8;
 /// Fixed genome length sized for `MAX_HIDDEN`. Dormant neurons are "junk DNA".
 pub const MAX_GENOME_LEN: usize = INPUTS * MAX_HIDDEN + MAX_HIDDEN + MAX_HIDDEN * OUTPUTS + OUTPUTS;
 
 #[derive(Clone, Debug)]
 pub struct Brain {
-    /// Weights: [input->hidden (I*MH=256), hidden biases (MH=16), hidden->output (MH*O=128), output biases (O=8)]
+    /// Weights: [input->hidden (I*MH=1984), hidden biases (MH=124), hidden->output (MH*O=992), output biases (O=8)]
     pub weights: [f32; MAX_GENOME_LEN],
     /// Number of active hidden neurons (`MIN_HIDDEN..=MAX_HIDDEN`). Heritable, mutable.
     pub hidden_size: usize,
@@ -70,8 +70,8 @@ mod tests {
 
     #[test]
     fn genome_length() {
-        // 16*16 + 16 + 16*8 + 8 = 256 + 16 + 128 + 8 = 408
-        assert_eq!(MAX_GENOME_LEN, 408);
+        // 16*124 + 124 + 124*8 + 8 = 1984 + 124 + 992 + 8 = 3108
+        assert_eq!(MAX_GENOME_LEN, 3108);
     }
 
     #[test]
