@@ -203,3 +203,29 @@ Genome is now 3108 floats (was 408). Two optimizations keep overhead manageable:
 Benchmark with new constants: 5.27s/100gen (~1,140 gens/min), ~18% slower than
 old 4.31s/100gen. The overhead is from larger genome copies in crossover/elite
 cloning and wider forward() stride (124 vs 16).
+
+### Split-head architecture (v2)
+
+Single hidden layer replaced with split-head topology:
+- **Base hidden** (4-64 neurons, default 12): shared across movement, signal, and memory outputs
+- **Signal hidden** (2-32 neurons, default 6): dedicated layer between base and signal outputs
+
+Genome expanded to 5491 weights (was 3108) with 10 named segments. Two independent
+hidden size genes, each with 5% mutation rate and +/-1 step. Scoped mutation now
+operates per pool: base weights scoped by `base_hidden_size + 4`, signal weights
+by `signal_hidden_size + 4`.
+
+New features added alongside: 8-cell recurrent memory (EMA update), cooperative
+food patches (50% require 2+ nearby prey), kin fitness via lineage tracking
+(parent/grandparent indices, 0.5 siblings, 0.25 cousins), softmax signal emission.
+
+Input count: 25 -> 36 (added food_dist, ally_dx/dy, 8 memory cells).
+Output structure: 5 movement + 6 signal (via signal hidden) + 8 memory (tanh bounded).
+CSV columns: 18 -> 21 (split brain stats: avg/min/max for base and signal hidden).
+
+Neuron cost halved (0.00002 -> 0.00001) and vision range halved (11.2 -> 5.6 at
+grid=56) to increase signal dependency. Signal range unchanged at 22.4 (4:1 ratio).
+
+Early benchmarks (1000 gen, seed 42): ~1 sec/gen at 8x scale. Brain compression
+observed: base hidden shrinks from 12 to ~4-5 by gen 700, signal hidden stays ~5-6.
+Evolution finds it can survive with minimal base processing but retains signal capacity.
