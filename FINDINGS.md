@@ -157,7 +157,7 @@ MI peaked at 0.669 but the convention collapsed due to neutral drift - fitness b
 
 ---
 
-## Architecture v2 (current)
+## Architecture v2
 
 Five changes address the structural barriers identified in runs 1-3:
 
@@ -167,7 +167,7 @@ Single hidden layer replaced with base hidden (4-64, shared) + signal hidden (2-
 
 ### 2. Six symbols (was 3)
 
-More signal vocabulary enables richer encoding (food, predator proximity, direction) instead of just 3 coarse states. Harder for one symbol to monopolize - driving MI to zero by dominating 100% of 6 symbols is harder than 3.
+More signal vocabulary enables richer encoding (food, zone proximity, direction) instead of just 3 coarse states. Harder for one symbol to monopolize - driving MI to zero by dominating 100% of 6 symbols is harder than 3.
 
 ### 3. Recurrent memory (8 cells)
 
@@ -185,9 +185,61 @@ Siblings (shared parent) get 0.5 bonus, cousins (shared grandparent) get 0.25 bo
 
 - Vision range halved (11.2 -> 5.6 at grid=56), signal range unchanged (22.4). 4:1 ratio forces heavy signal reliance.
 - Neuron cost halved (0.00002 -> 0.00001). Allows complex signal processing without metabolic collapse.
-- Predator speed reduced (round(1.5*scale) -> round(scale)). Gives prey more time to respond to warnings.
+- Predator speed reduced (round(1.5*scale) -> round(scale)). Gave prey more time to respond to warnings (predators later replaced by kill zones).
 - Softmax emission replaces threshold-based. Emit if max(softmax) > 1/6.
 
-### Early observations (1000 gen smoke test)
+### Early observations (1000 gen smoke test, with visible predators)
 
 Brain compression: base hidden shrinks from 12 to ~4.4, signal hidden stays ~5-6. Evolution finds minimal base processing sufficient but retains signal capacity - the split architecture is working as intended. JSD rising steadily, MI climbing. Silence correlation consistently negative (-0.37 to -0.51).
+
+---
+
+## Kill Zones (current)
+
+Visible predators replaced with invisible kill zones. This is the most significant architectural change since the split-head brain - it changes what communication is *for*.
+
+### The problem with visible predators
+
+Across all prior runs with visible predators, prey could see danger directly (brain inputs 0-2 encoded nearest predator dx/dy/distance). Communication was optional - prey could flee on their own visual information. The signal channel never became structurally necessary. MI correlated negatively with fitness across 5 seeds: communication was actively harmful. Prey that signaled paid the metabolic cost (0.002/emission) while giving away their position for no compensating survival advantage.
+
+The fundamental issue: when prey can see the threat, signals are redundant. Evolution found that shutting up and running was strictly better than warning neighbors.
+
+### The kill zone design
+
+Three invisible circular zones (radius 8.0, ~19% grid coverage) drift randomly across the 56x56 grid. Zone speed is 0.5 (probabilistic - moves one cell ~every other tick in a random cardinal direction). Prey inside a zone lose 0.1 energy per tick from each overlapping zone. At starting energy 1.0, a zone kills in 10 ticks.
+
+The critical change: zones are invisible. Brain inputs 0-2 are always zero (dead inputs, preserved for genome layout compatibility). Prey cannot see zones. The only self-signal of danger is energy loss (brain input 35) - but energy drops don't tell you *which direction* to flee.
+
+This creates structural information asymmetry:
+- A prey inside a zone knows only that energy is dropping, not where the zone boundary is
+- Random fleeing has ~50% chance of going deeper into the zone
+- Signals from nearby prey carry dx/dy directional information - the only source of escape direction
+- A prey outside the zone can signal toward it, providing information the endangered prey cannot obtain alone
+
+Communication is no longer optional. It's the difference between directed escape and a coin flip.
+
+### Implementation details
+
+- `KillZone { x: f32, y: f32, radius: f32, speed: f32 }` - f32 position for sub-cell precision
+- Movement: probabilistic random walk, 1 cell per move, `speed` = probability of moving each tick
+- Energy drain: `ZONE_DRAIN_RATE` (0.1) per tick per zone, stacks across overlapping zones
+- Observer metrics use actual zone distance (prey can't see zones, but we measure signal-zone correlation)
+- MI distance bins: `[zone_radius, signal_range, signal_range * 1.375]` - zone radius replaces vision range as the "close danger" boundary
+- Receiver context is binary: in_zone vs not_in_zone (replaces predator_visible vs not_visible)
+- `--pred N` CLI flag repurposed for zone count; `--zone-radius F` and `--zone-speed F` added
+- signal.rs, brain.rs, evolution.rs unchanged - the change is purely in the world model
+
+### Early observations (100 gen smoke test)
+
+Promising results from the initial smoke test after implementation:
+
+| Metric | Value | Interpretation |
+|--------|-------|---------------|
+| Iconicity | positive | Prey signal more inside zones (alarm calling, not silence) |
+| jsd_pred / jsd_no_pred | 6:1 | Receivers respond 6x more strongly inside zones |
+| receiver_fit_corr | 0.76 | Strong positive correlation between hearing signals and surviving |
+| Fitness | ~225 | Healthy population despite invisible danger |
+
+The iconicity flip is the most striking change. With visible predators, iconicity was consistently negative (prey went silent near danger). With invisible zones, iconicity is positive from the start - prey signal *more* when in danger. This makes evolutionary sense: if you can't see the threat, broadcasting your distress is the only way to elicit help from those who might provide directional information.
+
+Long-duration runs (open-ended, seeds 42 and 43) are accumulating data on the VPS to determine whether these early signals develop into sustained communication systems or collapse like prior runs.

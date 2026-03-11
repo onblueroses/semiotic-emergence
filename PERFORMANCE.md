@@ -4,8 +4,8 @@
 
 ### Per-generation phase breakdown (500 ticks/gen)
 
-| Pop | Grid | Pred | Food | eval | metrics | evolve | total/100g | gens/min |
-|-----|------|------|------|------|---------|--------|------------|----------|
+| Pop | Grid | Zones | Food | eval | metrics | evolve | total/100g | gens/min |
+|-----|------|-------|------|------|---------|--------|------------|----------|
 | 384 | 56 | 16 | 200 | 3.43s | 0.20s | 0.46s | 4.31s | 1,392 |
 | 2000 | 128 | 80 | 1040 | 37.04s | 0.71s | 5.58s | 43.55s | 138 |
 | 5000 | 200 | 200 | 2600 | 39.80s | 0.35s | 6.67s | 46.95s/20g | 25.6 |
@@ -43,7 +43,7 @@ That's a **~107x speedup**, not the initially estimated 3x.
 Key changes:
 - CellGrid with Chebyshev ring search replaces O(n) scans for nearest ally, food, prey
 - Food uses swap_remove (O(1)) instead of remove (O(n))
-- Nearest predator cached once per prey per tick (was computed 2-3x)
+- Nearest zone distance cached once per prey per tick (was computed 2-3x)
 - Pre-allocated buffers for shuffled indices and position snapshots
 
 ### Rayon parallelism (tested, marginal at 384 prey)
@@ -229,3 +229,16 @@ grid=56) to increase signal dependency. Signal range unchanged at 22.4 (4:1 rati
 Early benchmarks (1000 gen, seed 42): ~1 sec/gen at 8x scale. Brain compression
 observed: base hidden shrinks from 12 to ~4-5 by gen 700, signal hidden stays ~5-6.
 Evolution finds it can survive with minimal base processing but retains signal capacity.
+
+### Kill zones (replaces visible predators)
+
+Visible predators replaced with invisible kill zones. KillZone struct uses f32 position
+for sub-cell precision. Zones drift via probabilistic random walk (speed 0.5 = moves
+~every other tick). Brain inputs 0-2 are dead (always zero) - prey sense danger only
+through energy loss. Zone drain is 0.1 energy/tick inside zone radius, stacking across
+overlapping zones.
+
+No performance impact from the change: zone movement is simpler than predator chase AI
+(random walk vs. nearest-prey targeting). The per-tick zone distance computation uses
+the existing CellGrid infrastructure. Signal processing and brain forward pass are
+unchanged.

@@ -8,7 +8,7 @@ Every existing theory of signs starts from a world where meaning already exists 
 
 We don't have good theory for the beginning - the moment when the universe contained no meaning and then, for the first time, it did. This moment is empirically inaccessible in biology. It happened deep in evolutionary time and left no fossil record.
 
-This simulation is a telescope pointed at exactly that gap. Hundreds of neural networks on a toroidal grid, under predation pressure, with a 6-symbol broadcast channel. At generation 0, signals are noise. If meaning emerges at all, it emerges here, and we can watch every step of it.
+This simulation is a telescope pointed at exactly that gap. Hundreds of neural networks on a toroidal grid, under invisible lethal pressure, with a 6-symbol broadcast channel. At generation 0, signals are noise. If meaning emerges at all, it emerges here, and we can watch every step of it.
 
 **The question is not "do prey evolve alarm calls?" That's a biology question with known answers. The question is: what does it look like when meaning comes into existence for the first time in a world that previously contained none?**
 
@@ -28,9 +28,9 @@ What meaning does NOT require: consciousness, intention, shared knowledge, conve
 
 Between pure noise and genuine meaning, there is a region with no good name. These are the forms that occupy it:
 
-**Spandrels.** Signals that correlate with world states as a side effect of neural architecture. In a single-layer network, the same weights that drive fleeing happen to drive signaling because the network cannot isolate signal outputs from movement outputs. The split-head architecture (v2) addresses this by routing signals through a dedicated hidden layer, but spandrels can still arise through the shared base layer.
+**Spandrels.** Signals that correlate with world states as a side effect of neural architecture. In a single-layer network, the same weights that drive fleeing happen to drive signaling because the network cannot isolate signal outputs from movement outputs. The split-head architecture (v2) addresses this by routing signals through a dedicated hidden layer, but spandrels can still arise through the shared base layer. With invisible kill zones, the spandrel risk shifts: prey can't see zones, so there's no direct sensory input to leak through shared weights. Any zone-correlated signaling must arise through energy-level encoding or social relay - both more indicative of genuine information processing.
 
-**Ghosts.** Signal-context correlations that exist in the observer's analysis but not in the agents' behavior. When we compute mutual information using predator distance bins, we are the ones creating the meaning. The prey might be encoding something entirely different, or nothing at all. The meaning is in our analysis pipeline, not in the world.
+**Ghosts.** Signal-context correlations that exist in the observer's analysis but not in the agents' behavior. When we compute mutual information using zone distance bins, we are the ones creating the meaning. The prey might be encoding something entirely different, or nothing at all. The meaning is in our analysis pipeline, not in the world.
 
 **Fossils.** Signal patterns that were once functional but have been disconnected from their original context through genetic drift. Vestigial meaning.
 
@@ -42,27 +42,31 @@ Mutual information alone cannot distinguish between these. The receiver-side ins
 
 We inhabit a fundamentally different semiotic space than the prey. We see the entire grid, all positions, all statistics. We compute cross-generational trends. The prey see 36 floating-point numbers.
 
-When we say "symbol 0 means predator-nearby," we are translating from their Umwelt into ours. But what does symbol 0 mean in their Umwelt? Not "predator nearby" - they don't have that concept. It means: a specific activation pattern in a 5491-weight split-head network produced this output given these inputs. That is what it "means" inside the network.
+When we say "symbol 0 means danger-nearby," we are translating from their Umwelt into ours. But what does symbol 0 mean in their Umwelt? Not "danger nearby" - they don't have that concept. It means: a specific activation pattern in a 5491-weight split-head network produced this output given these inputs. That is what it "means" inside the network.
 
-Any claim about what signals mean is a translation, and translation always loses something. We project our categories (predator, distance, danger) onto their signal-context relationships. The actual semiotic structure of the prey's world might be organized along entirely different dimensions.
+Any claim about what signals mean is a translation, and translation always loses something. We project our categories (zone, distance, danger) onto their signal-context relationships. The actual semiotic structure of the prey's world might be organized along entirely different dimensions.
 
-This is why unsupervised analysis matters. Instead of asking "do signals encode predator distance?" (our question, our categories), ask "what structure exists in the relationship between signals, contexts, and responses?" and let the patterns reveal whatever categories the prey have actually evolved.
+This is why unsupervised analysis matters. Instead of asking "do signals encode zone distance?" (our question, our categories), ask "what structure exists in the relationship between signals, contexts, and responses?" and let the patterns reveal whatever categories the prey have actually evolved.
 
-The neural network's 36 inputs include predator proximity, food direction and distance, ally direction and distance, 18 signal channels (6 symbols x strength/direction), 8 recurrent memory cells, and energy level. Signal outputs pass through a dedicated signal hidden layer, giving evolution capacity for independent signal control. Our mutual information metric only checks correlation with one dimension (predator distance). The prey might be signaling about energy level, food proximity, ally density, memory state, the incoming signals themselves, or some nonlinear combination that doesn't decompose into any single variable.
+The neural network's 36 inputs include 3 dead inputs (zones are invisible), food direction and distance, ally direction and distance, 18 signal channels (6 symbols x strength/direction), 8 recurrent memory cells, and energy level. Signal outputs pass through a dedicated signal hidden layer, giving evolution capacity for independent signal control. Our mutual information metric only checks correlation with one dimension (zone distance - an observer metric, not a prey input). The prey might be signaling about energy level, food proximity, ally density, memory state, the incoming signals themselves, or some nonlinear combination that doesn't decompose into any single variable.
+
+The invisibility of kill zones deepens the observer's Umwelt problem. We measure MI against zone distance because *we* can see the zones. The prey cannot. If signals correlate with zone distance, that correlation must be mediated through observable channels - energy loss, received signals from other prey, or memory of recent energy trajectories. This indirection makes any observed MI more meaningful: it can't be a trivial spandrel of shared sensory input.
 
 The earliest forms of meaning might be self-referential: "I'm scared" rather than "there's a predator." Both carry information about the predator, but the semiotic structure is completely different.
 
 ## Silence as the first sign
 
-We discovered that prey go silent near the predator. We initially treated this as a failure. It might be the most important finding.
+With visible predators, we discovered that prey go silent near danger. We initially treated this as a failure. It might be the most important finding of the early runs.
 
 Silence is the simplest possible sign. It requires no coordination between sender and receiver about what specific symbols mean. It requires only that the receiver is calibrated to a baseline rate of signaling. When signals are constant and then stop, the absence carries information.
 
-The evolutionary path to silence is easy. It doesn't require the bootstrap. A sender that stops signaling near the predator needs no complementary receiver mutation - any receiver that notices the decrease in ambient signal strength gets free information. The receiver doesn't need to "understand" the silence. It just needs to notice the statistical anomaly.
+The evolutionary path to silence is easy. It doesn't require the bootstrap. A sender that stops signaling near danger needs no complementary receiver mutation - any receiver that notices the decrease in ambient signal strength gets free information. The receiver doesn't need to "understand" the silence. It just needs to notice the statistical anomaly.
 
 This might be semiotic ground zero - the first meaning that can emerge without solving the bootstrap problem. And if silence is functional (if receivers respond to it), then it creates a platform for more complex signaling. The population has crossed the boundary from noise into structured absence. From structured absence, it's a shorter step to structured presence than from pure noise.
 
-Or silence might be the stable attractor. The simplest meaning-making system in this world might not be alarm calls but their inverse: a background hum that goes quiet when danger arrives. Not "I'm screaming fire" but "I've stopped humming." This is a meaning-making system that nobody has looked for because everyone was looking for alarm calls.
+With invisible kill zones, the dynamics shifted. Early observations show positive iconicity - prey signal *more* inside zones, not less. This makes evolutionary sense: when you can't see the threat, broadcasting distress is more valuable than going silent. Silence was the optimal strategy when prey could see danger directly and had nothing to gain from alerting neighbors. When danger is invisible, the calculus inverts - the endangered prey benefits from eliciting directional information from others, and neighbors benefit from knowing where the danger is.
+
+Whether silence or alarm calling stabilizes as the dominant strategy over long evolutionary runs remains an open question. The answer may depend on whether the population discovers that signals can carry directional information (pointing away from zones) or merely presence information (danger exists somewhere nearby).
 
 ## The semiotic landscape
 
@@ -98,7 +102,7 @@ Some populations might evolve communication that persists for hundreds of genera
 
 **Symmetry.** Systems where the sender benefits as much as the receiver are stickier than altruistic systems. Selfish communication is more durable than generous communication.
 
-**Population structure.** Meaning-making maintained by spatial kin clusters may be more fragile than population-wide convention, because local clusters are vulnerable to demographic fluctuation and predator pressure. But spatial reproduction continuously regenerates kin proximity, which may provide more durable support than artificial grouping.
+**Population structure.** Meaning-making maintained by spatial kin clusters may be more fragile than population-wide convention, because local clusters are vulnerable to demographic fluctuation and zone pressure. But spatial reproduction continuously regenerates kin proximity, which may provide more durable support than artificial grouping.
 
 ## Dark semiotics
 
@@ -120,7 +124,7 @@ The framework points to five measurements the simulation needs:
 
 **1. Receiver response spectrum.** For each signal-context pair, what does the receiver do? Compare against the null (same context, no signal). The difference is the semiotic effect.
 
-**2. Silence detection.** Measure signal rate over time within a run. When does it drop? Does the drop correlate with predator proximity to any prey? Do receivers near the silent zone behave differently?
+**2. Silence detection.** Measure signal rate over time within a run. When does it drop? Does the drop correlate with zone proximity to any prey? Do receivers near the silent area behave differently?
 
 **3. Semiotic trajectory.** Track the signal-context-response mapping over evolutionary time. Not snapshots but the full trajectory. Look for phase-transition signatures.
 
