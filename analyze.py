@@ -29,7 +29,9 @@ CURRENT_COLUMNS = frozenset({
     "iconicity", "mutual_info", "jsd_no_pred", "jsd_pred",
     "silence_corr", "sender_fit_corr", "traj_fluct_ratio",
     "receiver_fit_corr", "response_fit_corr", "silence_onset_jsd",
-    "silence_move_delta", "avg_hidden", "min_hidden", "max_hidden",
+    "silence_move_delta",
+    "avg_base_hidden", "min_base_hidden", "max_base_hidden",
+    "avg_signal_hidden", "min_signal_hidden", "max_signal_hidden",
 })
 
 LEGACY_22_COLUMNS = frozenset({
@@ -55,26 +57,27 @@ COLUMN_RENAMES = {
     "signal_count": "signals_emitted",
 }
 
-KEY_METRICS = ["avg_fitness", "avg_hidden", "mutual_info", "jsd_pred", "silence_corr"]
+KEY_METRICS = ["avg_fitness", "avg_base_hidden", "avg_signal_hidden", "mutual_info", "jsd_pred", "silence_corr"]
 
 COMPARISON_ROWS = [
-    ("Generations",       None,                None,        ","),
-    ("Final avg fitness", "avg_fitness",       "final",     ".1f"),
-    ("Peak avg fitness",  "avg_fitness",       "peak",      ".1f"),
-    ("Sustained fitness", "avg_fitness",       "sustained", ".1f"),
-    ("Final brain size",  "avg_hidden",        "final",     ".1f"),
-    ("Peak brain size",   "avg_hidden",        "peak",      ".1f"),
-    ("Brain peak gen",    "avg_hidden",        "peak_gen",  ","),
-    ("Final MI",          "mutual_info",       "final",     ".4f"),
-    ("Peak MI",           "mutual_info",       "peak",      ".4f"),
-    ("MI peak gen",       "mutual_info",       "peak_gen",  ","),
-    ("Sustained MI",      "mutual_info",       "sustained", ".4f"),
-    ("JSD (pred)",        "jsd_pred",          "final",     ".4f"),
-    ("Silence corr",      "silence_corr",      "final",     ".4f"),
-    ("Silence min",       "silence_corr",      "min",       ".4f"),
-    ("Sender-fitness",    "sender_fit_corr",   "final",     ".4f"),
-    ("Response-fitness",  "response_fit_corr", "final",     ".4f"),
-    ("Max fluct ratio",   "traj_fluct_ratio",  "peak",      ".4f"),
+    ("Generations",       None,                   None,        ","),
+    ("Final avg fitness", "avg_fitness",          "final",     ".1f"),
+    ("Peak avg fitness",  "avg_fitness",          "peak",      ".1f"),
+    ("Sustained fitness", "avg_fitness",          "sustained", ".1f"),
+    ("Final base hidden", "avg_base_hidden",     "final",     ".1f"),
+    ("Peak base hidden",  "avg_base_hidden",     "peak",      ".1f"),
+    ("Final sig hidden",  "avg_signal_hidden",   "final",     ".1f"),
+    ("Peak sig hidden",   "avg_signal_hidden",   "peak",      ".1f"),
+    ("Final MI",          "mutual_info",          "final",     ".4f"),
+    ("Peak MI",           "mutual_info",          "peak",      ".4f"),
+    ("MI peak gen",       "mutual_info",          "peak_gen",  ","),
+    ("Sustained MI",      "mutual_info",          "sustained", ".4f"),
+    ("JSD (pred)",        "jsd_pred",             "final",     ".4f"),
+    ("Silence corr",      "silence_corr",         "final",     ".4f"),
+    ("Silence min",       "silence_corr",         "min",       ".4f"),
+    ("Sender-fitness",    "sender_fit_corr",      "final",     ".4f"),
+    ("Response-fitness",  "response_fit_corr",    "final",     ".4f"),
+    ("Max fluct ratio",   "traj_fluct_ratio",     "peak",      ".4f"),
 ]
 
 
@@ -97,7 +100,7 @@ class Run:
         if "generation" not in cols:
             raise ValueError(f"No 'generation' column in {path}")
 
-        is_legacy = "avg_hidden" not in cols
+        is_legacy = "avg_base_hidden" not in cols and "avg_hidden" not in cols
         if is_legacy and cols != NEAT_COLUMNS:
             print(f"  [warn] Legacy format (no brain columns): {path.name}", file=sys.stderr)
 
@@ -113,6 +116,14 @@ class Run:
             name = COLUMN_RENAMES.get(col, col)
             metrics[name] = raw[:, i]
 
+        # Map v1 single-hidden to split-head columns for display compatibility
+        if "avg_hidden" in metrics and "avg_base_hidden" not in metrics:
+            metrics["avg_base_hidden"] = metrics["avg_hidden"]
+            if "min_hidden" in metrics:
+                metrics["min_base_hidden"] = metrics["min_hidden"]
+            if "max_hidden" in metrics:
+                metrics["max_base_hidden"] = metrics["max_hidden"]
+
         run_name = path.parent.name if path.parent.name not in (".", "") else path.stem
         return Run(name=run_name, generations=generations, metrics=metrics, is_legacy=is_legacy)
 
@@ -127,10 +138,12 @@ class Run:
 @dataclass
 class TrajectoryData:
     generations: np.ndarray
-    matrix: np.ndarray       # (n, 3, 4) symbol x distance bin counts
-    jsd_sym: np.ndarray      # (n, 3)
+    num_symbols: int
+    matrix: np.ndarray       # (n, num_symbols, 4) symbol x distance bin counts
+    jsd_sym: np.ndarray      # (n, num_symbols)
     trajectory_jsd: np.ndarray
-    contrasts: np.ndarray    # (n, 3) [01, 02, 12]
+    contrast_labels: list[str]
+    contrasts: np.ndarray    # (n, num_contrasts)
 
     @staticmethod
     def from_csv(path: Path) -> "TrajectoryData":
@@ -141,15 +154,24 @@ class TrajectoryData:
 
         gen = raw[:, col["generation"]].astype(np.int64)
         n = len(gen)
-        mat = np.zeros((n, 3, 4))
-        for s in range(3):
+
+        # Auto-detect number of symbols from columns
+        num_symbols = 0
+        while f"s{num_symbols}d0" in col:
+            num_symbols += 1
+
+        mat = np.zeros((n, num_symbols, 4))
+        for s in range(num_symbols):
             for d in range(4):
                 mat[:, s, d] = raw[:, col[f"s{s}d{d}"]]
 
-        jsd = np.column_stack([raw[:, col[f"jsd_sym{i}"]] for i in range(3)])
+        jsd = np.column_stack([raw[:, col[f"jsd_sym{i}"]] for i in range(num_symbols)])
         tj = raw[:, col["trajectory_jsd"]]
-        con = np.column_stack([raw[:, col[f"contrast_{p}"]] for p in ("01", "02", "12")])
-        return TrajectoryData(gen, mat, jsd, tj, con)
+
+        # Auto-detect contrast pairs from columns
+        contrast_labels = [c.replace("contrast_", "") for c in header if c.startswith("contrast_")]
+        con = np.column_stack([raw[:, col[f"contrast_{p}"]] for p in contrast_labels]) if contrast_labels else np.zeros((n, 0))
+        return TrajectoryData(gen, num_symbols, mat, jsd, tj, contrast_labels, con)
 
     @property
     def n(self) -> int:
@@ -346,7 +368,8 @@ def classify_segment(run: Run, start: int, end: int) -> str:
 
     labels = {
         "avg_fitness": "high-fitness" if z > 0 else "low-fitness",
-        "avg_hidden": "large-brain" if z > 0 else "small-brain",
+        "avg_base_hidden": "large-base-brain" if z > 0 else "small-base-brain",
+        "avg_signal_hidden": "large-signal-brain" if z > 0 else "small-signal-brain",
         "mutual_info": "high-MI" if z > 0 else "low-MI",
         "jsd_pred": "high-response" if z > 0 else "low-response",
         "silence_corr": "silence-active" if z < 0 else "silence-weak",
@@ -449,13 +472,18 @@ def print_summary(run: Run, stats: dict):
     print(f"    Sustained avg:  {af.get('sustained', 0):.1f}  (last 10%)")
 
     if not run.is_legacy:
-        ah = s.get("avg_hidden", {})
-        print("\n  BRAIN SIZE")
-        print(f"    Final avg:      {ah.get('final', 0):.1f}  "
-              f"[{s.get('min_hidden', {}).get('final', 0):.0f}-{s.get('max_hidden', {}).get('final', 0):.0f}]")
-        print(f"    Peak avg:       {ah.get('peak', 0):.1f}  (gen {ah.get('peak_gen', 0):,})")
-        drain = 0.0008 + ah.get("final", 0) * 0.00002
-        print(f"    Energy drain:   {drain:.5f}/tick  ({drain * 500:.2f} over 500 ticks)")
+        ab = s.get("avg_base_hidden", {})
+        ash = s.get("avg_signal_hidden", {})
+        print("\n  BRAIN SIZE (split-head)")
+        print(f"    Base hidden:    {ab.get('final', 0):.1f}  "
+              f"[{s.get('min_base_hidden', {}).get('final', 0):.0f}-{s.get('max_base_hidden', {}).get('final', 0):.0f}]"
+              f"  (peak {ab.get('peak', 0):.1f} at gen {ab.get('peak_gen', 0):,})")
+        print(f"    Signal hidden:  {ash.get('final', 0):.1f}  "
+              f"[{s.get('min_signal_hidden', {}).get('final', 0):.0f}-{s.get('max_signal_hidden', {}).get('final', 0):.0f}]"
+              f"  (peak {ash.get('peak', 0):.1f} at gen {ash.get('peak_gen', 0):,})")
+        total = ab.get("final", 0) + ash.get("final", 0)
+        drain = 0.0008 + total * 0.00001
+        print(f"    Total neurons:  {total:.1f}  drain={drain:.5f}/tick  ({drain * 500:.2f} over 500 ticks)")
 
     mi = s.get("mutual_info", {})
     print("\n  MUTUAL INFORMATION")
@@ -523,18 +551,19 @@ def print_lag_correlations(run: Run):
     max_lag = min(200, run.n // 10)
     if max_lag < 10:
         return
-    result = lag_correlation(run, "avg_hidden", "mutual_info", max_lag)
-    if result is None:
-        return
-    lag, r = result
     print("\n  LAG CORRELATIONS")
-    print(f"    brain -> MI: strongest r={r:.3f} at lag={lag:+d} gens", end="")
-    if lag > 0:
-        print(f"  (brain LEADS MI by ~{lag} gens)")
-    elif lag < 0:
-        print(f"  (MI LEADS brain by ~{-lag} gens)")
-    else:
-        print("  (simultaneous)")
+    for brain_metric, label in [("avg_base_hidden", "base brain"), ("avg_signal_hidden", "sig brain")]:
+        result = lag_correlation(run, brain_metric, "mutual_info", max_lag)
+        if result is None:
+            continue
+        lag, r = result
+        print(f"    {label} -> MI: strongest r={r:.3f} at lag={lag:+d} gens", end="")
+        if lag > 0:
+            print(f"  ({label} LEADS MI by ~{lag} gens)")
+        elif lag < 0:
+            print(f"  (MI LEADS {label} by ~{-lag} gens)")
+        else:
+            print("  (simultaneous)")
 
 
 def compare_runs(runs: list[Run], stats_list: list[dict]):
@@ -620,21 +649,28 @@ def print_divergence(path: Path):
 
 def print_trajectory(traj: TrajectoryData):
     n = traj.n
+    ns = traj.num_symbols
     print(f"\n{'=' * 60}")
-    print(f"  TRAJECTORY ANALYSIS  ({n:,} generations)")
+    print(f"  TRAJECTORY ANALYSIS  ({n:,} generations, {ns} symbols)")
     print(f"{'=' * 60}")
 
     tail_start = max(0, int(n * 0.9))
 
-    # Symbol contrast
-    print("\n  SYMBOL CONTRAST (pairwise JSD)")
-    for i, label in enumerate(["01", "02", "12"]):
-        col = traj.contrasts[:, i]
-        nz = col[col != 0]
-        if len(nz):
+    # Symbol contrast - show top contrasts by tail average
+    if traj.contrasts.shape[1] > 0:
+        print("\n  SYMBOL CONTRAST (pairwise JSD, top 6 by tail avg)")
+        tail_avgs = []
+        for i, label in enumerate(traj.contrast_labels):
+            col = traj.contrasts[:, i]
             tail_nz = col[tail_start:][col[tail_start:] != 0]
             tail_avg = float(np.mean(tail_nz)) if len(tail_nz) else 0.0
-            print(f"    contrast_{label}: avg {np.mean(nz):.4f}, tail avg {tail_avg:.4f}, max {np.max(nz):.4f}")
+            tail_avgs.append((tail_avg, i, label))
+        tail_avgs.sort(reverse=True)
+        for tail_avg, i, label in tail_avgs[:6]:
+            col = traj.contrasts[:, i]
+            nz = col[col != 0]
+            if len(nz):
+                print(f"    contrast_{label}: avg {np.mean(nz):.4f}, tail avg {tail_avg:.4f}, max {np.max(nz):.4f}")
 
     # Top trajectory JSD spikes
     top_idx = np.argsort(traj.trajectory_jsd)[-10:][::-1]
@@ -645,7 +681,7 @@ def print_trajectory(traj: TrajectoryData):
             print(f"    gen {traj.generations[idx]:>7,}: {jsd:.4f}")
 
     # Symbol usage evolution
-    totals = traj.matrix.sum(axis=2)  # (n, 3)
+    totals = traj.matrix.sum(axis=2)  # (n, ns)
     checkpoints = [0, n // 4, n // 2, 3 * n // 4, n - 1]
     print("\n  SYMBOL USAGE EVOLUTION")
     for idx in checkpoints:
@@ -653,13 +689,15 @@ def print_trajectory(traj: TrajectoryData):
         t = totals[idx]
         total = t.sum() or 1
         pcts = 100 * t / total
-        print(f"    gen {gen:>7,}: sym0={pcts[0]:5.1f}%  sym1={pcts[1]:5.1f}%  sym2={pcts[2]:5.1f}%")
+        parts = "  ".join(f"s{s}={pcts[s]:5.1f}%" for s in range(ns))
+        print(f"    gen {gen:>7,}: {parts}")
 
     # Herfindahl index
     total_per_gen = totals.sum(axis=1, keepdims=True)
     shares = totals / np.maximum(total_per_gen, 1)
     hhi = (shares ** 2).sum(axis=1)
-    print("\n  SYMBOL CONCENTRATION (Herfindahl: 0.33=equal, 1.0=monopoly)")
+    equal_hhi = 1.0 / ns
+    print(f"\n  SYMBOL CONCENTRATION (Herfindahl: {equal_hhi:.2f}=equal, 1.0=monopoly)")
     for idx in checkpoints:
         print(f"    gen {traj.generations[idx]:>7,}: HHI={hhi[idx]:.3f}")
 
@@ -668,7 +706,7 @@ def print_trajectory(traj: TrajectoryData):
     tail_near = near[tail_start:].sum(axis=0)
     total_near = tail_near.sum() or 1
     print("\n  PREDATOR-PROXIMAL SYMBOLS (d0 = closest distance bin, last 10%)")
-    for s in range(3):
+    for s in range(ns):
         print(f"    sym{s}: {100 * tail_near[s] / total_near:.1f}%")
 
 
@@ -741,13 +779,16 @@ def plot_run(run: Run, rolling: dict, cps: dict, output_dir: Path, traj: Traject
 
     if not run.is_legacy:
         ax1b = ax1.twinx()
-        hid = run.get("avg_hidden")
-        if hid is not None:
-            ax1b.plot(gens, hid, alpha=0.3, color="#4CAF50", linewidth=0.5)
-            rm = rolling.get("avg_hidden", {}).get("mean")
-            if rm is not None:
-                ax1b.plot(gens, rm, color="#4CAF50", linewidth=1.5, label="avg_hidden")
-            ax1b.set_ylabel("avg_hidden", color="#4CAF50")
+        for brain_m, color, label in [("avg_base_hidden", "#4CAF50", "base_hidden"),
+                                       ("avg_signal_hidden", "#8BC34A", "sig_hidden")]:
+            hid = run.get(brain_m)
+            if hid is not None:
+                ax1b.plot(gens, hid, alpha=0.3, color=color, linewidth=0.5)
+                rm = rolling.get(brain_m, {}).get("mean")
+                if rm is not None:
+                    ax1b.plot(gens, rm, color=color, linewidth=1.5, label=label)
+        ax1b.set_ylabel("hidden size", color="#4CAF50")
+        ax1b.legend(fontsize=7, loc="upper left")
 
     # Panel 2: Signal metrics
     ax2 = axes[0, 1]
@@ -828,8 +869,8 @@ def plot_counterfactual(standard: Run, control: Run, result: dict, output_dir: P
 
 def plot_comparison(runs: list[Run], output_dir: Path):
     plt = _import_plt()
-    metrics = [("avg_fitness", "Fitness"), ("avg_hidden", "Brain Size"),
-               ("mutual_info", "Mutual Info"), ("jsd_pred", "JSD (pred)")]
+    metrics = [("avg_fitness", "Fitness"), ("avg_base_hidden", "Base Hidden"),
+               ("avg_signal_hidden", "Signal Hidden"), ("mutual_info", "Mutual Info")]
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     fig.suptitle("Run Comparison", fontsize=14)
 
