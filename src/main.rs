@@ -40,6 +40,7 @@ struct SimParams {
     no_signals: bool,
     patch_ratio: f32,
     kin_bonus: f32,
+    metrics_interval: usize,
 }
 
 impl SimParams {
@@ -52,6 +53,7 @@ impl SimParams {
         let no_signals = args.iter().any(|a| a == "--no-signals");
         let patch_ratio = parse_flag(args, "--patch-ratio").unwrap_or(0.5);
         let kin_bonus = parse_flag(args, "--kin-bonus").unwrap_or(0.1);
+        let metrics_interval = parse_flag(args, "--metrics-interval").unwrap_or(1);
         let zone_radius = parse_flag(args, "--zone-radius").unwrap_or(8.0);
         let zone_speed = parse_flag(args, "--zone-speed").unwrap_or(0.5);
 
@@ -83,6 +85,7 @@ impl SimParams {
             no_signals,
             patch_ratio,
             kin_bonus,
+            metrics_interval: metrics_interval.max(1),
         }
     }
 }
@@ -509,50 +512,78 @@ fn run_seed(
         let mut scored: Vec<(usize, f32)> =
             fitness.iter().enumerate().map(|(i, &f)| (i, f)).collect();
 
-        // Use original fitness (without kin bonus) for metrics to avoid confounding
-        let ev_for_metrics = EvalResult {
-            fitness: ev.fitness,
-            signal_events: ev.signal_events,
-            total_signals: ev.total_signals,
-            ticks_in_zone: ev.ticks_in_zone,
-            prey_ticks: ev.prey_ticks,
-            receiver_counts: ev.receiver_counts,
-            signals_per_tick: ev.signals_per_tick,
-            alive_per_tick: ev.alive_per_tick,
-            min_zone_dist: ev.min_zone_dist,
-            signal_rate_per_prey: ev.signal_rate_per_prey,
-            actions_with_signal: ev.actions_with_signal,
-            actions_without_signal: ev.actions_without_signal,
-            silence_onset_actions: ev.silence_onset_actions,
-        };
+        let is_metrics_gen = gen % params.metrics_interval == 0 || gen == generations - 1;
 
-        let gm = compute_gen_metrics(
-            &ev_for_metrics,
-            &population,
-            &mut prev_norm_matrix,
-            &mut traj_jsd_history,
-            params,
-        );
+        if is_metrics_gen {
+            // Use original fitness (without kin bonus) for metrics to avoid confounding
+            let ev_for_metrics = EvalResult {
+                fitness: ev.fitness,
+                signal_events: ev.signal_events,
+                total_signals: ev.total_signals,
+                ticks_in_zone: ev.ticks_in_zone,
+                prey_ticks: ev.prey_ticks,
+                receiver_counts: ev.receiver_counts,
+                signals_per_tick: ev.signals_per_tick,
+                alive_per_tick: ev.alive_per_tick,
+                min_zone_dist: ev.min_zone_dist,
+                signal_rate_per_prey: ev.signal_rate_per_prey,
+                actions_with_signal: ev.actions_with_signal,
+                actions_without_signal: ev.actions_without_signal,
+                silence_onset_actions: ev.silence_onset_actions,
+            };
 
-        if let Some(ref mut f) = csv {
-            gm.write_csv(f, gen)?;
-        }
-        if let Some(ref mut f) = traj_csv {
-            gm.write_trajectory(f, gen)?;
-        }
-        if let Some(ref mut f) = input_mi_csv {
-            gm.write_input_mi(f, gen)?;
-        }
-        if write_csv && (gen.is_multiple_of(10) || gen == generations - 1) {
-            gm.print_log(gen);
-        }
+            let gm = compute_gen_metrics(
+                &ev_for_metrics,
+                &population,
+                &mut prev_norm_matrix,
+                &mut traj_jsd_history,
+                params,
+            );
 
-        last_result = RunResult {
-            final_matrix: gm.gen_matrix,
-            avg_fitness: gm.avg_fitness,
-            max_fitness: gm.max_fitness,
-            mutual_info: gm.mutual_info,
-        };
+            if let Some(ref mut f) = csv {
+                gm.write_csv(f, gen)?;
+            }
+            if let Some(ref mut f) = traj_csv {
+                gm.write_trajectory(f, gen)?;
+            }
+            if let Some(ref mut f) = input_mi_csv {
+                gm.write_input_mi(f, gen)?;
+            }
+            if write_csv && (gen.is_multiple_of(10) || gen == generations - 1) {
+                gm.print_log(gen);
+            }
+
+            last_result = RunResult {
+                final_matrix: gm.gen_matrix,
+                avg_fitness: gm.avg_fitness,
+                max_fitness: gm.max_fitness,
+                mutual_info: gm.mutual_info,
+            };
+        } else if write_csv && gen.is_multiple_of(10) {
+            // Lightweight progress log on non-metrics gens
+            let avg = ev.fitness.iter().sum::<f32>() / ev.fitness.len() as f32;
+            let max = ev.fitness.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+            let base_sizes: Vec<usize> = population
+                .iter()
+                .map(|a| a.brain.base_hidden_size)
+                .collect();
+            let avg_base = base_sizes.iter().sum::<usize>() as f32 / base_sizes.len() as f32;
+            let min_base = base_sizes.iter().copied().min().unwrap_or(0);
+            let max_base = base_sizes.iter().copied().max().unwrap_or(0);
+            let sig_sizes: Vec<usize> = population
+                .iter()
+                .map(|a| a.brain.signal_hidden_size)
+                .collect();
+            let avg_sig = sig_sizes.iter().sum::<usize>() as f32 / sig_sizes.len() as f32;
+            let min_sig = sig_sizes.iter().copied().min().unwrap_or(0);
+            let max_sig = sig_sizes.iter().copied().max().unwrap_or(0);
+            println!(
+                "gen {:>4} | avg {:>7.1} | max {:>7.1} | signals {} | base {:.1} [{}-{}] | sig {:.1} [{}-{}]",
+                gen, avg, max, ev.total_signals,
+                avg_base, min_base, max_base,
+                avg_sig, min_sig, max_sig
+            );
+        }
 
         population = evolution::evolve_spatial(
             &population,
