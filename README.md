@@ -8,13 +8,13 @@ Evolutionary simulation exploring whether a communication system can emerge from
 
 384 prey on a 56x56 toroidal grid with 3 invisible kill zones and 100 food sources. Each prey has a split-head neural network with two independently evolvable hidden layers: a base layer (4-64 neurons) shared across all outputs, and a dedicated signal layer (2-32 neurons) for communication. The brain takes 36 inputs and produces movement decisions, signal emissions, and memory updates.
 
-Kill zones are invisible circular regions (radius 8.0) that drift randomly across the grid (speed 0.5). Prey inside a zone lose 0.1 energy per tick - lethal in 10 ticks. Prey cannot see zones directly; they sense danger only through energy loss. Signals from other prey carry directional information (dx/dy), providing the only way to know which direction to flee. This creates structural information asymmetry: communication is the difference between random fleeing (~50% chance of going deeper) and directed escape.
+Kill zones are invisible circular regions (radius 8.0) that drift randomly across the grid (speed 0.5). Prey inside a zone lose 0.02 energy per tick - lethal in 50 ticks. Prey cannot see zones directly; they sense danger only through energy loss. Signals from other prey carry directional information (dx/dy), providing the only way to know which direction to flee. This creates structural information asymmetry: communication is the difference between random fleeing (~50% chance of going deeper) and directed escape.
 
 Vision range is ~5.6 cells, signal range ~22.4 cells. The 4:1 ratio is the core design choice: signals reach far beyond sight, making social information the primary source of spatial awareness.
 
 Key mechanics:
 
-- **Invisible kill zones** - 3 zones (radius 8.0, speed 0.5) drain 0.1 energy/tick. Prey inputs 0-2 are dead (always zero). Energy input (slot 35) is the only self-signal of danger
+- **Invisible kill zones** - 3 zones (radius 8.0, speed 0.5) drain 0.02 energy/tick. Prey inputs 0-2 are dead (always zero). Energy input (slot 35) is the only self-signal of danger
 - **Split-head architecture** - base hidden layer feeds movement and memory; signal hidden layer gives evolution independent control over communication vs. locomotion
 - **Recurrent memory** - 8 memory cells updated each tick via EMA, fed back as inputs, enabling temporal reasoning
 - **Cooperative food patches** - 50% of food requires 2+ nearby prey to harvest, rewarding spatial coordination
@@ -73,4 +73,4 @@ See [FINDINGS.md](FINDINGS.md) for full analysis across runs.
 
 **Architecture v2**: Split-head brain separates signal processing from movement, 6 symbols instead of 3, recurrent memory, cooperative food patches, and kin fitness. Designed to address the coupling problem and convention fragility observed in run 3.
 
-**Kill zones** (current): Visible predators replaced with invisible kill zones. Zones are circular regions (radius 8.0) that drift randomly and drain 0.1 energy/tick - lethal in 10 ticks. Prey cannot see zones; brain inputs 0-2 are dead (always zero). Energy loss is the only self-signal of danger. This makes communication structurally necessary: a prey inside a zone knows only that energy is dropping, not which direction to flee. Signals from nearby prey carry directional information that random movement cannot provide. Early smoke tests show positive iconicity (prey signal more inside zones), receiver JSD 6x higher inside zones than outside, and receiver-fitness correlation of 0.76.
+**Kill zones** (current): Visible predators replaced with invisible kill zones. Zones are circular regions (radius 8.0) that drift randomly and drain 0.02 energy/tick - lethal in 50 ticks. Prey cannot see zones; brain inputs 0-2 are dead (always zero). Energy loss is the only self-signal of danger. This makes communication structurally necessary: a prey inside a zone knows only that energy is dropping, not which direction to flee. Signals from nearby prey carry directional information that random movement cannot provide. Early smoke tests show positive iconicity (prey signal more inside zones), receiver JSD 6x higher inside zones than outside, and receiver-fitness correlation of 0.76.

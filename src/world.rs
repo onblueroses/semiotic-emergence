@@ -199,8 +199,8 @@ pub struct Prey {
     pub had_signal_prev_tick: bool,
 }
 
-/// Energy drain per tick when inside a kill zone. 0.1 * 10 ticks = 1.0 = death.
-const ZONE_DRAIN_RATE: f32 = 0.1;
+/// Energy drain per tick when inside a kill zone. 0.02 * 50 ticks = 1.0 = death.
+const ZONE_DRAIN_RATE: f32 = 0.02;
 
 #[derive(Clone, Debug)]
 pub struct KillZone {
@@ -241,6 +241,8 @@ pub struct World {
     pub receiver_counts: [[[u32; 5]; 2]; 1 + NUM_SYMBOLS],
     /// Signal count per tick (for silence correlation).
     pub signals_per_tick: Vec<u32>,
+    /// Alive prey count per tick (for normalizing silence correlation).
+    pub alive_per_tick: Vec<u32>,
     /// Minimum zone-edge distance to alive prey per tick (observer metric).
     pub min_zone_dist_per_tick: Vec<f32>,
     /// When true, signal emission is suppressed (counterfactual mode).
@@ -334,6 +336,7 @@ impl World {
             total_prey_ticks: 0,
             receiver_counts: [[[0u32; 5]; 2]; 1 + NUM_SYMBOLS],
             signals_per_tick: Vec::new(),
+            alive_per_tick: Vec::new(),
             min_zone_dist_per_tick: Vec::new(),
             no_signals,
             prey_grid: CellGrid::new(grid_size),
@@ -516,6 +519,8 @@ impl World {
 
         self.signals_per_tick
             .push(self.signals_emitted - signals_before);
+        self.alive_per_tick
+            .push(self.prey.iter().filter(|p| p.alive).count() as u32);
     }
 
     /// Build input vector using spatial grid for ally/food lookup.
@@ -815,6 +820,7 @@ mod tests {
             total_prey_ticks: 0,
             receiver_counts: [[[0u32; 5]; 2]; 1 + NUM_SYMBOLS],
             signals_per_tick: Vec::new(),
+            alive_per_tick: Vec::new(),
             min_zone_dist_per_tick: Vec::new(),
             no_signals: true,
             prey_grid: CellGrid::new(TEST_GRID),
@@ -943,7 +949,7 @@ mod tests {
     #[test]
     fn zone_drain_kills_at_zero() {
         let mut world = minimal_world(&[(5, 5)], (5.0, 5.0));
-        world.prey[0].energy = 0.05; // Less than ZONE_DRAIN_RATE
+        world.prey[0].energy = 0.01; // Less than ZONE_DRAIN_RATE
 
         world.zone_drain();
 

@@ -206,7 +206,7 @@ The fundamental issue: when prey can see the threat, signals are redundant. Evol
 
 ### The kill zone design
 
-Three invisible circular zones (radius 8.0, ~19% grid coverage) drift randomly across the 56x56 grid. Zone speed is 0.5 (probabilistic - moves one cell ~every other tick in a random cardinal direction). Prey inside a zone lose 0.1 energy per tick from each overlapping zone. At starting energy 1.0, a zone kills in 10 ticks.
+Three invisible circular zones (radius 8.0, ~19% grid coverage) drift randomly across the 56x56 grid. Zone speed is 0.5 (probabilistic - moves one cell ~every other tick in a random cardinal direction). Prey inside a zone lose 0.02 energy per tick from each overlapping zone. At starting energy 1.0, a zone kills in 50 ticks.
 
 The critical change: zones are invisible. Brain inputs 0-2 are always zero (dead inputs, preserved for genome layout compatibility). Prey cannot see zones. The only self-signal of danger is energy loss (brain input 35) - but energy drops don't tell you *which direction* to flee.
 
@@ -222,7 +222,7 @@ Communication is no longer optional. It's the difference between directed escape
 
 - `KillZone { x: f32, y: f32, radius: f32, speed: f32 }` - f32 position for sub-cell precision
 - Movement: probabilistic random walk, 1 cell per move, `speed` = probability of moving each tick
-- Energy drain: `ZONE_DRAIN_RATE` (0.1) per tick per zone, stacks across overlapping zones
+- Energy drain: `ZONE_DRAIN_RATE` (0.02) per tick per zone, stacks across overlapping zones
 - Observer metrics use actual zone distance (prey can't see zones, but we measure signal-zone correlation)
 - MI distance bins: `[zone_radius, signal_range, signal_range * 1.375]` - zone radius replaces vision range as the "close danger" boundary
 - Receiver context is binary: in_zone vs not_in_zone (replaces predator_visible vs not_visible)
@@ -243,3 +243,38 @@ Promising results from the initial smoke test after implementation:
 The iconicity flip is the most striking change. With visible predators, iconicity was consistently negative (prey went silent near danger). With invisible zones, iconicity is positive from the start - prey signal *more* when in danger. This makes evolutionary sense: if you can't see the threat, broadcasting your distress is the only way to elicit help from those who might provide directional information.
 
 Long-duration runs (open-ended, seeds 42 and 43) are accumulating data on the VPS to determine whether these early signals develop into sustained communication systems or collapse like prior runs.
+
+---
+
+## Parameter Changes (Post Kill-Zone Runs)
+
+Three structural issues identified from the initial kill-zone runs (seeds 42/43, ~900 gens):
+
+### 1. Dead silence vs behavioral silence
+
+The silence_corr metric (Pearson between signals_per_tick and min_zone_dist) showed strong negative values (-0.58 to -0.90), suggesting prey go silent near zones. However, this is a mortality artifact: zones kill in 10 ticks, dead prey emit no signals, so signal volume drops when zones are nearby because there are fewer living prey - not because survivors choose silence.
+
+**Fix:** Normalize signals_per_tick by alive_per_tick before computing the correlation. This isolates behavioral silence (living prey choosing to signal less) from dead silence (fewer prey alive to signal).
+
+### 2. Zone lethality too fast for communication
+
+At 0.1 energy/tick drain, zones kill in 10 ticks. A prey at the zone boundary (radius 8.0) needs ~8 ticks to walk out even knowing the right direction. The window between receiving a useful signal and dying is 2-3 ticks - too short for a meaningful signal-response-escape loop to provide fitness advantage.
+
+**Fix:** ZONE_DRAIN_RATE reduced from 0.1 to 0.02 (50-tick kill). Prey now have 30-40 useful ticks to receive directional signals and escape. Communication becomes structurally valuable because there's time to act on information.
+
+### 3. Brain size collapse to minimum
+
+Both seeds showed avg base hidden = 4.2 (floor = 4), avg signal hidden = 2.2. With 4 shared base neurons, the split-head architecture has no capacity for independent signal control. Positive iconicity at ~900 gens is likely a spandrel (energy-drop → signal output through shared neurons), not intentional alarm calling. MI near zero (0.004) confirms symbols carry no zone information.
+
+Prior runs at every neuron cost tested (0.0002, 0.00002, 0.00001) showed the same collapse. The cost doesn't matter - what matters is that larger brains provide no fitness advantage when communication hasn't emerged yet.
+
+**Fix:** neuron_cost set to 0.0 (free brains). Under neutral drift with 5% hidden-size mutation rate, brain sizes will explore the full range [4-64] base / [2-32] signal. This gives the split-head architecture actual capacity, and if even a small fitness gradient emerges for useful signaling, evolution can exploit existing capacity instead of needing to build it from scratch.
+
+### Expected effects
+
+- Fitness should increase (longer survival in zones, no brain metabolic cost)
+- Signal volume may change unpredictably (longer-lived prey emit more; but no metabolic incentive to signal)
+- silence_corr values will change magnitude (normalized metric, different denominator)
+- Brain sizes should drift above minimum over hundreds of generations
+- MI may rise if brains develop enough capacity for zone-correlated signaling
+- The critical test: does response_fit_corr ever leave zero? That's the real signal of communication.
