@@ -1,5 +1,3 @@
-use rayon::prelude::*;
-
 use crate::brain::INPUTS;
 use crate::signal::NUM_SYMBOLS;
 use crate::world::SignalEvent;
@@ -258,7 +256,6 @@ pub fn compute_input_mi(signal_events: &[SignalEvent]) -> [f32; INPUTS] {
     }
 
     let mis: Vec<(usize, f32)> = (0..INPUTS)
-        .into_par_iter()
         .map(|dim| {
             let mut vals: Vec<f32> = signal_events.iter().map(|e| e.inputs[dim]).collect();
             vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
