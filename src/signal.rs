@@ -43,7 +43,7 @@ pub fn receive(
     strengths
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct ReceivedSignal {
     pub strength: f32,
     pub dx: f32,
@@ -60,6 +60,7 @@ pub fn receive_detailed(
     signal_range: f32,
 ) -> [ReceivedSignal; NUM_SYMBOLS] {
     let grid_size_i = grid_size as i32;
+    let range_sq = signal_range * signal_range;
     let mut result = std::array::from_fn::<_, NUM_SYMBOLS, _>(|_| ReceivedSignal {
         strength: 0.0,
         dx: 0.0,
@@ -71,10 +72,11 @@ pub fn receive_detailed(
         }
         let dx = wrap_delta(rx, sig.x, grid_size_i) as f32;
         let dy = wrap_delta(ry, sig.y, grid_size_i) as f32;
-        let dist = (dx * dx + dy * dy).sqrt();
-        if dist > signal_range {
+        let dist_sq = dx * dx + dy * dy;
+        if dist_sq > range_sq {
             continue;
         }
+        let dist = dist_sq.sqrt();
         let strength = 1.0 - dist / signal_range;
         let sym = sig.symbol as usize;
         if sym < NUM_SYMBOLS && strength > result[sym].strength {

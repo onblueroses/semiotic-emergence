@@ -1,3 +1,5 @@
+use rayon::prelude::*;
+
 use crate::brain::INPUTS;
 use crate::signal::NUM_SYMBOLS;
 use crate::world::SignalEvent;
@@ -251,33 +253,40 @@ fn heap_permute(
 /// MI between each symbol and each input dimension at emission time.
 /// Uses quartile-based binning (scale-invariant).
 pub fn compute_input_mi(signal_events: &[SignalEvent]) -> [f32; INPUTS] {
-    let mut result = [0.0_f32; INPUTS];
     if signal_events.len() < 20 {
-        return result;
+        return [0.0_f32; INPUTS];
     }
 
-    for (dim, result_mi) in result.iter_mut().enumerate() {
-        let mut vals: Vec<f32> = signal_events.iter().map(|e| e.inputs[dim]).collect();
-        vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let q1 = vals[vals.len() / 4];
-        let q2 = vals[vals.len() / 2];
-        let q3 = vals[3 * vals.len() / 4];
+    let mis: Vec<(usize, f32)> = (0..INPUTS)
+        .into_par_iter()
+        .map(|dim| {
+            let mut vals: Vec<f32> = signal_events.iter().map(|e| e.inputs[dim]).collect();
+            vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let q1 = vals[vals.len() / 4];
+            let q2 = vals[vals.len() / 2];
+            let q3 = vals[3 * vals.len() / 4];
 
-        let mut counts = [[0u32; 4]; NUM_SYMBOLS];
-        for e in signal_events {
-            let sym = (e.symbol as usize).min(NUM_SYMBOLS - 1);
-            let bin = if e.inputs[dim] <= q1 {
-                0
-            } else if e.inputs[dim] <= q2 {
-                1
-            } else if e.inputs[dim] <= q3 {
-                2
-            } else {
-                3
-            };
-            counts[sym][bin] += 1;
-        }
-        *result_mi = mi_from_contingency(&counts);
+            let mut counts = [[0u32; 4]; NUM_SYMBOLS];
+            for e in signal_events {
+                let sym = (e.symbol as usize).min(NUM_SYMBOLS - 1);
+                let bin = if e.inputs[dim] <= q1 {
+                    0
+                } else if e.inputs[dim] <= q2 {
+                    1
+                } else if e.inputs[dim] <= q3 {
+                    2
+                } else {
+                    3
+                };
+                counts[sym][bin] += 1;
+            }
+            (dim, mi_from_contingency(&counts))
+        })
+        .collect();
+
+    let mut result = [0.0_f32; INPUTS];
+    for (dim, mi) in mis {
+        result[dim] = mi;
     }
     result
 }

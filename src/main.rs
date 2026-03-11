@@ -253,22 +253,24 @@ fn evaluate_generation(
         .map(|p| p.ticks_alive as f32 + p.food_eaten as f32 * 10.0)
         .collect();
 
-    let signal_rate_per_prey: Vec<f32> = world
-        .prey
-        .iter()
-        .enumerate()
-        .map(|(idx, prey)| {
-            if prey.ticks_alive == 0 {
-                return 0.0;
-            }
-            let count = world
-                .signal_events
-                .iter()
-                .filter(|e| e.emitter_idx == idx)
-                .count() as f32;
-            count / prey.ticks_alive as f32
-        })
-        .collect();
+    let signal_rate_per_prey: Vec<f32> = {
+        let mut emit_counts = vec![0u32; world.prey.len()];
+        for e in &world.signal_events {
+            emit_counts[e.emitter_idx] += 1;
+        }
+        world
+            .prey
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                if p.ticks_alive == 0 {
+                    0.0
+                } else {
+                    emit_counts[i] as f32 / p.ticks_alive as f32
+                }
+            })
+            .collect()
+    };
 
     let actions_with_signal: Vec<[[u32; 5]; 2]> =
         world.prey.iter().map(|p| p.actions_with_signal).collect();
