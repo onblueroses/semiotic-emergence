@@ -1,6 +1,11 @@
 use rand::Rng;
 
-use crate::brain::{Brain, INPUTS, MAX_GENOME_LEN, MAX_HIDDEN, MIN_HIDDEN, OUTPUTS};
+use crate::brain::{
+    Brain, INPUTS, MAX_BASE_HIDDEN, MAX_GENOME_LEN, MAX_SIGNAL_HIDDEN, MEMORY_OUTPUTS,
+    MIN_BASE_HIDDEN, MIN_SIGNAL_HIDDEN, MOVEMENT_OUTPUTS, SEG_BASE_BIAS, SEG_BASE_MEM,
+    SEG_BASE_MOVE, SEG_BASE_SIGHID, SEG_INPUT_BASE, SEG_MEM_BIAS, SEG_MOVE_BIAS, SEG_SIGHID_BIAS,
+    SEG_SIGHID_SIGOUT, SEG_SIGOUT_BIAS, SIGNAL_OUTPUTS,
+};
 use crate::world::wrap_dist_sq;
 
 #[derive(Clone, Debug)]
@@ -8,6 +13,8 @@ pub struct Agent {
     pub brain: Brain,
     pub x: i32,
     pub y: i32,
+    pub parent_indices: [Option<usize>; 2],
+    pub grandparent_indices: [Option<usize>; 4],
 }
 
 const OFFSPRING_JITTER: i32 = 1;
@@ -16,12 +23,36 @@ const HIDDEN_SIZE_MUTATION_RATE: f32 = 0.05;
 /// Keeps dormant weights pre-seeded for when `hidden_size` grows.
 const MUTATION_HEADROOM: usize = 4;
 
-fn tournament_select<'a>(
-    population: &'a [Agent],
+/// Relatedness between two agents based on shared ancestry.
+/// Returns 0.5 for siblings (share a parent), 0.25 for cousins (share a grandparent).
+pub fn relatedness(a: &Agent, b: &Agent) -> f32 {
+    for &pa in &a.parent_indices {
+        if let Some(pa) = pa {
+            for &pb in &b.parent_indices {
+                if pb == Some(pa) {
+                    return 0.5;
+                }
+            }
+        }
+    }
+    for &ga in &a.grandparent_indices {
+        if let Some(ga) = ga {
+            for &gb in &b.grandparent_indices {
+                if gb == Some(ga) {
+                    return 0.25;
+                }
+            }
+        }
+    }
+    0.0
+}
+
+fn tournament_select(
+    _population: &[Agent],
     scored: &[(usize, f32)],
     tournament_size: usize,
     rng: &mut impl Rng,
-) -> &'a Agent {
+) -> usize {
     let mut best_idx = rng.gen_range(0..scored.len());
     let mut best_fit = scored[best_idx].1;
     for _ in 1..tournament_size {
@@ -31,12 +62,12 @@ fn tournament_select<'a>(
             best_fit = scored[idx].1;
         }
     }
-    &population[scored[best_idx].0]
+    scored[best_idx].0
 }
 
 #[allow(clippy::too_many_arguments)]
-fn local_tournament_select<'a>(
-    population: &'a [Agent],
+fn local_tournament_select(
+    population: &[Agent],
     scored: &[(usize, f32)],
     center_x: i32,
     center_y: i32,
@@ -44,7 +75,7 @@ fn local_tournament_select<'a>(
     tournament_size: usize,
     grid_size: i32,
     rng: &mut impl Rng,
-) -> Option<&'a Agent> {
+) -> Option<usize> {
     let radius_sq = radius * radius;
     let nearby: Vec<usize> = scored
         .iter()
@@ -69,22 +100,28 @@ fn local_tournament_select<'a>(
             best_fit = scored[idx].1;
         }
     }
-    Some(&population[scored[best_idx].0])
+    Some(scored[best_idx].0)
 }
 
 pub fn crossover(a: &Brain, b: &Brain, rng: &mut impl Rng) -> Brain {
     let point = rng.gen_range(1..MAX_GENOME_LEN);
     let mut weights = a.weights;
     weights[point..].copy_from_slice(&b.weights[point..]);
-    // Inherit hidden_size from a random parent (50/50)
-    let hidden_size = if rng.gen_bool(0.5) {
-        a.hidden_size
+    // Inherit each hidden size from a random parent (50/50, independent)
+    let base_hidden_size = if rng.gen_bool(0.5) {
+        a.base_hidden_size
     } else {
-        b.hidden_size
+        b.base_hidden_size
+    };
+    let signal_hidden_size = if rng.gen_bool(0.5) {
+        a.signal_hidden_size
+    } else {
+        b.signal_hidden_size
     };
     Brain {
         weights,
-        hidden_size,
+        base_hidden_size,
+        signal_hidden_size,
     }
 }
 
@@ -94,36 +131,72 @@ fn gaussian_noise(sigma: f32, rng: &mut impl Rng) -> f32 {
     (-2.0 * u1.ln()).sqrt() * (2.0 * std::f32::consts::PI * u2).cos() * sigma
 }
 
+/// Scoped Gaussian mutation respecting both hidden size genes.
+/// Base pool weights are scoped by `base_hidden_size`, signal pool by `signal_hidden_size`.
 pub fn mutate(brain: &mut Brain, sigma: f32, rng: &mut impl Rng) {
-    let scope = (brain.hidden_size + MUTATION_HEADROOM).min(MAX_HIDDEN);
+    let bh_scope = (brain.base_hidden_size + MUTATION_HEADROOM).min(MAX_BASE_HIDDEN);
+    let sh_scope = (brain.signal_hidden_size + MUTATION_HEADROOM).min(MAX_SIGNAL_HIDDEN);
     let w = &mut brain.weights;
 
-    // Input->hidden: for each input row, mutate only columns 0..scope
+    // Input -> base hidden: scope by bh
     for i in 0..INPUTS {
-        let row_start = i * MAX_HIDDEN;
-        for h in 0..scope {
+        let row_start = SEG_INPUT_BASE + i * MAX_BASE_HIDDEN;
+        for h in 0..bh_scope {
             w[row_start + h] += gaussian_noise(sigma, rng);
         }
     }
 
-    // Hidden biases: 0..scope
-    let bias_start = INPUTS * MAX_HIDDEN;
-    for h in 0..scope {
-        w[bias_start + h] += gaussian_noise(sigma, rng);
+    // Base hidden biases: scope by bh
+    for h in 0..bh_scope {
+        w[SEG_BASE_BIAS + h] += gaussian_noise(sigma, rng);
     }
 
-    // Hidden->output: neurons 0..scope, all 8 outputs each
-    let ho_start = bias_start + MAX_HIDDEN;
-    for h in 0..scope {
-        for o in 0..OUTPUTS {
-            w[ho_start + h * OUTPUTS + o] += gaussian_noise(sigma, rng);
+    // Base -> movement: scope rows by bh, all MOVEMENT_OUTPUTS cols
+    for h in 0..bh_scope {
+        for o in 0..MOVEMENT_OUTPUTS {
+            w[SEG_BASE_MOVE + h * MOVEMENT_OUTPUTS + o] += gaussian_noise(sigma, rng);
         }
     }
 
-    // Output biases: always mutate
-    let ob_start = ho_start + MAX_HIDDEN * OUTPUTS;
-    for o in 0..OUTPUTS {
-        w[ob_start + o] += gaussian_noise(sigma, rng);
+    // Movement biases: always mutate all
+    for o in 0..MOVEMENT_OUTPUTS {
+        w[SEG_MOVE_BIAS + o] += gaussian_noise(sigma, rng);
+    }
+
+    // Base -> signal hidden: scope rows by bh, cols by sh
+    for b in 0..bh_scope {
+        for s in 0..sh_scope {
+            w[SEG_BASE_SIGHID + b * MAX_SIGNAL_HIDDEN + s] += gaussian_noise(sigma, rng);
+        }
+    }
+
+    // Signal hidden biases: scope by sh
+    for s in 0..sh_scope {
+        w[SEG_SIGHID_BIAS + s] += gaussian_noise(sigma, rng);
+    }
+
+    // Signal hidden -> signal output: scope rows by sh, all SIGNAL_OUTPUTS cols
+    for s in 0..sh_scope {
+        for o in 0..SIGNAL_OUTPUTS {
+            w[SEG_SIGHID_SIGOUT + s * SIGNAL_OUTPUTS + o] += gaussian_noise(sigma, rng);
+        }
+    }
+
+    // Signal output biases: always mutate all
+    for o in 0..SIGNAL_OUTPUTS {
+        w[SEG_SIGOUT_BIAS + o] += gaussian_noise(sigma, rng);
+    }
+
+    // Base -> memory: scope rows by bh, all MEMORY_OUTPUTS cols
+    for h in 0..bh_scope {
+        for o in 0..MEMORY_OUTPUTS {
+            w[SEG_BASE_MEM + h * MEMORY_OUTPUTS + o] += gaussian_noise(sigma, rng);
+        }
+    }
+
+    // Memory biases: always mutate all
+    for o in 0..MEMORY_OUTPUTS {
+        w[SEG_MEM_BIAS + o] += gaussian_noise(sigma, rng);
     }
 }
 
@@ -131,15 +204,21 @@ pub fn mutate(brain: &mut Brain, sigma: f32, rng: &mut impl Rng) {
 pub fn mutate_hidden_size(brain: &mut Brain, rng: &mut impl Rng) {
     if rng.gen::<f32>() < HIDDEN_SIZE_MUTATION_RATE {
         let delta: i32 = if rng.gen_bool(0.5) { 1 } else { -1 };
-        let new_size =
-            (brain.hidden_size as i32 + delta).clamp(MIN_HIDDEN as i32, MAX_HIDDEN as i32);
-        brain.hidden_size = new_size as usize;
+        let new_size = (brain.base_hidden_size as i32 + delta)
+            .clamp(MIN_BASE_HIDDEN as i32, MAX_BASE_HIDDEN as i32);
+        brain.base_hidden_size = new_size as usize;
+    }
+    if rng.gen::<f32>() < HIDDEN_SIZE_MUTATION_RATE {
+        let delta: i32 = if rng.gen_bool(0.5) { 1 } else { -1 };
+        let new_size = (brain.signal_hidden_size as i32 + delta)
+            .clamp(MIN_SIGNAL_HIDDEN as i32, MAX_SIGNAL_HIDDEN as i32);
+        brain.signal_hidden_size = new_size as usize;
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-fn select_parent<'a>(
-    population: &'a [Agent],
+fn select_parent(
+    population: &[Agent],
     scored: &[(usize, f32)],
     sx: i32,
     sy: i32,
@@ -148,8 +227,8 @@ fn select_parent<'a>(
     reproduction_radius: f32,
     fallback_radius: f32,
     rng: &mut impl Rng,
-) -> &'a Agent {
-    if let Some(a) = local_tournament_select(
+) -> usize {
+    if let Some(idx) = local_tournament_select(
         population,
         scored,
         sx,
@@ -159,9 +238,9 @@ fn select_parent<'a>(
         grid_size,
         rng,
     ) {
-        return a;
+        return idx;
     }
-    if let Some(a) = local_tournament_select(
+    if let Some(idx) = local_tournament_select(
         population,
         scored,
         sx,
@@ -171,7 +250,7 @@ fn select_parent<'a>(
         grid_size,
         rng,
     ) {
-        return a;
+        return idx;
     }
     tournament_select(population, scored, tournament_size, rng)
 }
@@ -199,7 +278,7 @@ pub fn evolve_spatial(
     let pop_size = scored.len();
     let mut next_gen: Vec<Agent> = Vec::with_capacity(pop_size);
 
-    // Elites keep brain AND position
+    // Elites keep brain AND position AND lineage
     for &(pop_idx, _) in scored.iter().take(elite_count) {
         next_gen.push(population[pop_idx].clone());
     }
@@ -209,7 +288,7 @@ pub fn evolve_spatial(
         let sx = population[pop_idx].x;
         let sy = population[pop_idx].y;
 
-        let parent_a = select_parent(
+        let pa = select_parent(
             population,
             scored,
             sx,
@@ -220,7 +299,7 @@ pub fn evolve_spatial(
             fallback_radius,
             rng,
         );
-        let parent_b = select_parent(
+        let pb = select_parent(
             population,
             scored,
             sx,
@@ -231,7 +310,7 @@ pub fn evolve_spatial(
             fallback_radius,
             rng,
         );
-        let mut child_brain = crossover(&parent_a.brain, &parent_b.brain, rng);
+        let mut child_brain = crossover(&population[pa].brain, &population[pb].brain, rng);
         mutate(&mut child_brain, sigma, rng);
         mutate_hidden_size(&mut child_brain, rng);
 
@@ -242,6 +321,13 @@ pub fn evolve_spatial(
             brain: child_brain,
             x: (sx + jx).rem_euclid(grid_size),
             y: (sy + jy).rem_euclid(grid_size),
+            parent_indices: [Some(pa), Some(pb)],
+            grandparent_indices: [
+                population[pa].parent_indices[0],
+                population[pa].parent_indices[1],
+                population[pb].parent_indices[0],
+                population[pb].parent_indices[1],
+            ],
         });
     }
 
@@ -256,6 +342,16 @@ mod tests {
     const TEST_REPRO_RADIUS: f32 = 6.0;
     const TEST_FALLBACK_RADIUS: f32 = 10.0;
 
+    fn test_agent(rng: &mut impl Rng, x: i32, y: i32) -> Agent {
+        Agent {
+            brain: Brain::random(rng),
+            x,
+            y,
+            parent_indices: [None, None],
+            grandparent_indices: [None; 4],
+        }
+    }
+
     #[test]
     fn crossover_preserves_length() {
         let mut rng = rand::thread_rng();
@@ -266,29 +362,45 @@ mod tests {
     }
 
     #[test]
-    fn crossover_inherits_hidden_size() {
+    fn crossover_inherits_hidden_sizes() {
         use rand::SeedableRng;
         use rand_chacha::ChaCha8Rng;
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
         let mut a = Brain::random(&mut rng);
         let mut b = Brain::random(&mut rng);
-        a.hidden_size = 8;
-        b.hidden_size = 12;
+        a.base_hidden_size = 8;
+        a.signal_hidden_size = 4;
+        b.base_hidden_size = 20;
+        b.signal_hidden_size = 16;
 
-        let mut got_a = false;
-        let mut got_b = false;
+        let mut got_a_base = false;
+        let mut got_b_base = false;
+        let mut got_a_sig = false;
+        let mut got_b_sig = false;
         for _ in 0..100 {
             let child = crossover(&a, &b, &mut rng);
-            if child.hidden_size == 8 {
-                got_a = true;
+            if child.base_hidden_size == 8 {
+                got_a_base = true;
             }
-            if child.hidden_size == 12 {
-                got_b = true;
+            if child.base_hidden_size == 20 {
+                got_b_base = true;
+            }
+            if child.signal_hidden_size == 4 {
+                got_a_sig = true;
+            }
+            if child.signal_hidden_size == 16 {
+                got_b_sig = true;
             }
         }
-        assert!(got_a, "Should sometimes inherit parent a's hidden_size");
-        assert!(got_b, "Should sometimes inherit parent b's hidden_size");
+        assert!(
+            got_a_base && got_b_base,
+            "Should inherit base_hidden_size from both parents"
+        );
+        assert!(
+            got_a_sig && got_b_sig,
+            "Should inherit signal_hidden_size from both parents"
+        );
     }
 
     #[test]
@@ -298,30 +410,36 @@ mod tests {
         let mut rng = ChaCha8Rng::seed_from_u64(99);
 
         let mut brain = Brain::zero();
-        brain.hidden_size = MIN_HIDDEN;
+        brain.base_hidden_size = MIN_BASE_HIDDEN;
+        brain.signal_hidden_size = MIN_SIGNAL_HIDDEN;
         for _ in 0..1000 {
             mutate_hidden_size(&mut brain, &mut rng);
-            assert!(brain.hidden_size >= MIN_HIDDEN);
-            assert!(brain.hidden_size <= MAX_HIDDEN);
+            assert!(brain.base_hidden_size >= MIN_BASE_HIDDEN);
+            assert!(brain.base_hidden_size <= MAX_BASE_HIDDEN);
+            assert!(brain.signal_hidden_size >= MIN_SIGNAL_HIDDEN);
+            assert!(brain.signal_hidden_size <= MAX_SIGNAL_HIDDEN);
         }
 
-        brain.hidden_size = MAX_HIDDEN;
+        brain.base_hidden_size = MAX_BASE_HIDDEN;
+        brain.signal_hidden_size = MAX_SIGNAL_HIDDEN;
         for _ in 0..1000 {
             mutate_hidden_size(&mut brain, &mut rng);
-            assert!(brain.hidden_size >= MIN_HIDDEN);
-            assert!(brain.hidden_size <= MAX_HIDDEN);
+            assert!(brain.base_hidden_size >= MIN_BASE_HIDDEN);
+            assert!(brain.base_hidden_size <= MAX_BASE_HIDDEN);
+            assert!(brain.signal_hidden_size >= MIN_SIGNAL_HIDDEN);
+            assert!(brain.signal_hidden_size <= MAX_SIGNAL_HIDDEN);
         }
     }
 
     #[test]
     fn evolve_spatial_preserves_population_size() {
         let mut rng = rand::thread_rng();
-        let population: Vec<Agent> = (0..20)
-            .map(|_| Agent {
-                brain: Brain::random(&mut rng),
-                x: rng.gen_range(0..TEST_GRID),
-                y: rng.gen_range(0..TEST_GRID),
-            })
+        let coords: Vec<(i32, i32)> = (0..20)
+            .map(|_| (rng.gen_range(0..TEST_GRID), rng.gen_range(0..TEST_GRID)))
+            .collect();
+        let population: Vec<Agent> = coords
+            .into_iter()
+            .map(|(x, y)| test_agent(&mut rng, x, y))
             .collect();
         let mut scored: Vec<(usize, f32)> = (0..20).map(|i| (i, i as f32)).collect();
         let next = evolve_spatial(
@@ -348,6 +466,8 @@ mod tests {
                 brain: Brain::random(&mut rng),
                 x: i as i32,
                 y: i as i32 + 1,
+                parent_indices: [None, None],
+                grandparent_indices: [None; 4],
             })
             .collect();
         let mut scored: Vec<(usize, f32)> = (0..20).map(|i| (i, (20 - i) as f32)).collect();
@@ -389,11 +509,14 @@ mod tests {
         let population: Vec<Agent> = (0..20)
             .map(|_| {
                 let mut brain = Brain::random(&mut rng);
-                brain.hidden_size = 10;
+                brain.base_hidden_size = 10;
+                brain.signal_hidden_size = 5;
                 Agent {
                     brain,
                     x: rng.gen_range(0..TEST_GRID),
                     y: rng.gen_range(0..TEST_GRID),
+                    parent_indices: [None, None],
+                    grandparent_indices: [None; 4],
                 }
             })
             .collect();
@@ -411,17 +534,23 @@ mod tests {
             &mut rng,
         );
 
-        // Elites should keep hidden_size=10
+        // Elites should keep exact hidden sizes
         for agent in next.iter().take(4) {
             assert_eq!(
-                agent.brain.hidden_size, 10,
-                "Elites should preserve hidden_size"
+                agent.brain.base_hidden_size, 10,
+                "Elites should preserve base_hidden_size"
+            );
+            assert_eq!(
+                agent.brain.signal_hidden_size, 5,
+                "Elites should preserve signal_hidden_size"
             );
         }
-        // Non-elites: inherited from parents (all 10) +/- mutation
+        // Non-elites: inherited from parents +/- mutation, within bounds
         for agent in &next {
-            assert!(agent.brain.hidden_size >= MIN_HIDDEN);
-            assert!(agent.brain.hidden_size <= MAX_HIDDEN);
+            assert!(agent.brain.base_hidden_size >= MIN_BASE_HIDDEN);
+            assert!(agent.brain.base_hidden_size <= MAX_BASE_HIDDEN);
+            assert!(agent.brain.signal_hidden_size >= MIN_SIGNAL_HIDDEN);
+            assert!(agent.brain.signal_hidden_size <= MAX_SIGNAL_HIDDEN);
         }
     }
 
@@ -436,16 +565,22 @@ mod tests {
                 brain: Brain::zero(),
                 x: 0,
                 y: 0,
+                parent_indices: [None, None],
+                grandparent_indices: [None; 4],
             },
             Agent {
                 brain: Brain::zero(),
                 x: 1,
                 y: 0,
+                parent_indices: [None, None],
+                grandparent_indices: [None; 4],
             },
             Agent {
                 brain: Brain::zero(),
                 x: 15,
                 y: 15,
+                parent_indices: [None, None],
+                grandparent_indices: [None; 4],
             },
         ];
         let scored: Vec<(usize, f32)> = vec![(0, 10.0), (1, 5.0), (2, 100.0)];
@@ -454,7 +589,8 @@ mod tests {
         let result =
             local_tournament_select(&population, &scored, 0, 0, 3.0, 5, TEST_GRID, &mut rng);
         assert!(result.is_some());
-        let selected = result.unwrap();
+        let selected_idx = result.unwrap();
+        let selected = &population[selected_idx];
         // Should be one of the two nearby agents, never the far one at (15,15)
         assert!(
             (selected.x == 0 && selected.y == 0) || (selected.x == 1 && selected.y == 0),
@@ -462,5 +598,104 @@ mod tests {
             selected.x,
             selected.y
         );
+    }
+
+    #[test]
+    fn offspring_get_lineage() {
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha8Rng;
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let population: Vec<Agent> = (0..10)
+            .map(|i| Agent {
+                brain: Brain::random(&mut rng),
+                x: rng.gen_range(0..TEST_GRID),
+                y: rng.gen_range(0..TEST_GRID),
+                parent_indices: [Some(i + 100), Some(i + 200)],
+                grandparent_indices: [None; 4],
+            })
+            .collect();
+        let mut scored: Vec<(usize, f32)> = (0..10).map(|i| (i, i as f32)).collect();
+
+        let next = evolve_spatial(
+            &population,
+            &mut scored,
+            2,
+            3,
+            0.1,
+            TEST_GRID,
+            TEST_REPRO_RADIUS,
+            TEST_FALLBACK_RADIUS,
+            &mut rng,
+        );
+
+        // Non-elite offspring should have parent indices set
+        for agent in next.iter().skip(2) {
+            assert!(
+                agent.parent_indices[0].is_some(),
+                "Offspring should have parent_a"
+            );
+            assert!(
+                agent.parent_indices[1].is_some(),
+                "Offspring should have parent_b"
+            );
+        }
+    }
+
+    #[test]
+    fn relatedness_siblings() {
+        let a = Agent {
+            brain: Brain::zero(),
+            x: 0,
+            y: 0,
+            parent_indices: [Some(5), Some(8)],
+            grandparent_indices: [None; 4],
+        };
+        let b = Agent {
+            brain: Brain::zero(),
+            x: 0,
+            y: 0,
+            parent_indices: [Some(5), Some(12)],
+            grandparent_indices: [None; 4],
+        };
+        assert!((relatedness(&a, &b) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn relatedness_cousins() {
+        let a = Agent {
+            brain: Brain::zero(),
+            x: 0,
+            y: 0,
+            parent_indices: [Some(10), Some(11)],
+            grandparent_indices: [Some(5), None, None, None],
+        };
+        let b = Agent {
+            brain: Brain::zero(),
+            x: 0,
+            y: 0,
+            parent_indices: [Some(20), Some(21)],
+            grandparent_indices: [None, Some(5), None, None],
+        };
+        assert!((relatedness(&a, &b) - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn relatedness_unrelated() {
+        let a = Agent {
+            brain: Brain::zero(),
+            x: 0,
+            y: 0,
+            parent_indices: [Some(1), Some(2)],
+            grandparent_indices: [Some(10), Some(11), Some(12), Some(13)],
+        };
+        let b = Agent {
+            brain: Brain::zero(),
+            x: 0,
+            y: 0,
+            parent_indices: [Some(3), Some(4)],
+            grandparent_indices: [Some(20), Some(21), Some(22), Some(23)],
+        };
+        assert!((relatedness(&a, &b)).abs() < 1e-6);
     }
 }
