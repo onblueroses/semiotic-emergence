@@ -8,7 +8,7 @@ Every existing theory of signs starts from a world where meaning already exists 
 
 We don't have good theory for the beginning - the moment when the universe contained no meaning and then, for the first time, it did. This moment is empirically inaccessible in biology. It happened deep in evolutionary time and left no fossil record.
 
-This simulation is a telescope pointed at exactly that gap. Hundreds of neural networks on a toroidal grid, under predation pressure, with a 3-symbol broadcast channel. At generation 0, signals are noise. If meaning emerges at all, it emerges here, and we can watch every step of it.
+This simulation is a telescope pointed at exactly that gap. Hundreds of neural networks on a toroidal grid, under predation pressure, with a 6-symbol broadcast channel. At generation 0, signals are noise. If meaning emerges at all, it emerges here, and we can watch every step of it.
 
 **The question is not "do prey evolve alarm calls?" That's a biology question with known answers. The question is: what does it look like when meaning comes into existence for the first time in a world that previously contained none?**
 
@@ -28,7 +28,7 @@ What meaning does NOT require: consciousness, intention, shared knowledge, conve
 
 Between pure noise and genuine meaning, there is a region with no good name. These are the forms that occupy it:
 
-**Spandrels.** Signals that correlate with world states as a side effect of neural architecture. The same weights that drive fleeing happen to drive signaling because the network is small (6 hidden neurons) and cannot isolate signal outputs from movement outputs. The correlation is real but accidental - an architectural artifact, not a semiotic achievement.
+**Spandrels.** Signals that correlate with world states as a side effect of neural architecture. In a single-layer network, the same weights that drive fleeing happen to drive signaling because the network cannot isolate signal outputs from movement outputs. The split-head architecture (v2) addresses this by routing signals through a dedicated hidden layer, but spandrels can still arise through the shared base layer.
 
 **Ghosts.** Signal-context correlations that exist in the observer's analysis but not in the agents' behavior. When we compute mutual information using predator distance bins, we are the ones creating the meaning. The prey might be encoding something entirely different, or nothing at all. The meaning is in our analysis pipeline, not in the world.
 
@@ -40,15 +40,15 @@ Mutual information alone cannot distinguish between these. The receiver-side ins
 
 ## The observer's Umwelt
 
-We inhabit a fundamentally different semiotic space than the prey. We see the entire grid, all positions, all statistics. We compute cross-generational trends. The prey see 16 floating-point numbers.
+We inhabit a fundamentally different semiotic space than the prey. We see the entire grid, all positions, all statistics. We compute cross-generational trends. The prey see 36 floating-point numbers.
 
-When we say "symbol 0 means predator-nearby," we are translating from their Umwelt into ours. But what does symbol 0 mean in their Umwelt? Not "predator nearby" - they don't have that concept. It means: a specific activation pattern in a 158-weight network produced this output given these inputs. That is what it "means" inside the network.
+When we say "symbol 0 means predator-nearby," we are translating from their Umwelt into ours. But what does symbol 0 mean in their Umwelt? Not "predator nearby" - they don't have that concept. It means: a specific activation pattern in a 5491-weight split-head network produced this output given these inputs. That is what it "means" inside the network.
 
 Any claim about what signals mean is a translation, and translation always loses something. We project our categories (predator, distance, danger) onto their signal-context relationships. The actual semiotic structure of the prey's world might be organized along entirely different dimensions.
 
 This is why unsupervised analysis matters. Instead of asking "do signals encode predator distance?" (our question, our categories), ask "what structure exists in the relationship between signals, contexts, and responses?" and let the patterns reveal whatever categories the prey have actually evolved.
 
-The neural network's 16 inputs include predator proximity, food direction, ally distance, incoming signals, and energy level. Signal outputs are driven by all of them. Our mutual information metric only checks correlation with one dimension (predator distance). The prey might be signaling about energy level, food proximity, ally density, the incoming signals themselves, or some nonlinear combination that doesn't decompose into any single variable.
+The neural network's 36 inputs include predator proximity, food direction and distance, ally direction and distance, 18 signal channels (6 symbols x strength/direction), 8 recurrent memory cells, and energy level. Signal outputs pass through a dedicated signal hidden layer, giving evolution capacity for independent signal control. Our mutual information metric only checks correlation with one dimension (predator distance). The prey might be signaling about energy level, food proximity, ally density, memory state, the incoming signals themselves, or some nonlinear combination that doesn't decompose into any single variable.
 
 The earliest forms of meaning might be self-referential: "I'm scared" rather than "there's a predator." Both carry information about the predator, but the semiotic structure is completely different.
 
@@ -66,7 +66,7 @@ Or silence might be the stable attractor. The simplest meaning-making system in 
 
 ## The semiotic landscape
 
-The 158-weight genome defines a point in 158-dimensional space. Different regions produce agents with different semiotic configurations. This is not a metaphor - the weight space is literally a latent space, and its topology determines what meaning-making systems are possible.
+The genome defines a point in high-dimensional weight space (5491 dimensions in the current architecture). Different regions produce agents with different semiotic configurations. This is not a metaphor - the weight space is literally a latent space, and its topology determines what meaning-making systems are possible.
 
 **Basins.** Regions where populations converge on stable signal-meaning mappings. Different basins represent different possible communication systems.
 
@@ -77,6 +77,8 @@ The 158-weight genome defines a point in 158-dimensional space. Different region
 **Attractors.** Certain communication systems that evolution gravitates toward regardless of starting conditions. If all populations from different seeds converge on the same system, there's a dominant attractor. If they find different systems, the landscape has multiple attractors and outcomes are path-dependent - contingent, conventional, semiotically sticky.
 
 Running multiple populations from different seeds samples this landscape. Convergence tells us what's constrained by the world. Divergence tells us what's invented by the population.
+
+**The semiotic landscape is now 5491-dimensional** (up from 158 in early runs). The split-head architecture adds two independent hidden size genes that control the effective dimensionality: a population with base_hidden=4 and signal_hidden=6 uses a different region of weight space than one with base_hidden=12 and signal_hidden=2, even if total capacity is similar. Brain compression (evolution shrinking hidden layers to save metabolic cost) is itself a semiotic phenomenon - the population is discovering which dimensions of the landscape matter.
 
 ## The bootstrap as phase transition
 
@@ -136,11 +138,11 @@ Not a ladder to climb, but a map of what could exist in this world:
 
 **Level 2 - Ritualized signal.** A side effect that has been enhanced by selection for its communicative function. More consistent, more conspicuous, more costly than the original behavior warrants.
 
-**Level 3 - Functional reference.** Different signals trigger different, appropriate receiver behaviors. Not just "alert vs. calm" but specific, differentiated responses. This is what our 3-symbol system is architecturally capable of.
+**Level 3 - Functional reference.** Different signals trigger different, appropriate receiver behaviors. Not just "alert vs. calm" but specific, differentiated responses. This is what our 6-symbol system with dedicated signal processing is architecturally capable of.
 
 **Level 4 - Convention.** The mapping between signal and referent is arbitrary - it could have been otherwise. Testable by comparing across independently evolved populations.
 
-**Levels 5+ - Compositionality, displacement, metalanguage.** Beyond what 158-weight fixed-topology networks can achieve. Not a target for this simulation.
+**Levels 5+ - Compositionality, displacement, metalanguage.** Beyond what fixed-topology networks can achieve. Not a target for this simulation.
 
 ## Principles for development
 

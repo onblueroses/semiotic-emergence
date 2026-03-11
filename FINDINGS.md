@@ -1,4 +1,6 @@
-# Findings: Runs 1-2 (84k and 68k generations)
+# Findings
+
+## Runs 1-2 (84k and 68k generations)
 
 Two runs analyzed: local (unknown seed, 84,139 gens) and VPS seed 42 (68,428 gens). Both at 8x defaults (pop=384, grid=56, pred=16, food=200, ticks=500). Signal cost = 0.0 (free). Evasion boost active.
 
@@ -121,3 +123,71 @@ Free signals allowed noise to proliferate unchecked. At 0.002 per emission, a pr
 - Any signals that persist face genuine selection for content quality
 - Information asymmetry creates real value for danger communication
 - The altruism problem (senders pay, population benefits) may still limit sender evolution, but the absence of the boost removes the dominant exploitation pathway
+
+---
+
+## Run 3 (100k generations, seed 42)
+
+Parameters: pop=384, grid=56, pred=3, food=100, ticks=500. Evasion boost removed, signal cost 0.002, single hidden layer (4-124 neurons), 3 symbols.
+
+Full analysis in [PERFORMANCE.md](PERFORMANCE.md). Key findings:
+
+### 1. Brain size is the rate-limiting factor for semiotic emergence
+
+Small brains (~6-10 neurons): MI peaks at 0.05. Large brains (~15 neurons): MI reaches 0.624. The hidden layer capacity determines whether evolution can isolate signaling from fleeing behavior. Brain size naturally evolved to the MAX_HIDDEN=16 ceiling, suggesting the constraint was artificial.
+
+### 2. Brain expansion destroys then rebuilds semiotic structure
+
+At gen 46k-50k, avg_hidden exploded from 10 to 15. Total semiotic collapse followed - MI, iconicity, sender_fit_corr all dropped to zero. The old 6-neuron signal strategy didn't transfer to 15 neurons. It took ~25k generations to rebuild, but the rebuilt system was far stronger (MI sustained above 0.2 for 6,187 consecutive generations).
+
+### 3. Genuine encoding emerged during the MI surge (gen 75k-100k)
+
+Input MI analysis showed signals primarily encoded predator information: predator distance (MI 0.472), predator dy (0.267), predator dx (0.199). Signal-0-strength MI of 0.179 suggested signal relaying - prey re-emitting received signals to extend warning range.
+
+### 4. The coupling problem
+
+With a single hidden layer, movement and signal outputs share all weights. Every movement adaptation changes signal behavior and vice versa. This creates:
+- Spandrels (signal-context correlations from movement weight sharing, not communication intent)
+- Fragility (movement optimization can destroy signal conventions)
+- The convention collapse at gen 46k-50k was likely caused by brain expansion disrupting coupled weight configurations
+
+### 5. Convention instability
+
+MI peaked at 0.669 but the convention collapsed due to neutral drift - fitness barely changed whether prey communicated or not. The signal channel didn't matter enough to defend itself against genetic drift. This motivated the v2 architecture changes.
+
+---
+
+## Architecture v2 (current)
+
+Five changes address the structural barriers identified in runs 1-3:
+
+### 1. Split-head brain architecture
+
+Single hidden layer replaced with base hidden (4-64, shared) + signal hidden (2-32, dedicated). Signal outputs now pass through their own hidden layer, giving evolution capacity for independent signal control. Two separate hidden size genes evolve independently. This directly addresses the coupling problem from run 3.
+
+### 2. Six symbols (was 3)
+
+More signal vocabulary enables richer encoding (food, predator proximity, direction) instead of just 3 coarse states. Harder for one symbol to monopolize - driving MI to zero by dominating 100% of 6 symbols is harder than 3.
+
+### 3. Recurrent memory (8 cells)
+
+Each prey has 8 memory cells updated via EMA (0.9 * old + 0.1 * tanh(output)). Memory is input to the brain, creating a recurrent loop. Enables temporal reasoning - prey can track signal patterns across ticks.
+
+### 4. Cooperative food patches
+
+50% of food requires 2+ prey within Chebyshev distance 2 to consume. Creates direct fitness incentive for spatial coordination, which signals can facilitate.
+
+### 5. Kin fitness
+
+Siblings (shared parent) get 0.5 bonus, cousins (shared grandparent) get 0.25 bonus added to selection fitness. Lineage tracked via parent and grandparent population indices. Supports altruistic signaling by making it individually advantageous to help relatives.
+
+### Supporting changes
+
+- Vision range halved (11.2 -> 5.6 at grid=56), signal range unchanged (22.4). 4:1 ratio forces heavy signal reliance.
+- Neuron cost halved (0.00002 -> 0.00001). Allows complex signal processing without metabolic collapse.
+- Predator speed reduced (round(1.5*scale) -> round(scale)). Gives prey more time to respond to warnings.
+- Softmax emission replaces threshold-based. Emit if max(softmax) > 1/6.
+
+### Early observations (1000 gen smoke test)
+
+Brain compression: base hidden shrinks from 12 to ~4.4, signal hidden stays ~5-6. Evolution finds minimal base processing sufficient but retains signal capacity - the split architecture is working as intended. JSD rising steadily, MI climbing. Silence correlation consistently negative (-0.37 to -0.51).
