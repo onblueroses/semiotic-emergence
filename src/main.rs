@@ -38,6 +38,8 @@ struct SimParams {
     neuron_cost: f32,
     signal_cost: f32,
     no_signals: bool,
+    patch_ratio: f32,
+    kin_bonus: f32,
 }
 
 impl SimParams {
@@ -48,11 +50,13 @@ impl SimParams {
         let food_count = parse_flag(args, "--food").unwrap_or(100);
         let ticks_per_eval = parse_flag(args, "--ticks").unwrap_or(500);
         let no_signals = args.iter().any(|a| a == "--no-signals");
+        let patch_ratio = parse_flag(args, "--patch-ratio").unwrap_or(0.5);
+        let kin_bonus = parse_flag(args, "--kin-bonus").unwrap_or(0.1);
 
         let scale = grid_size as f32 / 20.0;
         let prey_vision_range = 2.0 * scale;
         let signal_range = 8.0 * scale;
-        let predator_speed = (1.5 * scale).round() as u32;
+        let predator_speed = scale.round().max(1.0) as u32;
         let reproduction_radius = 6.0 * scale;
         let fallback_radius = 10.0 * scale;
         let mi_bins = [prey_vision_range, signal_range, signal_range * 1.375];
@@ -77,6 +81,8 @@ impl SimParams {
             neuron_cost: 0.00001,
             signal_cost: 0.002,
             no_signals,
+            patch_ratio,
+            kin_bonus,
         }
     }
 }
@@ -115,16 +121,19 @@ struct GenMetrics {
     response_fit_corr: f32,
     silence_onset_jsd: f32,
     silence_move_delta: f32,
-    avg_hidden: f32,
-    min_hidden: usize,
-    max_hidden: usize,
+    avg_base_hidden: f32,
+    min_base_hidden: usize,
+    max_base_hidden: usize,
+    avg_signal_hidden: f32,
+    min_signal_hidden: usize,
+    max_signal_hidden: usize,
 }
 
 impl GenMetrics {
     fn write_csv(&self, f: &mut File, gen: usize) -> Result<(), Box<dyn std::error::Error>> {
         writeln!(
             f,
-            "{gen},{:.1},{:.1},{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.1},{},{}",
+            "{gen},{:.1},{:.1},{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.1},{},{},{:.1},{},{}",
             self.avg_fitness,
             self.max_fitness,
             self.total_signals,
@@ -139,9 +148,12 @@ impl GenMetrics {
             self.response_fit_corr,
             self.silence_onset_jsd,
             self.silence_move_delta,
-            self.avg_hidden,
-            self.min_hidden,
-            self.max_hidden
+            self.avg_base_hidden,
+            self.min_base_hidden,
+            self.max_base_hidden,
+            self.avg_signal_hidden,
+            self.min_signal_hidden,
+            self.max_signal_hidden
         )?;
         Ok(())
     }
@@ -181,12 +193,13 @@ impl GenMetrics {
             .collect::<Vec<_>>()
             .join(",");
         println!(
-            "gen {gen:>4} | avg {:>7.1} | max {:>7.1} | signals {} | icon {:.3} | MI {:.3} | jsd {:.3}/{:.3} | sym [{sym_str}] | sil {:.3} | brain {:.1} [{}-{}]",
+            "gen {gen:>4} | avg {:>7.1} | max {:>7.1} | signals {} | icon {:.3} | MI {:.3} | jsd {:.3}/{:.3} | sym [{sym_str}] | sil {:.3} | base {:.1} [{}-{}] | sig {:.1} [{}-{}]",
             self.avg_fitness, self.max_fitness, self.total_signals,
             self.iconicity, self.mutual_info,
             self.jsd_no_pred, self.jsd_pred,
             self.silence_corr,
-            self.avg_hidden, self.min_hidden, self.max_hidden
+            self.avg_base_hidden, self.min_base_hidden, self.max_base_hidden,
+            self.avg_signal_hidden, self.min_signal_hidden, self.max_signal_hidden
         );
     }
 }
@@ -224,6 +237,7 @@ fn evaluate_generation(
         params.base_drain,
         params.neuron_cost,
         params.signal_cost,
+        params.patch_ratio,
     );
 
     for _ in 0..params.ticks_per_eval {
@@ -350,11 +364,22 @@ fn compute_gen_metrics(
     let (silence_onset_jsd, silence_move_delta) =
         metrics::compute_silence_onset_metrics(&ev.silence_onset_actions, &ev.actions_with_signal);
 
-    // Brain size stats
-    let hidden_sizes: Vec<usize> = population.iter().map(|a| a.brain.hidden_size).collect();
-    let avg_hidden = hidden_sizes.iter().sum::<usize>() as f32 / hidden_sizes.len() as f32;
-    let min_hidden = hidden_sizes.iter().copied().min().unwrap_or(0);
-    let max_hidden = hidden_sizes.iter().copied().max().unwrap_or(0);
+    // Brain size stats - split into base and signal
+    let base_sizes: Vec<usize> = population
+        .iter()
+        .map(|a| a.brain.base_hidden_size)
+        .collect();
+    let avg_base_hidden = base_sizes.iter().sum::<usize>() as f32 / base_sizes.len() as f32;
+    let min_base_hidden = base_sizes.iter().copied().min().unwrap_or(0);
+    let max_base_hidden = base_sizes.iter().copied().max().unwrap_or(0);
+
+    let sig_sizes: Vec<usize> = population
+        .iter()
+        .map(|a| a.brain.signal_hidden_size)
+        .collect();
+    let avg_signal_hidden = sig_sizes.iter().sum::<usize>() as f32 / sig_sizes.len() as f32;
+    let min_signal_hidden = sig_sizes.iter().copied().min().unwrap_or(0);
+    let max_signal_hidden = sig_sizes.iter().copied().max().unwrap_or(0);
 
     GenMetrics {
         avg_fitness,
@@ -376,12 +401,16 @@ fn compute_gen_metrics(
         response_fit_corr,
         silence_onset_jsd,
         silence_move_delta,
-        avg_hidden,
-        min_hidden,
-        max_hidden,
+        avg_base_hidden,
+        min_base_hidden,
+        max_base_hidden,
+        avg_signal_hidden,
+        min_signal_hidden,
+        max_signal_hidden,
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn run_seed(
     seed: u64,
     generations: usize,
@@ -394,6 +423,8 @@ fn run_seed(
             brain: Brain::random(&mut rng),
             x: rng.gen_range(0..params.grid_size),
             y: rng.gen_range(0..params.grid_size),
+            parent_indices: [None, None],
+            grandparent_indices: [None; 4],
         })
         .collect();
 
@@ -406,7 +437,7 @@ fn run_seed(
         .transpose()?;
 
     if let Some(ref mut f) = csv {
-        writeln!(f, "generation,avg_fitness,max_fitness,signals_emitted,iconicity,mutual_info,jsd_no_pred,jsd_pred,silence_corr,sender_fit_corr,traj_fluct_ratio,receiver_fit_corr,response_fit_corr,silence_onset_jsd,silence_move_delta,avg_hidden,min_hidden,max_hidden")?;
+        writeln!(f, "generation,avg_fitness,max_fitness,signals_emitted,iconicity,mutual_info,jsd_no_pred,jsd_pred,silence_corr,sender_fit_corr,traj_fluct_ratio,receiver_fit_corr,response_fit_corr,silence_onset_jsd,silence_move_delta,avg_base_hidden,min_base_hidden,max_base_hidden,avg_signal_hidden,min_signal_hidden,max_signal_hidden")?;
     }
     if let Some(ref mut f) = traj_csv {
         write!(f, "generation")?;
@@ -446,15 +477,45 @@ fn run_seed(
     for gen in 0..generations {
         let ev = evaluate_generation(&population, &mut rng, params);
 
-        let mut scored: Vec<(usize, f32)> = ev
-            .fitness
-            .iter()
-            .enumerate()
-            .map(|(i, &f)| (i, f))
-            .collect();
+        // Apply kin fitness bonus
+        let mut fitness = ev.fitness.clone();
+        if params.kin_bonus > 0.0 {
+            for i in 0..population.len() {
+                let mut kin_sum = 0.0_f32;
+                for j in 0..population.len() {
+                    if i == j {
+                        continue;
+                    }
+                    let r = evolution::relatedness(&population[i], &population[j]);
+                    if r > 0.0 && fitness[j] > 0.0 {
+                        kin_sum += r;
+                    }
+                }
+                fitness[i] += params.kin_bonus * kin_sum;
+            }
+        }
+
+        let mut scored: Vec<(usize, f32)> =
+            fitness.iter().enumerate().map(|(i, &f)| (i, f)).collect();
+
+        // Use original fitness (without kin bonus) for metrics to avoid confounding
+        let ev_for_metrics = EvalResult {
+            fitness: ev.fitness,
+            signal_events: ev.signal_events,
+            total_signals: ev.total_signals,
+            ticks_near: ev.ticks_near,
+            prey_ticks: ev.prey_ticks,
+            receiver_counts: ev.receiver_counts,
+            signals_per_tick: ev.signals_per_tick,
+            min_pred_dist: ev.min_pred_dist,
+            signal_rate_per_prey: ev.signal_rate_per_prey,
+            actions_with_signal: ev.actions_with_signal,
+            actions_without_signal: ev.actions_without_signal,
+            silence_onset_actions: ev.silence_onset_actions,
+        };
 
         let gm = compute_gen_metrics(
-            &ev,
+            &ev_for_metrics,
             &population,
             &mut prev_norm_matrix,
             &mut traj_jsd_history,
@@ -513,12 +574,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or(200);
 
         println!(
-            "Config: pop={} grid={} pred={} food={} ticks={}",
+            "Config: pop={} grid={} pred={} food={} ticks={} patches={:.0}% kin_bonus={:.2}",
             params.pop_size,
             params.grid_size,
             params.num_predators,
             params.food_count,
-            params.ticks_per_eval
+            params.ticks_per_eval,
+            params.patch_ratio * 100.0,
+            params.kin_bonus
         );
         println!("Batch mode: {n} seeds x {generations} generations");
         let mut results: Vec<RunResult> = Vec::new();
@@ -592,12 +655,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or(200);
 
         println!(
-            "Config: pop={} grid={} pred={} food={} ticks={}",
+            "Config: pop={} grid={} pred={} food={} ticks={} patches={:.0}% kin_bonus={:.2}",
             params.pop_size,
             params.grid_size,
             params.num_predators,
             params.food_count,
-            params.ticks_per_eval
+            params.ticks_per_eval,
+            params.patch_ratio * 100.0,
+            params.kin_bonus
         );
         if params.no_signals {
             println!("Counterfactual mode: signals disabled");
