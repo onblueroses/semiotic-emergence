@@ -13,9 +13,9 @@ const ENERGY_INPUT_IDX: usize = MEMORY_INPUT_START + MEMORY_SIZE;
 const _: () = assert!(ENERGY_INPUT_IDX + 1 == INPUTS, "input layout size mismatch");
 
 pub const INPUT_NAMES: [&str; INPUTS] = [
-    "pred_dx",
-    "pred_dy",
-    "pred_dist",
+    "zone_dx",
+    "zone_dy",
+    "zone_dist",
     "food_dx",
     "food_dy",
     "food_dist",
@@ -68,6 +68,18 @@ pub(crate) fn wrap_dist_sq(ax: i32, ay: i32, bx: i32, by: i32, grid_size: i32) -
     let dx = wrap_delta(ax, bx, grid_size) as f32;
     let dy = wrap_delta(ay, by, grid_size) as f32;
     dx * dx + dy * dy
+}
+
+/// Wrap-aware signed delta for f32 coordinates on a toroidal grid.
+fn wrap_delta_f32(a: f32, b: f32, size: f32) -> f32 {
+    let d = b - a;
+    if d > size / 2.0 {
+        d - size
+    } else if d < -(size / 2.0) {
+        d + size
+    } else {
+        d
+    }
 }
 
 /// Spatial index: uniform grid for O(1) neighbor lookups on a toroidal grid.
@@ -187,10 +199,15 @@ pub struct Prey {
     pub had_signal_prev_tick: bool,
 }
 
+/// Energy drain per tick when inside a kill zone. 0.1 * 10 ticks = 1.0 = death.
+const ZONE_DRAIN_RATE: f32 = 0.1;
+
 #[derive(Clone, Debug)]
-pub struct Predator {
-    pub x: i32,
-    pub y: i32,
+pub struct KillZone {
+    pub x: f32,
+    pub y: f32,
+    pub radius: f32,
+    pub speed: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -202,30 +219,30 @@ pub struct Food {
 
 pub struct SignalEvent {
     pub symbol: u8,
-    pub predator_dist: f32,
+    pub zone_dist: f32,
     pub inputs: [f32; INPUTS],
     pub emitter_idx: usize,
 }
 
 pub struct World {
     pub prey: Vec<Prey>,
-    pub predators: Vec<Predator>,
+    pub zones: Vec<KillZone>,
     pub food: Vec<Food>,
     pub signals: Vec<Signal>,
     pub tick: u32,
     pub signals_emitted: u32,
     pub signal_events: Vec<SignalEvent>,
-    pub ticks_near_predator: u32,
+    pub ticks_in_zone: u32,
     pub total_prey_ticks: u32,
     /// Receiver response spectrum: `[signal_state][context][action]` counts.
     /// `signal_state`: 0=none, `1..=NUM_SYMBOLS` for each symbol (strongest received).
-    /// `context`: 0=no predator, 1=predator visible.
+    /// `context`: 0=not in zone, 1=in zone.
     /// `action`: 0-4 (up/down/right/left/eat).
     pub receiver_counts: [[[u32; 5]; 2]; 1 + NUM_SYMBOLS],
     /// Signal count per tick (for silence correlation).
     pub signals_per_tick: Vec<u32>,
-    /// Minimum predator-to-alive-prey distance per tick.
-    pub min_pred_dist_per_tick: Vec<f32>,
+    /// Minimum zone-edge distance to alive prey per tick (observer metric).
+    pub min_zone_dist_per_tick: Vec<f32>,
     /// When true, signal emission is suppressed (counterfactual mode).
     pub no_signals: bool,
     // Spatial indices (rebuilt each tick for prey, maintained incrementally for food)
@@ -234,15 +251,12 @@ pub struct World {
     // Pre-allocated per-tick buffers (reused across ticks to avoid allocation)
     shuffled_indices: Vec<usize>,
     order_scratch: Vec<usize>,
-    cached_pred: Vec<(usize, f32)>,
     alive_scratch: Vec<usize>,
     computed_scratch: Vec<(usize, [f32; INPUTS], ForwardResult, f32)>,
     // Simulation parameters
     pub grid_size: i32,
     pub food_count: usize,
-    pub prey_vision_range: f32,
     pub signal_range: f32,
-    pub predator_speed: u32,
     pub base_drain: f32,
     pub neuron_cost: f32,
     pub signal_cost: f32,
@@ -253,14 +267,14 @@ impl World {
     #[allow(clippy::too_many_arguments)]
     pub fn new_with_positions(
         agents: &[Agent],
-        num_predators: usize,
+        num_zones: usize,
         rng: &mut impl Rng,
         no_signals: bool,
         grid_size: i32,
         food_count: usize,
-        prey_vision_range: f32,
         signal_range: f32,
-        predator_speed: u32,
+        zone_radius: f32,
+        zone_speed: f32,
         base_drain: f32,
         neuron_cost: f32,
         signal_cost: f32,
@@ -284,10 +298,13 @@ impl World {
             })
             .collect();
 
-        let predators = (0..num_predators)
-            .map(|_| Predator {
-                x: rng.gen_range(0..grid_size),
-                y: rng.gen_range(0..grid_size),
+        let gs = grid_size as f32;
+        let zones = (0..num_zones)
+            .map(|_| KillZone {
+                x: rng.gen_range(0.0..gs),
+                y: rng.gen_range(0.0..gs),
+                radius: zone_radius,
+                speed: zone_speed,
             })
             .collect();
 
@@ -307,30 +324,27 @@ impl World {
         let prey_count = prey.len();
         Self {
             prey,
-            predators,
+            zones,
             food,
             signals: Vec::new(),
             tick: 0,
             signals_emitted: 0,
             signal_events: Vec::new(),
-            ticks_near_predator: 0,
+            ticks_in_zone: 0,
             total_prey_ticks: 0,
             receiver_counts: [[[0u32; 5]; 2]; 1 + NUM_SYMBOLS],
             signals_per_tick: Vec::new(),
-            min_pred_dist_per_tick: Vec::new(),
+            min_zone_dist_per_tick: Vec::new(),
             no_signals,
             prey_grid: CellGrid::new(grid_size),
             food_grid,
             shuffled_indices: (0..prey_count).collect(),
             order_scratch: Vec::with_capacity(prey_count),
-            cached_pred: Vec::with_capacity(prey_count),
             alive_scratch: Vec::with_capacity(prey_count),
             computed_scratch: Vec::with_capacity(prey_count),
             grid_size,
             food_count,
-            prey_vision_range,
             signal_range,
-            predator_speed,
             base_drain,
             neuron_cost,
             signal_cost,
@@ -338,15 +352,17 @@ impl World {
         }
     }
 
-    #[cfg(test)]
-    fn nearest_predator(&self, x: i32, y: i32) -> &Predator {
-        let mut best = &self.predators[0];
-        let mut best_d = wrap_dist_sq(x, y, best.x, best.y, self.grid_size);
-        for pred in &self.predators[1..] {
-            let d = wrap_dist_sq(x, y, pred.x, pred.y, self.grid_size);
-            if d < best_d {
-                best = pred;
-                best_d = d;
+    /// Compute distance from (x,y) to nearest zone edge. Negative = inside zone.
+    fn nearest_zone_edge_dist(&self, x: i32, y: i32) -> f32 {
+        let mut best = f32::MAX;
+        let gs = self.grid_size as f32;
+        for zone in &self.zones {
+            let dx = wrap_delta_f32(x as f32, zone.x, gs);
+            let dy = wrap_delta_f32(y as f32, zone.y, gs);
+            let center_dist = (dx * dx + dy * dy).sqrt();
+            let edge_dist = center_dist - zone.radius;
+            if edge_dist < best {
+                best = edge_dist;
             }
         }
         best
@@ -368,44 +384,23 @@ impl World {
         // Build prey spatial grid
         self.rebuild_prey_grid();
 
-        // Track minimum predator-to-alive-prey distance this tick
-        let mut min_pred_dist = f32::MAX;
+        // Track minimum zone-edge distance to alive prey this tick (observer metric)
+        let mut min_zone_dist = f32::MAX;
         for p in &self.prey {
             if !p.alive {
                 continue;
             }
-            for pred in &self.predators {
-                let d = wrap_dist_sq(p.x, p.y, pred.x, pred.y, self.grid_size).sqrt();
-                if d < min_pred_dist {
-                    min_pred_dist = d;
-                }
+            let d = self.nearest_zone_edge_dist(p.x, p.y);
+            if d < min_zone_dist {
+                min_zone_dist = d;
             }
         }
-        self.min_pred_dist_per_tick.push(min_pred_dist);
+        self.min_zone_dist_per_tick.push(min_zone_dist);
 
         // Shuffle prey processing order to prevent index bias
         self.shuffled_indices.clear();
         self.shuffled_indices.extend(0..self.prey.len());
         self.shuffled_indices.shuffle(rng);
-
-        // Cache nearest predator per prey (reuse buffer across ticks)
-        self.cached_pred.clear();
-        for p in &self.prey {
-            if !p.alive {
-                self.cached_pred.push((0, f32::MAX));
-                continue;
-            }
-            let mut best_idx = 0;
-            let mut best_d = f32::MAX;
-            for (pi, pred) in self.predators.iter().enumerate() {
-                let d = wrap_dist_sq(p.x, p.y, pred.x, pred.y, self.grid_size);
-                if d < best_d {
-                    best_d = d;
-                    best_idx = pi;
-                }
-            }
-            self.cached_pred.push((best_idx, best_d));
-        }
 
         // Copy shuffled order into scratch buffer, then take it out for borrow splitting
         self.order_scratch.clear();
@@ -441,20 +436,20 @@ impl World {
         alive
             .par_iter()
             .map(|&i| {
-                let (pred_idx, pred_dist_sq) = self.cached_pred[i];
-                let pdist = pred_dist_sq.sqrt();
-                let inputs = self.build_inputs_fast(i, pred_idx, pdist);
+                let zone_dist = self.nearest_zone_edge_dist(self.prey[i].x, self.prey[i].y);
+                let inputs = self.build_inputs_fast(i);
                 let result = self.prey[i].brain.forward(&inputs);
-                (i, inputs, result, pdist)
+                (i, inputs, result, zone_dist)
             })
             .collect_into_vec(&mut computed);
         self.alive_scratch = alive;
 
         // Sequential apply: mutations to world state
-        for &(i, ref inputs, ref result, pdist) in &computed {
+        for &(i, ref inputs, ref result, zone_dist) in &computed {
             self.total_prey_ticks += 1;
-            if pdist <= self.prey_vision_range {
-                self.ticks_near_predator += 1;
+            let in_zone = zone_dist <= 0.0;
+            if in_zone {
+                self.ticks_in_zone += 1;
             }
 
             // Receiver response spectrum: classify signal state, context, and chosen action
@@ -468,7 +463,7 @@ impl World {
                 }
             }
             let signal_state: usize = if max_str > 0.0 { 1 + best_sym } else { 0 };
-            let context = usize::from(inputs[2] > 0.0); // pred_dist > 0 means visible
+            let context = usize::from(in_zone); // 0=not in zone, 1=in zone
             let mut action = 0;
             let mut best_val = result.actions[0];
             for (j, &val) in result.actions[1..].iter().enumerate() {
@@ -490,7 +485,7 @@ impl World {
                 }
             }
 
-            self.apply_outputs(i, action, result, inputs, pdist);
+            self.apply_outputs(i, action, result, inputs, zone_dist);
 
             // Memory EMA update: new_mem = 0.9 * old + 0.1 * output
             for m in 0..MEMORY_SIZE {
@@ -503,9 +498,8 @@ impl World {
         }
         self.computed_scratch = computed;
 
-        self.move_predators();
-        // Kill check runs once after all predator movement, not per sub-step.
-        self.predator_kill();
+        self.move_zones(rng);
+        self.zone_drain();
 
         if self.food.len() < self.food_count / 2 {
             while self.food.len() < self.food_count {
@@ -524,23 +518,16 @@ impl World {
             .push(self.signals_emitted - signals_before);
     }
 
-    /// Build input vector using cached predator info and spatial grid for ally/food lookup.
-    /// Layout: [pred(3), food(3), ally(3), signals(18), memory(8), energy(1)] = 36
+    /// Build input vector using spatial grid for ally/food lookup.
+    /// Layout: [zone(3 dead), food(3), ally(3), signals(18), memory(8), energy(1)] = 36
+    /// Inputs 0-2 are always zero (zones are invisible).
     #[allow(clippy::similar_names)]
-    fn build_inputs_fast(&self, prey_idx: usize, pred_idx: usize, pdist: f32) -> [f32; INPUTS] {
+    fn build_inputs_fast(&self, prey_idx: usize) -> [f32; INPUTS] {
         let p = &self.prey[prey_idx];
         let mut inp = [0.0_f32; INPUTS];
         let gs = self.grid_size as f32;
 
-        // 0-2: Nearest predator (from cache, gated by vision range)
-        if pdist <= self.prey_vision_range {
-            let pred = &self.predators[pred_idx];
-            let pdx = wrap_delta(p.x, pred.x, self.grid_size) as f32;
-            let pdy = wrap_delta(p.y, pred.y, self.grid_size) as f32;
-            inp[0] = pdx / gs;
-            inp[1] = pdy / gs;
-            inp[2] = (pdist / self.prey_vision_range).min(1.0);
-        }
+        // 0-2: Dead inputs (zones are invisible, always zero)
 
         // 3-5: Nearest food (dx, dy, distance)
         if let Some((fi, food_dist_sq)) =
@@ -587,7 +574,7 @@ impl World {
     }
 
     /// Rebuild prey spatial grid from current positions. Used by tests that
-    /// call `move_predators()` directly without going through `step()`.
+    /// call `move_zones()` directly without going through `step()`.
     fn rebuild_prey_grid(&mut self) {
         self.prey_grid.clear();
         for (i, p) in self.prey.iter().enumerate() {
@@ -599,18 +586,7 @@ impl World {
 
     #[cfg(test)]
     fn build_inputs(&self, prey_idx: usize) -> [f32; INPUTS] {
-        let p = &self.prey[prey_idx];
-        let nearest_pred = self.nearest_predator(p.x, p.y);
-        let pred_idx = self
-            .predators
-            .iter()
-            .position(|pr| std::ptr::eq(pr, nearest_pred))
-            .unwrap_or(0);
-        let pdx = wrap_delta(p.x, nearest_pred.x, self.grid_size) as f32;
-        let pdy = wrap_delta(p.y, nearest_pred.y, self.grid_size) as f32;
-        let pdist = (pdx * pdx + pdy * pdy).sqrt();
-
-        self.build_inputs_fast(prey_idx, pred_idx, pdist)
+        self.build_inputs_fast(prey_idx)
     }
 
     fn apply_outputs(
@@ -619,7 +595,7 @@ impl World {
         action: usize,
         result: &ForwardResult,
         inputs: &[f32; INPUTS],
-        predator_dist: f32,
+        zone_dist: f32,
     ) {
         match action {
             0 => self.prey[prey_idx].y = (self.prey[prey_idx].y - 1).rem_euclid(self.grid_size),
@@ -666,7 +642,7 @@ impl World {
                 self.prey[prey_idx].energy -= self.signal_cost;
                 self.signal_events.push(SignalEvent {
                     symbol,
-                    predator_dist,
+                    zone_dist,
                     inputs: *inputs,
                     emitter_idx: prey_idx,
                 });
@@ -697,44 +673,43 @@ impl World {
         self.prey[prey_idx].food_eaten += 1;
     }
 
-    fn move_predators(&mut self) {
-        // prey_grid is stale (from tick start) but acceptable for predator chasing
-        for pred_idx in 0..self.predators.len() {
-            for _ in 0..self.predator_speed {
-                let px = self.predators[pred_idx].x;
-                let py = self.predators[pred_idx].y;
-                let nearest = self.prey_grid.nearest(px, py, self.grid_size / 2, u16::MAX);
-
-                if let Some((prey_idx, _)) = nearest {
-                    let tp = &self.prey[prey_idx as usize];
-                    let dx = wrap_delta(px, tp.x, self.grid_size);
-                    let dy = wrap_delta(py, tp.y, self.grid_size);
-                    if dx.abs() >= dy.abs() {
-                        self.predators[pred_idx].x += dx.signum();
-                    } else {
-                        self.predators[pred_idx].y += dy.signum();
-                    }
-                    self.predators[pred_idx].x =
-                        self.predators[pred_idx].x.rem_euclid(self.grid_size);
-                    self.predators[pred_idx].y =
-                        self.predators[pred_idx].y.rem_euclid(self.grid_size);
+    /// Move zones via probabilistic random walk. Each zone moves 1 cell in a random
+    /// direction with probability = zone.speed each tick.
+    fn move_zones(&mut self, rng: &mut impl Rng) {
+        let gs = self.grid_size as f32;
+        for zone in &mut self.zones {
+            if rng.gen::<f32>() < zone.speed {
+                let dir = rng.gen_range(0..4);
+                match dir {
+                    0 => zone.y -= 1.0,
+                    1 => zone.y += 1.0,
+                    2 => zone.x += 1.0,
+                    _ => zone.x -= 1.0,
                 }
+                // Toroidal wrapping
+                zone.x = zone.x.rem_euclid(gs);
+                zone.y = zone.y.rem_euclid(gs);
             }
         }
     }
 
-    fn predator_kill(&mut self) {
+    /// Drain energy from prey inside kill zones. Stacks across overlapping zones.
+    fn zone_drain(&mut self) {
+        let gs = self.grid_size as f32;
         for p in &mut self.prey {
             if !p.alive {
                 continue;
             }
-            for pred in &self.predators {
-                let dx = wrap_delta(pred.x, p.x, self.grid_size).abs();
-                let dy = wrap_delta(pred.y, p.y, self.grid_size).abs();
-                if dx == 0 && dy == 0 {
-                    p.alive = false;
-                    break;
+            for zone in &self.zones {
+                let dx = wrap_delta_f32(p.x as f32, zone.x, gs);
+                let dy = wrap_delta_f32(p.y as f32, zone.y, gs);
+                let dist = (dx * dx + dy * dy).sqrt();
+                if dist <= zone.radius {
+                    p.energy -= ZONE_DRAIN_RATE;
                 }
+            }
+            if p.energy <= 0.0 {
+                p.alive = false;
             }
         }
     }
@@ -789,12 +764,12 @@ mod tests {
     use rand::SeedableRng;
     use rand_chacha::ChaCha8Rng;
 
-    // Test defaults matching old constants
+    // Test defaults
     const TEST_GRID: i32 = 20;
     const TEST_FOOD: usize = 25;
-    const TEST_VISION: f32 = 4.0;
     const TEST_SIGNAL_RANGE: f32 = 8.0;
-    const TEST_PRED_SPEED: u32 = 2;
+    const TEST_ZONE_RADIUS: f32 = 8.0;
+    const TEST_ZONE_SPEED: f32 = 0.5;
     const TEST_BASE_DRAIN: f32 = 0.0008;
     const TEST_NEURON_COST: f32 = 0.00002;
     const TEST_SIGNAL_COST: f32 = 0.0;
@@ -817,7 +792,7 @@ mod tests {
         }
     }
 
-    fn minimal_world(prey_positions: &[(i32, i32)], predator: (i32, i32)) -> World {
+    fn minimal_world(prey_positions: &[(i32, i32)], zone_center: (f32, f32)) -> World {
         let prey: Vec<Prey> = prey_positions
             .iter()
             .map(|&(x, y)| test_prey(x, y))
@@ -825,33 +800,32 @@ mod tests {
         let prey_count = prey.len();
         World {
             prey,
-            predators: vec![Predator {
-                x: predator.0,
-                y: predator.1,
+            zones: vec![KillZone {
+                x: zone_center.0,
+                y: zone_center.1,
+                radius: TEST_ZONE_RADIUS,
+                speed: TEST_ZONE_SPEED,
             }],
             food: Vec::new(),
             signals: Vec::new(),
             tick: 0,
             signals_emitted: 0,
             signal_events: Vec::new(),
-            ticks_near_predator: 0,
+            ticks_in_zone: 0,
             total_prey_ticks: 0,
             receiver_counts: [[[0u32; 5]; 2]; 1 + NUM_SYMBOLS],
             signals_per_tick: Vec::new(),
-            min_pred_dist_per_tick: Vec::new(),
+            min_zone_dist_per_tick: Vec::new(),
             no_signals: true,
             prey_grid: CellGrid::new(TEST_GRID),
             food_grid: CellGrid::new(TEST_GRID),
             shuffled_indices: (0..prey_count).collect(),
             order_scratch: Vec::with_capacity(prey_count),
-            cached_pred: Vec::with_capacity(prey_count),
             alive_scratch: Vec::with_capacity(prey_count),
             computed_scratch: Vec::with_capacity(prey_count),
             grid_size: TEST_GRID,
             food_count: TEST_FOOD,
-            prey_vision_range: TEST_VISION,
             signal_range: TEST_SIGNAL_RANGE,
-            predator_speed: TEST_PRED_SPEED,
             base_drain: TEST_BASE_DRAIN,
             neuron_cost: TEST_NEURON_COST,
             signal_cost: TEST_SIGNAL_COST,
@@ -890,134 +864,110 @@ mod tests {
         assert!((d - 4.0).abs() < 1e-6);
     }
 
-    // --- Predator movement ---
+    // --- Zone movement ---
 
     #[test]
-    fn predator_moves_toward_nearest_prey() {
-        let mut world = minimal_world(&[(10, 5)], (5, 5));
-        world.rebuild_prey_grid();
+    fn zone_moves_with_toroidal_wrapping() {
+        let mut world = minimal_world(&[(0, 0)], (19.0, 19.0));
+        // Force zone to move by setting speed to 1.0 (always moves)
+        world.zones[0].speed = 1.0;
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        world.move_predators();
+        let start_x = world.zones[0].x;
+        let start_y = world.zones[0].y;
+        world.move_zones(&mut rng);
 
-        // Predator at (5,5), prey at (10,5): dx=5, dy=0. Should move +x 2 times.
-        assert_eq!(world.predators[0].x, 7);
-        assert_eq!(world.predators[0].y, 5);
-    }
-
-    #[test]
-    fn predator_chases_through_wrap_boundary() {
-        let mut world = minimal_world(&[(18, 10)], (1, 10));
-        world.rebuild_prey_grid();
-
-        world.move_predators();
-
-        assert_eq!(world.predators[0].x, 19);
-        assert_eq!(world.predators[0].y, 10);
-    }
-
-    #[test]
-    fn predator_always_chases_nearest() {
-        // 3+ prey nearby - predator should still chase, never move randomly
-        let px = 10;
-        let py = 10;
-        let mut world = minimal_world(
-            &[(px + 1, py), (px - 1, py), (px, py + 1), (px, py - 1)],
-            (px, py),
-        );
-        world.rebuild_prey_grid();
-
-        world.move_predators();
-
-        let pred = &world.predators[0];
-        let moved_dist = wrap_dist_sq(px, py, pred.x, pred.y, TEST_GRID).sqrt();
-        assert!(moved_dist > 0.0, "Predator should have moved");
+        // Zone should have moved exactly 1 cell in some direction
+        let dx = wrap_delta_f32(start_x, world.zones[0].x, TEST_GRID as f32);
+        let dy = wrap_delta_f32(start_y, world.zones[0].y, TEST_GRID as f32);
+        let moved_dist = (dx * dx + dy * dy).sqrt();
         assert!(
-            moved_dist <= TEST_PRED_SPEED as f32,
-            "Predator moved too far"
+            (moved_dist - 1.0).abs() < 1e-6,
+            "Zone should move exactly 1 cell"
         );
-    }
-
-    // --- Predator kill ---
-
-    #[test]
-    fn predator_kills_prey_on_same_cell() {
-        let mut world = minimal_world(&[(5, 5)], (5, 5));
-
-        world.predator_kill();
-
-        assert!(!world.prey[0].alive);
+        // Position should be valid (within grid)
+        assert!(world.zones[0].x >= 0.0 && world.zones[0].x < TEST_GRID as f32);
+        assert!(world.zones[0].y >= 0.0 && world.zones[0].y < TEST_GRID as f32);
     }
 
     #[test]
-    fn predator_does_not_kill_adjacent_prey() {
-        let mut world = minimal_world(&[(5, 6)], (5, 5));
+    fn zone_stationary_when_speed_zero() {
+        let mut world = minimal_world(&[(0, 0)], (10.0, 10.0));
+        world.zones[0].speed = 0.0;
+        let mut rng = ChaCha8Rng::seed_from_u64(0);
 
-        world.predator_kill();
+        let start_x = world.zones[0].x;
+        let start_y = world.zones[0].y;
+        for _ in 0..100 {
+            world.move_zones(&mut rng);
+        }
 
-        assert!(world.prey[0].alive);
+        assert!((world.zones[0].x - start_x).abs() < 1e-6);
+        assert!((world.zones[0].y - start_y).abs() < 1e-6);
+    }
+
+    // --- Zone drain ---
+
+    #[test]
+    fn zone_drains_energy_when_inside() {
+        // Prey at (5,5), zone centered at (5.0,5.0) with radius 8 - prey is inside
+        let mut world = minimal_world(&[(5, 5)], (5.0, 5.0));
+
+        let before = world.prey[0].energy;
+        world.zone_drain();
+        let after = world.prey[0].energy;
+
+        assert!((before - after - ZONE_DRAIN_RATE).abs() < 1e-6);
     }
 
     #[test]
-    fn predator_kill_marks_dead() {
-        let mut world = minimal_world(&[(3, 3), (3, 3), (7, 7)], (3, 3));
+    fn zone_no_drain_when_outside() {
+        // Prey at (0,0), zone centered at (15.0,15.0) with radius 8 - prey is outside
+        let mut world = minimal_world(&[(0, 0)], (15.0, 15.0));
+        // Distance from (0,0) to (15,15) on 20-grid = sqrt(25+25) = 7.07 via wrapping
+        // Actually wrap_delta(0,15,20) = -5, so dist = sqrt(25+25)=7.07 < 8 = inside!
+        // Use a farther zone instead.
+        world.zones[0].x = 10.0;
+        world.zones[0].y = 10.0;
+        world.zones[0].radius = 2.0;
+        // dist from (0,0) to (10,10) = sqrt(100+100) = 14.14, but wrapping: min(-10,10) = 10
+        // wrap_delta(0,10,20) = 10, so dist = sqrt(200) = 14.14 > 2.0
 
-        world.predator_kill();
+        let before = world.prey[0].energy;
+        world.zone_drain();
+        let after = world.prey[0].energy;
 
-        assert!(!world.prey[0].alive);
-        assert!(!world.prey[1].alive);
-        assert!(world.prey[2].alive);
+        assert!((before - after).abs() < 1e-6, "No drain when outside zone");
     }
 
-    // --- Multiple predators ---
+    #[test]
+    fn zone_drain_kills_at_zero() {
+        let mut world = minimal_world(&[(5, 5)], (5.0, 5.0));
+        world.prey[0].energy = 0.05; // Less than ZONE_DRAIN_RATE
+
+        world.zone_drain();
+
+        assert!(!world.prey[0].alive, "Prey should die when energy <= 0");
+    }
 
     #[test]
-    fn multiple_predators_chase_independently() {
-        let prey = vec![test_prey(0, 0), test_prey(19, 19)];
-        let prey_count = prey.len();
-        let mut world = World {
-            prey,
-            predators: vec![
-                Predator { x: 3, y: 0 },   // near prey 0
-                Predator { x: 16, y: 19 }, // near prey 1
-            ],
-            food: Vec::new(),
-            signals: Vec::new(),
-            tick: 0,
-            signals_emitted: 0,
-            signal_events: Vec::new(),
-            ticks_near_predator: 0,
-            total_prey_ticks: 0,
-            receiver_counts: [[[0u32; 5]; 2]; 1 + NUM_SYMBOLS],
-            signals_per_tick: Vec::new(),
-            min_pred_dist_per_tick: Vec::new(),
-            no_signals: true,
-            prey_grid: CellGrid::new(TEST_GRID),
-            food_grid: CellGrid::new(TEST_GRID),
-            shuffled_indices: (0..prey_count).collect(),
-            order_scratch: Vec::with_capacity(prey_count),
-            cached_pred: Vec::with_capacity(prey_count),
-            alive_scratch: Vec::with_capacity(prey_count),
-            computed_scratch: Vec::with_capacity(prey_count),
-            grid_size: TEST_GRID,
-            food_count: TEST_FOOD,
-            prey_vision_range: TEST_VISION,
-            signal_range: TEST_SIGNAL_RANGE,
-            predator_speed: TEST_PRED_SPEED,
-            base_drain: TEST_BASE_DRAIN,
-            neuron_cost: TEST_NEURON_COST,
-            signal_cost: TEST_SIGNAL_COST,
-            patch_ratio: TEST_PATCH_RATIO,
-        };
-        world.rebuild_prey_grid();
+    fn zone_drain_stacks_across_overlapping_zones() {
+        let mut world = minimal_world(&[(5, 5)], (5.0, 5.0));
+        // Add a second zone also covering (5,5)
+        world.zones.push(KillZone {
+            x: 6.0,
+            y: 5.0,
+            radius: TEST_ZONE_RADIUS,
+            speed: TEST_ZONE_SPEED,
+        });
 
-        world.move_predators();
+        let before = world.prey[0].energy;
+        world.zone_drain();
+        let after = world.prey[0].energy;
 
-        // Predator 0 should move toward prey at (0,0): wrap_delta(3,0,20) = -3
-        assert!(world.predators[0].x < 3, "Pred 0 should move toward (0,0)");
-        // Predator 1 should move toward prey at (19,19): wrap_delta(16,19,20) = 3
         assert!(
-            world.predators[1].x > 16,
-            "Pred 1 should move toward (19,19)"
+            (before - after - 2.0 * ZONE_DRAIN_RATE).abs() < 1e-6,
+            "Drain should stack from two overlapping zones"
         );
     }
 
@@ -1057,9 +1007,9 @@ mod tests {
             false,
             TEST_GRID,
             TEST_FOOD,
-            TEST_VISION,
             TEST_SIGNAL_RANGE,
-            TEST_PRED_SPEED,
+            TEST_ZONE_RADIUS,
+            TEST_ZONE_SPEED,
             TEST_BASE_DRAIN,
             TEST_NEURON_COST,
             TEST_SIGNAL_COST,
@@ -1070,14 +1020,16 @@ mod tests {
         assert_eq!(world.prey[0].y, 7);
         assert_eq!(world.prey[1].x, 15);
         assert_eq!(world.prey[1].y, 2);
-        assert_eq!(world.predators.len(), 1);
+        assert_eq!(world.zones.len(), 1);
     }
 
     // --- Energy mechanics ---
 
     #[test]
     fn energy_drains_per_tick() {
-        let mut world = minimal_world(&[(0, 0)], (15, 15));
+        // Place zone far from prey with small radius to avoid zone drain
+        let mut world = minimal_world(&[(0, 0)], (10.0, 10.0));
+        world.zones[0].radius = 1.0; // small zone far from (0,0)
         world.food.push(Food {
             x: 10,
             y: 10,
@@ -1096,7 +1048,7 @@ mod tests {
 
     #[test]
     fn food_consumption_restores_energy() {
-        let mut world = minimal_world(&[(5, 5)], (15, 15));
+        let mut world = minimal_world(&[(5, 5)], (15.0, 15.0));
         world.prey[0].energy = 0.5;
         world.food.push(Food {
             x: 5,
@@ -1118,7 +1070,7 @@ mod tests {
 
     #[test]
     fn energy_caps_at_one() {
-        let mut world = minimal_world(&[(5, 5)], (15, 15));
+        let mut world = minimal_world(&[(5, 5)], (15.0, 15.0));
         world.prey[0].energy = 0.9;
         world.food.push(Food {
             x: 5,
@@ -1140,7 +1092,8 @@ mod tests {
 
     #[test]
     fn energy_death_at_zero() {
-        let mut world = minimal_world(&[(0, 0)], (15, 15));
+        let mut world = minimal_world(&[(0, 0)], (10.0, 10.0));
+        world.zones[0].radius = 1.0; // small zone far from prey
         let total_hidden = DEFAULT_BASE_HIDDEN + crate::brain::DEFAULT_SIGNAL_HIDDEN;
         let drain = TEST_BASE_DRAIN + total_hidden as f32 * TEST_NEURON_COST;
         world.prey[0].energy = drain * 0.5;
@@ -1160,7 +1113,8 @@ mod tests {
 
     #[test]
     fn food_respawns_when_below_half() {
-        let mut world = minimal_world(&[(0, 0)], (15, 15));
+        let mut world = minimal_world(&[(0, 0)], (10.0, 10.0));
+        world.zones[0].radius = 1.0; // small zone far from prey
         for x in 5..16 {
             world.food.push(Food {
                 x,
@@ -1177,7 +1131,8 @@ mod tests {
 
     #[test]
     fn food_does_not_respawn_above_half() {
-        let mut world = minimal_world(&[(0, 0)], (15, 15));
+        let mut world = minimal_world(&[(0, 0)], (10.0, 10.0));
+        world.zones[0].radius = 1.0; // small zone far from prey
         for x in 5..18 {
             world.food.push(Food {
                 x,
@@ -1193,11 +1148,28 @@ mod tests {
         assert!(world.food.len() <= initial_count);
     }
 
-    // --- Input building / vision gating ---
+    // --- Input building (zone inputs always zero) ---
 
     #[test]
-    fn predator_inputs_zeroed_when_out_of_range() {
-        let mut world = minimal_world(&[(0, 0)], (15, 15));
+    fn zone_inputs_always_zero() {
+        // Inputs 0-2 should be zero regardless of zone proximity (zones are invisible)
+        let mut world = minimal_world(&[(5, 5)], (5.0, 5.0)); // prey inside zone
+        world.food.push(Food {
+            x: 10,
+            y: 10,
+            is_patch: false,
+        });
+
+        let inputs = world.build_inputs(0);
+
+        assert!((inputs[0]).abs() < 1e-6, "zone_dx should be zero");
+        assert!((inputs[1]).abs() < 1e-6, "zone_dy should be zero");
+        assert!((inputs[2]).abs() < 1e-6, "zone_dist should be zero");
+    }
+
+    #[test]
+    fn zone_inputs_zero_when_far() {
+        let mut world = minimal_world(&[(0, 0)], (15.0, 15.0)); // prey far from zone
         world.food.push(Food {
             x: 10,
             y: 10,
@@ -1211,41 +1183,12 @@ mod tests {
         assert!((inputs[2]).abs() < 1e-6);
     }
 
-    #[test]
-    fn predator_inputs_populated_when_in_range() {
-        let mut world = minimal_world(&[(10, 10)], (12, 10));
-        world.food.push(Food {
-            x: 5,
-            y: 5,
-            is_patch: false,
-        });
-
-        let inputs = world.build_inputs(0);
-
-        assert!((inputs[0] - 0.1).abs() < 1e-6);
-        assert!((inputs[1]).abs() < 1e-6);
-        assert!((inputs[2] - 0.5).abs() < 1e-6);
-    }
-
-    #[test]
-    fn predator_inputs_at_vision_boundary() {
-        let mut world = minimal_world(&[(0, 0)], (4, 0));
-        world.food.push(Food {
-            x: 10,
-            y: 10,
-            is_patch: false,
-        });
-
-        let inputs = world.build_inputs(0);
-
-        assert!(inputs[0] > 0.0 || inputs[2] > 0.0);
-    }
-
     // --- Per-prey receiver tracking ---
 
     #[test]
     fn per_prey_tracking_accumulates_with_and_without_signal() {
-        let mut world = minimal_world(&[(5, 5)], (15, 15));
+        let mut world = minimal_world(&[(5, 5)], (15.0, 15.0));
+        world.zones[0].radius = 1.0; // small zone far from prey
         world.food.push(Food {
             x: 10,
             y: 10,
@@ -1304,7 +1247,7 @@ mod tests {
 
     #[test]
     fn build_inputs_returns_correct_size() {
-        let mut world = minimal_world(&[(0, 0)], (15, 15));
+        let mut world = minimal_world(&[(0, 0)], (15.0, 15.0));
         world.food.push(Food {
             x: 5,
             y: 5,
@@ -1318,7 +1261,8 @@ mod tests {
 
     #[test]
     fn larger_brain_drains_more() {
-        let mut world = minimal_world(&[(0, 0), (5, 5)], (15, 15));
+        let mut world = minimal_world(&[(0, 0), (5, 5)], (15.0, 15.0));
+        world.zones[0].radius = 1.0;
         world.food.push(Food {
             x: 10,
             y: 10,
@@ -1343,7 +1287,8 @@ mod tests {
 
     #[test]
     fn min_brain_drains_less() {
-        let mut world = minimal_world(&[(0, 0), (5, 5)], (15, 15));
+        let mut world = minimal_world(&[(0, 0), (5, 5)], (15.0, 15.0));
+        world.zones[0].radius = 1.0;
         world.food.push(Food {
             x: 10,
             y: 10,
@@ -1381,7 +1326,7 @@ mod tests {
 
     #[test]
     fn patch_food_requires_partner() {
-        let mut world = minimal_world(&[(5, 5)], (15, 15));
+        let mut world = minimal_world(&[(5, 5)], (15.0, 15.0));
         world.food.push(Food {
             x: 5,
             y: 5,
@@ -1409,7 +1354,7 @@ mod tests {
 
     #[test]
     fn patch_food_consumed_with_partner() {
-        let mut world = minimal_world(&[(5, 5), (6, 5)], (15, 15));
+        let mut world = minimal_world(&[(5, 5), (6, 5)], (15.0, 15.0));
         world.food.push(Food {
             x: 5,
             y: 5,
@@ -1436,7 +1381,7 @@ mod tests {
 
     #[test]
     fn non_patch_food_consumed_solo() {
-        let mut world = minimal_world(&[(5, 5)], (15, 15));
+        let mut world = minimal_world(&[(5, 5)], (15.0, 15.0));
         world.food.push(Food {
             x: 5,
             y: 5,
@@ -1480,9 +1425,9 @@ mod tests {
             false,
             TEST_GRID,
             TEST_FOOD,
-            TEST_VISION,
             TEST_SIGNAL_RANGE,
-            TEST_PRED_SPEED,
+            TEST_ZONE_RADIUS,
+            TEST_ZONE_SPEED,
             TEST_BASE_DRAIN,
             TEST_NEURON_COST,
             TEST_SIGNAL_COST,

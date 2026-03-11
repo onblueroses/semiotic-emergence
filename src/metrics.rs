@@ -4,20 +4,21 @@ use crate::world::SignalEvent;
 
 pub fn compute_iconicity(
     signal_events: &[SignalEvent],
-    ticks_near: u32,
+    ticks_in_zone: u32,
     total_ticks: u32,
-    prey_vision_range: f32,
+    zone_radius: f32,
 ) -> f32 {
     if signal_events.is_empty() || total_ticks == 0 {
         return 0.0;
     }
-    let signals_near = signal_events
+    // Signals emitted while inside a zone (zone_dist <= 0 means inside)
+    let signals_in_zone = signal_events
         .iter()
-        .filter(|e| e.predator_dist < prey_vision_range)
+        .filter(|e| e.zone_dist <= zone_radius)
         .count() as f32;
-    let signal_near_rate = signals_near / signal_events.len() as f32;
-    let baseline_near_rate = ticks_near as f32 / total_ticks as f32;
-    signal_near_rate - baseline_near_rate
+    let signal_zone_rate = signals_in_zone / signal_events.len() as f32;
+    let baseline_zone_rate = ticks_in_zone as f32 / total_ticks as f32;
+    signal_zone_rate - baseline_zone_rate
 }
 
 pub fn compute_mutual_info(signal_events: &[SignalEvent], mi_bins: &[f32; 3]) -> f32 {
@@ -28,9 +29,9 @@ pub fn compute_mutual_info(signal_events: &[SignalEvent], mi_bins: &[f32; 3]) ->
     mi_from_contingency(&counts)
 }
 
-/// Predator distance bin using configurable bin edges.
+/// Zone distance bin using configurable bin edges.
 /// Bins: [0, bins[0]), [bins[0], bins[1]), [bins[1], bins[2]), [bins[2], +inf).
-fn predator_dist_bin(dist: f32, bins: &[f32; 3]) -> usize {
+fn zone_dist_bin(dist: f32, bins: &[f32; 3]) -> usize {
     if dist < bins[0] {
         0
     } else if dist < bins[1] {
@@ -43,7 +44,7 @@ fn predator_dist_bin(dist: f32, bins: &[f32; 3]) -> usize {
 }
 
 /// Build the signal-context contingency matrix from signal events.
-/// Rows = symbols, columns = predator distance bins.
+/// Rows = symbols, columns = zone distance bins.
 pub fn signal_context_matrix(
     signal_events: &[SignalEvent],
     mi_bins: &[f32; 3],
@@ -51,7 +52,7 @@ pub fn signal_context_matrix(
     let mut counts = [[0u32; 4]; NUM_SYMBOLS];
     for e in signal_events {
         let sym = (e.symbol as usize).min(NUM_SYMBOLS - 1);
-        counts[sym][predator_dist_bin(e.predator_dist, mi_bins)] += 1;
+        counts[sym][zone_dist_bin(e.zone_dist, mi_bins)] += 1;
     }
     counts
 }
@@ -111,7 +112,7 @@ fn normalize_action_dist(counts: &[u32; 5]) -> Option<[f32; 5]> {
 }
 
 /// Receiver Response Spectrum: JSD between action distributions with vs without signal,
-/// split by context (predator not visible, predator visible).
+/// split by context (not in zone, in zone).
 pub fn compute_receiver_jsd(counts: &[[[u32; 5]; 2]; 1 + NUM_SYMBOLS]) -> (f32, f32) {
     let mut jsd_per_context = [0.0_f32; 2];
     for ctx in 0..2 {
@@ -536,7 +537,7 @@ mod tests {
             inputs[0] = val;
             events.push(SignalEvent {
                 symbol,
-                predator_dist: 5.0,
+                zone_dist: 5.0,
                 inputs,
                 emitter_idx: 0,
             });
@@ -553,7 +554,7 @@ mod tests {
         let events: Vec<SignalEvent> = (0..10)
             .map(|i| SignalEvent {
                 symbol: (i % 3) as u8,
-                predator_dist: 5.0,
+                zone_dist: 5.0,
                 inputs: [0.0; INPUTS],
                 emitter_idx: 0,
             })
@@ -568,25 +569,25 @@ mod tests {
         let events = vec![
             SignalEvent {
                 symbol: 0,
-                predator_dist: 2.0,
+                zone_dist: 2.0,
                 inputs: [0.0; INPUTS],
                 emitter_idx: 0,
             },
             SignalEvent {
                 symbol: 1,
-                predator_dist: 6.0,
+                zone_dist: 6.0,
                 inputs: [0.0; INPUTS],
                 emitter_idx: 0,
             },
             SignalEvent {
                 symbol: 2,
-                predator_dist: 10.0,
+                zone_dist: 10.0,
                 inputs: [0.0; INPUTS],
                 emitter_idx: 0,
             },
             SignalEvent {
                 symbol: 0,
-                predator_dist: 15.0,
+                zone_dist: 15.0,
                 inputs: [0.0; INPUTS],
                 emitter_idx: 0,
             },
