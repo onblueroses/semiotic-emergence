@@ -78,7 +78,7 @@ impl SimParams {
             tournament_size: 3,
             mutation_sigma: 0.1,
             base_drain: 0.0008,
-            neuron_cost: 0.00001,
+            neuron_cost: 0.0,
             signal_cost: 0.002,
             no_signals,
             patch_ratio,
@@ -212,6 +212,7 @@ struct EvalResult {
     prey_ticks: u32,
     receiver_counts: [[[u32; 5]; 2]; 1 + NUM_SYMBOLS],
     signals_per_tick: Vec<f32>,
+    alive_per_tick: Vec<f32>,
     min_zone_dist: Vec<f32>,
     signal_rate_per_prey: Vec<f32>,
     actions_with_signal: Vec<[[u32; 5]; 2]>,
@@ -290,6 +291,7 @@ fn evaluate_generation(
         prey_ticks: world.total_prey_ticks,
         receiver_counts: world.receiver_counts,
         signals_per_tick: world.signals_per_tick.iter().map(|&s| s as f32).collect(),
+        alive_per_tick: world.alive_per_tick.iter().map(|&a| a as f32).collect(),
         min_zone_dist: world.min_zone_dist_per_tick,
         signal_rate_per_prey,
         actions_with_signal,
@@ -298,6 +300,7 @@ fn evaluate_generation(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn compute_gen_metrics(
     ev: &EvalResult,
     population: &[Agent],
@@ -316,7 +319,13 @@ fn compute_gen_metrics(
     let mutual_info = metrics::compute_mutual_info(&ev.signal_events, &params.mi_bins);
     let (jsd_no_pred, jsd_pred) = metrics::compute_receiver_jsd(&ev.receiver_counts);
     let per_sym_jsd = metrics::compute_per_symbol_jsd(&ev.receiver_counts);
-    let silence_corr = metrics::pearson(&ev.signals_per_tick, &ev.min_zone_dist);
+    let normalized_signal_rate: Vec<f32> = ev
+        .signals_per_tick
+        .iter()
+        .zip(&ev.alive_per_tick)
+        .map(|(&s, &a)| if a > 0.0 { s / a } else { 0.0 })
+        .collect();
+    let silence_corr = metrics::pearson(&normalized_signal_rate, &ev.min_zone_dist);
     let input_mi = metrics::compute_input_mi(&ev.signal_events);
     let gen_matrix = metrics::signal_context_matrix(&ev.signal_events, &params.mi_bins);
     let curr_norm = metrics::normalize_matrix(&gen_matrix);
@@ -509,6 +518,7 @@ fn run_seed(
             prey_ticks: ev.prey_ticks,
             receiver_counts: ev.receiver_counts,
             signals_per_tick: ev.signals_per_tick,
+            alive_per_tick: ev.alive_per_tick,
             min_zone_dist: ev.min_zone_dist,
             signal_rate_per_prey: ev.signal_rate_per_prey,
             actions_with_signal: ev.actions_with_signal,
