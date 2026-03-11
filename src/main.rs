@@ -22,12 +22,12 @@ const MIN_RECEIVER_SAMPLES: u32 = 10;
 struct SimParams {
     pop_size: usize,
     grid_size: i32,
-    num_predators: usize,
+    num_zones: usize,
     food_count: usize,
     ticks_per_eval: u32,
-    prey_vision_range: f32,
     signal_range: f32,
-    predator_speed: u32,
+    zone_radius: f32,
+    zone_speed: f32,
     reproduction_radius: f32,
     fallback_radius: f32,
     mi_bins: [f32; 3],
@@ -46,31 +46,31 @@ impl SimParams {
     fn from_cli(args: &[String]) -> Self {
         let pop_size = parse_flag(args, "--pop").unwrap_or(384);
         let grid_size = parse_flag::<i32>(args, "--grid").unwrap_or(56);
-        let num_predators = parse_flag(args, "--pred").unwrap_or(3);
+        let num_zones = parse_flag(args, "--pred").unwrap_or(3);
         let food_count = parse_flag(args, "--food").unwrap_or(100);
         let ticks_per_eval = parse_flag(args, "--ticks").unwrap_or(500);
         let no_signals = args.iter().any(|a| a == "--no-signals");
         let patch_ratio = parse_flag(args, "--patch-ratio").unwrap_or(0.5);
         let kin_bonus = parse_flag(args, "--kin-bonus").unwrap_or(0.1);
+        let zone_radius = parse_flag(args, "--zone-radius").unwrap_or(8.0);
+        let zone_speed = parse_flag(args, "--zone-speed").unwrap_or(0.5);
 
         let scale = grid_size as f32 / 20.0;
-        let prey_vision_range = 2.0 * scale;
         let signal_range = 8.0 * scale;
-        let predator_speed = scale.round().max(1.0) as u32;
         let reproduction_radius = 6.0 * scale;
         let fallback_radius = 10.0 * scale;
-        let mi_bins = [prey_vision_range, signal_range, signal_range * 1.375];
+        let mi_bins = [zone_radius, signal_range, signal_range * 1.375];
         let elite_count = (pop_size / 6).max(2);
 
         SimParams {
             pop_size,
             grid_size,
-            num_predators,
+            num_zones,
             food_count,
             ticks_per_eval,
-            prey_vision_range,
             signal_range,
-            predator_speed,
+            zone_radius,
+            zone_speed,
             reproduction_radius,
             fallback_radius,
             mi_bins,
@@ -208,11 +208,11 @@ struct EvalResult {
     fitness: Vec<f32>,
     signal_events: Vec<world::SignalEvent>,
     total_signals: u32,
-    ticks_near: u32,
+    ticks_in_zone: u32,
     prey_ticks: u32,
     receiver_counts: [[[u32; 5]; 2]; 1 + NUM_SYMBOLS],
     signals_per_tick: Vec<f32>,
-    min_pred_dist: Vec<f32>,
+    min_zone_dist: Vec<f32>,
     signal_rate_per_prey: Vec<f32>,
     actions_with_signal: Vec<[[u32; 5]; 2]>,
     actions_without_signal: Vec<[[u32; 5]; 2]>,
@@ -226,14 +226,14 @@ fn evaluate_generation(
 ) -> EvalResult {
     let mut world = World::new_with_positions(
         population,
-        params.num_predators,
+        params.num_zones,
         rng,
         params.no_signals,
         params.grid_size,
         params.food_count,
-        params.prey_vision_range,
         params.signal_range,
-        params.predator_speed,
+        params.zone_radius,
+        params.zone_speed,
         params.base_drain,
         params.neuron_cost,
         params.signal_cost,
@@ -286,11 +286,11 @@ fn evaluate_generation(
         fitness,
         signal_events: world.signal_events,
         total_signals: world.signals_emitted,
-        ticks_near: world.ticks_near_predator,
+        ticks_in_zone: world.ticks_in_zone,
         prey_ticks: world.total_prey_ticks,
         receiver_counts: world.receiver_counts,
         signals_per_tick: world.signals_per_tick.iter().map(|&s| s as f32).collect(),
-        min_pred_dist: world.min_pred_dist_per_tick,
+        min_zone_dist: world.min_zone_dist_per_tick,
         signal_rate_per_prey,
         actions_with_signal,
         actions_without_signal,
@@ -309,14 +309,14 @@ fn compute_gen_metrics(
     let max_fitness = ev.fitness.iter().copied().fold(f32::NEG_INFINITY, f32::max);
     let iconicity = metrics::compute_iconicity(
         &ev.signal_events,
-        ev.ticks_near,
+        ev.ticks_in_zone,
         ev.prey_ticks,
-        params.prey_vision_range,
+        params.zone_radius,
     );
     let mutual_info = metrics::compute_mutual_info(&ev.signal_events, &params.mi_bins);
     let (jsd_no_pred, jsd_pred) = metrics::compute_receiver_jsd(&ev.receiver_counts);
     let per_sym_jsd = metrics::compute_per_symbol_jsd(&ev.receiver_counts);
-    let silence_corr = metrics::pearson(&ev.signals_per_tick, &ev.min_pred_dist);
+    let silence_corr = metrics::pearson(&ev.signals_per_tick, &ev.min_zone_dist);
     let input_mi = metrics::compute_input_mi(&ev.signal_events);
     let gen_matrix = metrics::signal_context_matrix(&ev.signal_events, &params.mi_bins);
     let curr_norm = metrics::normalize_matrix(&gen_matrix);
@@ -505,11 +505,11 @@ fn run_seed(
             fitness: ev.fitness,
             signal_events: ev.signal_events,
             total_signals: ev.total_signals,
-            ticks_near: ev.ticks_near,
+            ticks_in_zone: ev.ticks_in_zone,
             prey_ticks: ev.prey_ticks,
             receiver_counts: ev.receiver_counts,
             signals_per_tick: ev.signals_per_tick,
-            min_pred_dist: ev.min_pred_dist,
+            min_zone_dist: ev.min_zone_dist,
             signal_rate_per_prey: ev.signal_rate_per_prey,
             actions_with_signal: ev.actions_with_signal,
             actions_without_signal: ev.actions_without_signal,
@@ -563,6 +563,7 @@ fn run_seed(
     Ok(last_result)
 }
 
+#[allow(clippy::too_many_lines)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     let params = SimParams::from_cli(&args);
@@ -576,10 +577,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or(200);
 
         println!(
-            "Config: pop={} grid={} pred={} food={} ticks={} patches={:.0}% kin_bonus={:.2}",
+            "Config: pop={} grid={} zones={} radius={:.1} speed={:.1} food={} ticks={} patches={:.0}% kin_bonus={:.2}",
             params.pop_size,
             params.grid_size,
-            params.num_predators,
+            params.num_zones,
+            params.zone_radius,
+            params.zone_speed,
             params.food_count,
             params.ticks_per_eval,
             params.patch_ratio * 100.0,
@@ -657,10 +660,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or(200);
 
         println!(
-            "Config: pop={} grid={} pred={} food={} ticks={} patches={:.0}% kin_bonus={:.2}",
+            "Config: pop={} grid={} zones={} radius={:.1} speed={:.1} food={} ticks={} patches={:.0}% kin_bonus={:.2}",
             params.pop_size,
             params.grid_size,
-            params.num_predators,
+            params.num_zones,
+            params.zone_radius,
+            params.zone_speed,
             params.food_count,
             params.ticks_per_eval,
             params.patch_ratio * 100.0,
