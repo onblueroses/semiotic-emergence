@@ -289,6 +289,28 @@ pub fn compute_input_mi(signal_events: &[SignalEvent]) -> [f32; INPUTS] {
     result
 }
 
+/// Shannon entropy of emitted signal symbols. Max = ln(6) ≈ 1.79 (uniform).
+/// Low entropy = population converging on specific symbols.
+pub fn compute_signal_entropy(signal_events: &[SignalEvent]) -> f32 {
+    if signal_events.is_empty() {
+        return 0.0;
+    }
+    let mut counts = [0u32; NUM_SYMBOLS];
+    for e in signal_events {
+        let sym = (e.symbol as usize).min(NUM_SYMBOLS - 1);
+        counts[sym] += 1;
+    }
+    let total = signal_events.len() as f32;
+    let mut entropy = 0.0_f32;
+    for &c in &counts {
+        if c > 0 {
+            let p = c as f32 / total;
+            entropy -= p * p.ln();
+        }
+    }
+    entropy
+}
+
 /// Rolling fluctuation ratio: std(recent window) / std(early window).
 /// Rising ratio precedes phase transitions. Returns 0.0 if insufficient data.
 pub fn rolling_fluctuation_ratio(series: &[f32], window: usize) -> f32 {
@@ -561,6 +583,60 @@ mod tests {
             .collect();
         let mi = compute_input_mi(&events);
         assert!(mi.iter().all(|&v| v == 0.0));
+    }
+
+    #[test]
+    fn signal_entropy_empty_is_zero() {
+        assert!(compute_signal_entropy(&[]).abs() < 1e-10);
+    }
+
+    #[test]
+    fn signal_entropy_single_symbol_is_zero() {
+        let events: Vec<SignalEvent> = (0..100)
+            .map(|_| SignalEvent {
+                symbol: 3,
+                zone_dist: 5.0,
+                inputs: [0.0; INPUTS],
+                emitter_idx: 0,
+            })
+            .collect();
+        assert!(compute_signal_entropy(&events).abs() < 1e-10);
+    }
+
+    #[test]
+    fn signal_entropy_uniform_is_max() {
+        let events: Vec<SignalEvent> = (0..600)
+            .map(|i| SignalEvent {
+                symbol: (i % 6) as u8,
+                zone_dist: 5.0,
+                inputs: [0.0; INPUTS],
+                emitter_idx: 0,
+            })
+            .collect();
+        let expected = (6.0_f32).ln(); // ln(6) ≈ 1.7918
+        let result = compute_signal_entropy(&events);
+        assert!(
+            (result - expected).abs() < 1e-4,
+            "Expected {expected:.4}, got {result:.4}"
+        );
+    }
+
+    #[test]
+    fn signal_entropy_two_symbols_equal() {
+        let events: Vec<SignalEvent> = (0..200)
+            .map(|i| SignalEvent {
+                symbol: (i % 2) as u8,
+                zone_dist: 5.0,
+                inputs: [0.0; INPUTS],
+                emitter_idx: 0,
+            })
+            .collect();
+        let expected = (2.0_f32).ln(); // ln(2) ≈ 0.6931
+        let result = compute_signal_entropy(&events);
+        assert!(
+            (result - expected).abs() < 1e-4,
+            "Expected {expected:.4}, got {result:.4}"
+        );
     }
 
     #[test]
