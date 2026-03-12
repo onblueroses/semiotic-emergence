@@ -243,6 +243,45 @@ No performance impact from the change: zone movement is simpler than predator ch
 the existing CellGrid infrastructure. Signal processing and brain forward pass are
 unchanged.
 
+## Optimization Phase 2 (2026-03-12)
+
+Five optimizations applied in commit 7644ca7:
+
+| Change | File | Mechanism |
+|--------|------|-----------|
+| Fat LTO + codegen-units=1 + panic=abort | Cargo.toml | Full cross-crate inlining, single codegen unit, no unwinding tables |
+| CLT sum-of-4-uniforms gaussian | evolution.rs | Eliminates ln/sqrt/cos from ~431k calls/gen |
+| Pade [1/1] fast_tanh (clamped) | brain.rs | Replaces 3 std tanh calls in forward(), ~2.6% max error |
+| Action argmax + emit to parallel phase | world.rs | Moves ~115ns/prey/tick pure computation from sequential to par_iter |
+| Sparse kin fitness via HashMap | main.rs | O(relatives) instead of O(N^2) for kin bonus |
+
+### VPS benchmark (2026-03-13, Hetzner 12 vCPU AMD EPYC 7B13 Zen 3)
+
+Built with `RUSTFLAGS="-C target-cpu=znver3" cargo build --release`.
+100 gens, seed 42, --metrics-interval 10, standard 8x config.
+
+**Thread scaling (new binary):**
+
+| Threads | Wall time | Gens/min |
+|---------|-----------|----------|
+| 2 | 63.5s | 95 |
+| 4 | 41.8s | 143 |
+| 6 | 36.0s | 167 |
+| 12 | 27.7s | 217 |
+
+**A/B comparison (old commit fe35822 vs new 7644ca7, same hardware + znver3):**
+
+| Threads | Old | New | Speedup |
+|---------|-----|-----|---------|
+| 4 | 52.3s (115 gens/min) | 41.8s (143 gens/min) | **25.2%** |
+| 12 | 32.1s (187 gens/min) | 27.7s (217 gens/min) | **15.9%** |
+
+25% at 4 threads, 16% at 12 threads. Lower gain at higher thread counts is expected
+(Amdahl's law - sequential phase dominates more with more parallel workers).
+
+Note: absolute gens/min are lower than the i7-12650H benchmarks above because
+Hetzner shared vCPUs have lower per-core frequency than a laptop i7.
+
 ## Bottleneck Analysis (2026-03-10, samply profile)
 
 ### Per-tick cost breakdown
@@ -272,9 +311,10 @@ that makes population scaling worse than linear (see "Scaling with population" a
 
 ### Parallelism status
 
-The par_iter block (world.rs:447-455) parallelizes build_inputs_fast + brain.forward
-across cores via rayon. This covers receive_detailed + CellGrid::nearest + forward.
-The sequential apply phase (world.rs:459-509) mutates world state and cannot be
+The par_iter block (world.rs:454-477) parallelizes build_inputs_fast + brain.forward +
+action argmax + emit decision across cores via rayon. This covers receive_detailed +
+CellGrid::nearest + forward + pure output computation. The sequential apply phase
+(world.rs:480-524) mutates world state (movement, food, signals, memory) and cannot be
 parallelized. On 12-core Hetzner VPS, the parallel phase scales well since each
 prey's computation is independent.
 
@@ -302,10 +342,8 @@ prey's computation is independent.
    two modular arithmetic ops with a table lookup per distance calc. Small
    constant-factor win.
 
-5. **tanh approximation.** Fast polynomial (Pade) or lookup table for the 6.4%
-   spent in tanh. Risk: slightly different evolutionary dynamics from precision
-   loss. The brain forward pass does ~30 tanh calls/prey/tick (12 base_hidden +
-   6 signal_hidden + 8 memory + 4 remaining).
+5. **tanh approximation.** ~~Fast polynomial (Pade) or lookup table for the 6.4%
+   spent in tanh.~~ DONE (Phase 2) - Pade [1/1] fast_tanh, ~2.6% max error.
 
 6. **Batch brain forward.** Restructure as matrix multiply across all prey.
    Enables BLAS-style optimization. Requires genome layout changes for
