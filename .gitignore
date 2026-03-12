@@ -5,6 +5,7 @@ input_mi.csv
 divergence.csv
 runs.tsv
 output/
+runs/
 nul
 *.ps1
 *.log
