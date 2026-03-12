@@ -48,7 +48,7 @@ Any claim about what signals mean is a translation, and translation always loses
 
 This is why unsupervised analysis matters. Instead of asking "do signals encode zone distance?" (our question, our categories), ask "what structure exists in the relationship between signals, contexts, and responses?" and let the patterns reveal whatever categories the prey have actually evolved.
 
-The neural network's 36 inputs include 3 dead inputs (zones are invisible), food direction and distance, ally direction and distance, 18 signal channels (6 symbols x strength/direction), 8 recurrent memory cells, and energy level. Signal outputs pass through a dedicated signal hidden layer, giving evolution capacity for independent signal control. Our mutual information metric only checks correlation with one dimension (zone distance - an observer metric, not a prey input). The prey might be signaling about energy level, food proximity, ally density, memory state, the incoming signals themselves, or some nonlinear combination that doesn't decompose into any single variable.
+The neural network's 36 inputs include 3 dead inputs (zones are invisible), food direction and distance, ally direction and distance, 18 signal channels (6 symbols x strength/direction), 8 recurrent memory cells, and energy level. Signal outputs pass through a dedicated signal hidden layer, giving evolution capacity for independent signal control. Our mutual information metric only checks correlation with one dimension (zone distance - an observer metric, not a prey input). The prey might be signaling about energy level, food proximity, ally density, memory state, the incoming signals themselves, or some nonlinear combination that doesn't decompose into any single variable. Input MI - I(Symbol; X_i) for each of the 36 input dimensions - partially addresses this by letting the data reveal which dimensions signals actually correlate with. But it still decomposes into single variables; nonlinear combinations remain in the dark.
 
 The invisibility of kill zones deepens the observer's Umwelt problem. We measure MI against zone distance because *we* can see the zones. The prey cannot. If signals correlate with zone distance, that correlation must be mediated through observable channels - energy loss, received signals from other prey, or memory of recent energy trajectories. This indirection makes any observed MI more meaningful: it can't be a trivial spandrel of shared sensory input.
 
@@ -118,19 +118,27 @@ The semiotic processes happening in the simulation that our metrics cannot see.
 
 **Social semiotics.** Differences in signaling between spatially proximate kin clusters and interactions with distant non-relatives. If prey signal differently when surrounded by genetic relatives (which spatial reproduction creates naturally), that's audience-dependent communication.
 
-## The five instruments
+## The instruments
 
-The framework points to five measurements the simulation needs:
+The original five measurements have grown into a fuller observatory as the project matured. They organize by the question they answer.
 
-**1. Receiver response spectrum.** For each signal-context pair, what does the receiver do? Compare against the null (same context, no signal). The difference is the semiotic effect.
+### What are signals encoding?
 
-**2. Silence detection.** Measure signal rate over time within a run. When does it drop? Does the drop correlate with zone proximity to any prey? Do receivers near the silent area behave differently?
+**Mutual information.** I(Signal; ZoneDistance) - the foundational sender-side metric. But it uses observer-imposed bins, measuring correlation with *our* categories. **Input MI** addresses this by computing I(Symbol; X_i) for all 36 input dimensions without imposing categories - letting the data reveal what signals actually encode. **Signal entropy** (Shannon entropy of symbol frequencies) captures pre-semiotic organization that MI misses: a population converging on specific symbols even before those symbols carry measurable information. **Iconicity** measures whether signal rate rises or falls inside zones - alarm calling vs silence.
 
-**3. Semiotic trajectory.** Track the signal-context-response mapping over evolutionary time. Not snapshots but the full trajectory. Look for phase-transition signatures.
+### How do receivers respond?
 
-**4. Cross-population divergence.** Run N populations from different seeds. Compare signal-meaning mappings at generation G. High divergence means convention. Low divergence means constraint.
+**Receiver response spectrum.** JSD between action distributions with and without signal, split by context. The core receiver-side metric. **Silence onset** detects whether receivers change behavior when signals vanish - increased movement at silence onset means signals were functioning as "all clear." **Contrast telescope** (pairwise inter-symbol JSD) checks whether different symbols carry different information - the prerequisite for functional reference.
 
-**5. Counterfactual value.** Run paired simulations: one with signals active, one with them disabled. Same seed, same conditions. The fitness difference is the value of the entire semiotic system.
+### Does the signal-response loop affect fitness?
+
+**Fitness coupling.** Correlation between signaling rate and survival (sender side) and between signal reception and survival (receiver side). **Response fitness correlation** is the cleanest: does *responding differently* to signals predict survival? A prey that hears but ignores signals is its own control.
+
+**Counterfactual value.** The definitive test. Paired simulations from the same seed, one with signals, one without. The fitness divergence is the total value of the semiotic system. Known confounds bound interpretation: mute prey save emission energy (~62% of base metabolic drain), creating a cost advantage; signal emission changes the energy input, creating a feedback loop absent in the mute run; identical seeds diverge within ticks as different survival patterns alter the RNG stream. A small baseline advantage could be cost-offset. A large advantage is strong evidence.
+
+### How does the system evolve?
+
+**Semiotic trajectory.** The signal-context mapping tracked over evolutionary time. Phase transitions appear as sudden shifts in trajectory JSD. **Phase transition detection** (rolling fluctuation ratio) identifies destabilization before reorganization. **Cross-population divergence** compares signal-meaning mappings across seeds: high divergence means convention, low means constraint.
 
 ## Hierarchy of semiotic phenomena
 
@@ -147,6 +155,26 @@ Not a ladder to climb, but a map of what could exist in this world:
 **Level 4 - Convention.** The mapping between signal and referent is arbitrary - it could have been otherwise. Testable by comparing across independently evolved populations.
 
 **Levels 5+ - Compositionality, displacement, metalanguage.** Beyond what fixed-topology networks can achieve. Not a target for this simulation.
+
+## The evidence hierarchy
+
+The semiotic phenomena hierarchy describes what *could* exist. This hierarchy describes what we need to *measure* to know we've found it. Each level builds on the previous - skipping ahead produces ambiguous results.
+
+| Level | Claim | Evidence needed |
+|-------|-------|----------------|
+| 1 | Signals have adaptive value | Baseline vs mute fitness divergence |
+| 2 | Receivers change behavior | JSD(action\|signal) vs JSD(action\|no signal) > 0 |
+| 3 | Different symbols carry different info | Inter-symbol JSD > 0, input MI shows symbol-specific encoding |
+| 4 | Responses are appropriate | MI(symbol; action \| context) > 0 |
+| 5 | Genuine reference | Stable symbol-referent mapping, robust to perturbation |
+
+Level 1 is the prerequisite. Without it, signal-response patterns could be spandrels - correlated with fitness but not causal. The counterfactual experiment isolates causation by removing the signal channel and measuring whether the evolutionary trajectory changes.
+
+Early data shows promising Level 2/3 signals (receiver JSD ~6x baseline, sender fitness correlation -0.39 / receiver fitness correlation +0.75, consistent with costly kin-selected signaling). But without Level 1, these remain ambiguous.
+
+The gap between Level 3 and Level 4 is the gap between information and meaning. A signal carrying different information than another (Level 3) might not elicit the *right* response. Level 4 conditions on context: does the receiver take the survival-improving action for *this* signal in *this* situation?
+
+Level 5 is the project's ultimate question: reference emerging from scratch in a system simple enough to fully inspect.
 
 ## Principles for development
 
