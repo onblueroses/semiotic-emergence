@@ -278,3 +278,115 @@ Prior runs at every neuron cost tested (0.0002, 0.00002, 0.00001) showed the sam
 - Brain sizes should drift above minimum over hundreds of generations
 - MI may rise if brains develop enough capacity for zone-correlated signaling
 - The critical test: does response_fit_corr ever leave zero? That's the real signal of communication.
+
+---
+
+## Kill Zone Runs: First Long-Duration Analysis
+
+**Seeds: 42 (36,084 gens), 43 (37,441 gens), 99 (93,000 gens)**
+Parameters: pop=384, grid=56, zones=3, radius=8.0, speed=0.5, food=100, ticks=500, signal_cost=0.002, kin_bonus=0.10, neuron_cost=0.0, 6 symbols, split-head brain.
+seed99 run with `--metrics-interval 1000` (94 data points at ~1000-gen intervals); seed42/43 at default (one row per gen, full resolution).
+
+### Universal Findings (all three seeds independently confirmed)
+
+**1. Signal hidden layer converges to maximum.**
+
+All three seeds independently evolved to near-maximum signal processing capacity: seed42 avg 29.0 [26-32], seed43 avg 30.8 [26-32], seed99 avg 25.3 [19-31]. Starting from random initialization around 6, all three sprinted to high signal_hidden by gen 18-25k. With neuron_cost=0.0, this is not energetically forced - it reflects genuine selection pressure for signal processing capacity.
+
+**2. Zone encoding is zero, universally.**
+
+`mi_zone_dist = 0.000` in all three seeds across the entire run. Zones create lethal pressure but never appear in signal content. Prey that survive zones do so through other means; no stable convention of danger signaling emerges.
+
+**3. response_fit_corr = 0.000, universally.**
+
+No individual prey benefits from changing its behavior based on signal content. The three-way coupling chain (encode → respond → survive) never closes. Signals influence the environment but not through content-sensitive behavioral responses.
+
+**4. receiver_fit_corr ~0.79-0.87 in all runs.**
+
+High but confirmed to be a spatial confound: center prey hear more signals AND survive more (better food access, further from zone edges on average). This metric has been consistent since run 1 with visible predators and does not indicate signal utility.
+
+**5. Sender selection is real but moderate.**
+
+sender_fit_corr = 0.36-0.46 across all runs. Signaling propensity correlates positively with fitness, likely through cooperative patch harvesting: prey that signal more are more active and more likely to be co-located with other active prey, satisfying the 2+ prey requirement for patch food.
+
+### Divergent Attractors: Same Pressure, Three Solutions
+
+Despite identical mechanics, the three seeds found completely different stable symbol systems:
+
+| Seed | Final symbol distribution | Primary encoding |
+|------|--------------------------|-----------------|
+| seed42 | s1=33%, s3=32%, s4=25% (3-way split) | Food location (mi_food_dy=0.119, mi_food_dist=0.107) |
+| seed43 | s3=78%, s5=19% (near monopoly + satellite) | Other signals (mi_sig5_str=0.072, mi_sig5_dx=0.020) |
+| seed99 | s2=28%, s5=25%, s0=20%, s4=16% (4-way spread) | Food location (mi_food_dist=0.114, mi_food_dx=0.100) |
+
+Symbol 0 is extinct in both VPS seeds; symbol 3 is extinct in seed99. The specific symbols that survive are arbitrary (index has no semantic prior), but the convergence on food encoding is not.
+
+### The seed42/seed99 Pattern: Direct Food Encoding
+
+Both seed42 (at gen 36k) and seed99 (at gen 93k) converge on the same solution: signals encode food location. Top sustained input MI in both runs has food_dy, food_dist, and food_dx as the dominant dimensions. Multiple symbols (3-4 active) all carry food proximity information with similar zone-proximity ratios (~1.4-1.5x), indicating this is a spandrel - the elevation near zones is because active/stressed prey are more prevalent there, not because prey are signaling about zones.
+
+seed99's encoding is cleaner at 93k gens (food_dist=0.114) than seed42's at 36k gens (food_dist=0.107), suggesting the food encoding strategy consolidates further given more time. The VPS runs are mid-consolidation.
+
+### The seed43 Anomaly: A Two-Tier Signal Relay
+
+seed43 found a structurally distinct solution. Symbol 3 dominates (78%) and its top inputs are `mi_sig5_str=0.072` and `mi_sig5_dx=0.020` - the dominant symbol encodes the strength and direction of the minority symbol s5 (19%). Meanwhile s5 encodes food location (mi_food_dx and mi_food_dy appear in its encoding profile). The resulting chain:
+
+**s5 → food proximity → s3 → where s5 activity is concentrated → transitively, where active prey near food are**
+
+This is a second-order relay: prey emit s3 in response to hearing s5, re-broadcasting where s5 activity clusters. Functionally it achieves the same thing as direct food encoding but through an indirect route. Evidence that seed43 needed more signal processing capacity to sustain this: it has the highest signal_hidden (30.8 avg vs 29.0/25.3) and the lowest sustained fitness (620 vs 695/736) - the relay is less efficient than direct encoding.
+
+seed43 also shows the most volatile evolutionary history: early vs late encoding stability Spearman = 0.188 (vs 0.461/0.461 for seed42/seed99), and the largest JSD spike cluster (gen 33k, values up to 0.375) - a late-run symbol reshuffling event not seen in the other seeds.
+
+### Evolutionary Trajectory: Five Acts (seed99 detail)
+
+seed99's 93k gens at sparse resolution reveals a consistent five-phase pattern likely present but compressed in the shorter runs:
+
+1. **Gen 0-5k: Chaotic sweeps.** Signal hidden oscillates wildly (+16, -12 in single 1k-gen windows). One symbol briefly dominates then is permanently eliminated via selective sweep (symbol 3 hits 61%, then goes extinct and never recovers).
+
+2. **Gen 15-25k: Low-complexity monopoly.** One symbol owns 72-79% of signals while signal_hidden stays small (2-6). Minimal processing, no real encoding. The cheapest viable signaling strategy.
+
+3. **Gen 30-35k: The breakthrough.** Signal hidden explodes (+11.9 in a single window). A new genotype sweeps through with high signal processing capacity. Symbol reshuffling accompanies the sweep.
+
+4. **Gen 35-55k: The turbulent semiotic window.** The closest the population gets to danger signaling: MI peaks at 0.006, silence_corr hits -0.231 (prey going quiet near zones), jsd_pred peaks at 0.311. All three couple briefly at gen ~45k. The coherence dissolves immediately - another sweep crashes signal_hidden from 17 to 10 in one step.
+
+5. **Gen 55-93k: Food encoding consolidation.** Signal_hidden climbs steadily to 25-31. Food MI grows 0.15→0.34. Zone MI stays permanently at 0.000. The danger-signaling niche is abandoned; food coordination becomes the stable attractor.
+
+### The Danger Signaling Problem
+
+The turbulent semiotic window (Act 4) appears in all three seeds during the initial post-breakthrough phase. It is always transient. Several factors work against stable danger convention formation:
+
+- **Silence near zones conflicts with food encoding near zones.** Prey are more active (and thus signal more) when near food, which correlates spatially with zones. A stable zone-signaling convention would require prey to signal *less* near food patches that happen to be near zones - evolutionarily unstable given the food encoding pressure.
+
+- **The causal chain timing.** Zones kill in 50 ticks. A prey already inside a zone has limited time to receive signals, update behavior, and escape. For danger signaling to close the response_fit_corr gap, the signal-response loop needs to work faster than the simulation dynamics allow.
+
+- **Free riding on food encoding.** Once food encoding is established, the signal channel is already occupied. Inserting zone information requires differentiated symbols - which appears in seed43's two-tier relay but at a significant fitness cost.
+
+### Cross-Run Summary Table
+
+| Metric | seed42 (36k) | seed43 (37k) | seed99 (93k) |
+|--------|-------------|-------------|-------------|
+| avg_fitness | 695.3 | 620.0 | 736.2 |
+| sig_hidden | 29.0 | **30.8** | 25.3 |
+| mutual_info (final) | 0.0001 | 0.0003 | 0.0001 |
+| jsd_pred | 0.215 | 0.155 | 0.018 |
+| silence_corr | +0.046 | -0.018 | -0.012 |
+| sender_fit_corr | 0.360 | 0.419 | 0.464 |
+| receiver_fit_corr | 0.826 | 0.873 | 0.789 |
+| response_fit_corr | **0.000** | **0.000** | **0.000** |
+| Zone MI | 0.000 | 0.000 | 0.000 |
+| Top encoding | food location | signal relay | food location |
+| Encoding stability | 0.461 | 0.188 | ~0.46 |
+
+### What This Means for the Design
+
+The kill-zone regime successfully replaced the evasion-boost exploit (signals as fuel) with signals that carry real information content. Food encoding with MI values of 0.09-0.12 is meaningful - these are genuine sender-world correlations. The architecture is working: signal_hidden at max, stable multi-symbol vocabularies, food information in the channel.
+
+The open question is whether danger signaling is achievable in this regime or whether food encoding always outcompetes it. The turbulent semiotic windows suggest the population briefly tries danger signaling before abandoning it. Three possible interpretations:
+
+1. **Insufficient selection pressure**: danger zones cover ~19% of the grid and kill in 50 ticks. The fitness advantage from danger signaling may be too small relative to food coordination gains to sustain.
+
+2. **Convention fragility**: danger conventions require correlated behavior across many prey simultaneously. Random drift dissolves them faster than selection can reinforce them, as seen in run 3 with visible predators.
+
+3. **Ecological niche exclusion**: food encoding and danger encoding compete for the same symbol vocabulary. Once food encoding occupies 4-5 symbols (seed42/99) or a two-tier relay occupies them (seed43), there's no room for stable danger conventions.
+
+Distinguishing these requires a counterfactual: a run with cooperative food patches disabled (`--patch-ratio 0.0`) to remove the food coordination driver. If danger signaling emerges when food encoding pressure is absent, that confirms ecological niche exclusion.
