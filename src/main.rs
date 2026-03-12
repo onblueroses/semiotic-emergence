@@ -4,6 +4,7 @@ mod metrics;
 mod signal;
 mod world;
 
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 
@@ -549,15 +550,51 @@ fn run_seed(
         // Apply kin fitness bonus
         let mut fitness = ev.fitness.clone();
         if params.kin_bonus > 0.0 {
+            // Sparse kin fitness: build index of parent/grandparent -> agent indices
+            let mut parent_to_agents: HashMap<usize, Vec<usize>> = HashMap::new();
+            let mut grandparent_to_agents: HashMap<usize, Vec<usize>> = HashMap::new();
+            for (i, agent) in population.iter().enumerate() {
+                for &p in &agent.parent_indices {
+                    if let Some(p) = p {
+                        parent_to_agents.entry(p).or_default().push(i);
+                    }
+                }
+                for &g in &agent.grandparent_indices {
+                    if let Some(g) = g {
+                        grandparent_to_agents.entry(g).or_default().push(i);
+                    }
+                }
+            }
             for i in 0..population.len() {
                 let mut kin_sum = 0.0_f32;
-                for j in 0..population.len() {
-                    if i == j {
-                        continue;
+                // Track siblings to avoid double-counting as cousins
+                let mut seen_sibling = vec![false; population.len()];
+                // Siblings: agents sharing a parent (r=0.5)
+                for &p in &population[i].parent_indices {
+                    if let Some(p) = p {
+                        if let Some(siblings) = parent_to_agents.get(&p) {
+                            for &j in siblings {
+                                if j != i && !seen_sibling[j] && fitness[j] > 0.0 {
+                                    kin_sum += 0.5;
+                                    seen_sibling[j] = true;
+                                }
+                            }
+                        }
                     }
-                    let r = evolution::relatedness(&population[i], &population[j]);
-                    if r > 0.0 && fitness[j] > 0.0 {
-                        kin_sum += r;
+                }
+                // Cousins: agents sharing a grandparent but not already siblings (r=0.25)
+                let mut seen_cousin = vec![false; population.len()];
+                for &g in &population[i].grandparent_indices {
+                    if let Some(g) = g {
+                        if let Some(cousins) = grandparent_to_agents.get(&g) {
+                            for &j in cousins {
+                                if j != i && !seen_sibling[j] && !seen_cousin[j] && fitness[j] > 0.0
+                                {
+                                    kin_sum += 0.25;
+                                    seen_cousin[j] = true;
+                                }
+                            }
+                        }
                     }
                 }
                 fitness[i] += params.kin_bonus * kin_sum;

@@ -25,6 +25,7 @@ const MUTATION_HEADROOM: usize = 4;
 
 /// Relatedness between two agents based on shared ancestry.
 /// Returns 0.5 for siblings (share a parent), 0.25 for cousins (share a grandparent).
+#[cfg(test)]
 pub fn relatedness(a: &Agent, b: &Agent) -> f32 {
     for &pa in &a.parent_indices {
         if let Some(pa) = pa {
@@ -126,9 +127,11 @@ pub fn crossover(a: &Brain, b: &Brain, rng: &mut impl Rng) -> Brain {
 }
 
 fn gaussian_noise(sigma: f32, rng: &mut impl Rng) -> f32 {
-    let u1: f32 = rng.gen::<f32>().max(f32::MIN_POSITIVE);
-    let u2: f32 = rng.gen();
-    (-2.0 * u1.ln()).sqrt() * (2.0 * std::f32::consts::PI * u2).cos() * sigma
+    // CLT: sum of 4 uniforms approximates Gaussian. No transcendentals.
+    // Variance = 4 * (1/12) = 1/3, scale by sqrt(3) for unit variance.
+    // Tails bounded at +/-3.46 sigma (vs infinite for Box-Muller) - fine for mutation.
+    let sum: f32 = rng.gen::<f32>() + rng.gen::<f32>() + rng.gen::<f32>() + rng.gen::<f32>();
+    (sum - 2.0) * 1.732_050_8 * sigma
 }
 
 /// Scoped Gaussian mutation respecting both hidden size genes.
@@ -697,5 +700,182 @@ mod tests {
             grandparent_indices: [Some(20), Some(21), Some(22), Some(23)],
         };
         assert!((relatedness(&a, &b)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn sparse_kin_matches_brute_force() {
+        use std::collections::HashMap;
+
+        // 10 agents: 0-1 siblings (share parent 100), 2-3 siblings (share parent 200),
+        // 4-5 cousins of 0-1 (share grandparent 50), 6-9 unrelated
+        let agents: Vec<Agent> = vec![
+            Agent {
+                brain: Brain::zero(),
+                x: 0,
+                y: 0,
+                parent_indices: [Some(100), Some(101)],
+                grandparent_indices: [Some(50), None, None, None],
+            },
+            Agent {
+                brain: Brain::zero(),
+                x: 0,
+                y: 0,
+                parent_indices: [Some(100), Some(102)],
+                grandparent_indices: [Some(50), None, None, None],
+            },
+            Agent {
+                brain: Brain::zero(),
+                x: 0,
+                y: 0,
+                parent_indices: [Some(200), Some(201)],
+                grandparent_indices: [None; 4],
+            },
+            Agent {
+                brain: Brain::zero(),
+                x: 0,
+                y: 0,
+                parent_indices: [Some(200), Some(202)],
+                grandparent_indices: [None; 4],
+            },
+            Agent {
+                brain: Brain::zero(),
+                x: 0,
+                y: 0,
+                parent_indices: [Some(300), Some(301)],
+                grandparent_indices: [Some(50), None, None, None],
+            },
+            Agent {
+                brain: Brain::zero(),
+                x: 0,
+                y: 0,
+                parent_indices: [Some(302), Some(303)],
+                grandparent_indices: [None, Some(50), None, None],
+            },
+            Agent {
+                brain: Brain::zero(),
+                x: 0,
+                y: 0,
+                parent_indices: [Some(400), Some(401)],
+                grandparent_indices: [None; 4],
+            },
+            Agent {
+                brain: Brain::zero(),
+                x: 0,
+                y: 0,
+                parent_indices: [Some(500), Some(501)],
+                grandparent_indices: [None; 4],
+            },
+            Agent {
+                brain: Brain::zero(),
+                x: 0,
+                y: 0,
+                parent_indices: [Some(600), Some(601)],
+                grandparent_indices: [None; 4],
+            },
+            Agent {
+                brain: Brain::zero(),
+                x: 0,
+                y: 0,
+                parent_indices: [Some(700), Some(701)],
+                grandparent_indices: [None; 4],
+            },
+        ];
+        let fitness: Vec<f32> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let kin_bonus = 0.1_f32;
+        let n = agents.len();
+
+        // Brute force (O(N^2))
+        let mut brute = fitness.clone();
+        for i in 0..n {
+            let mut kin_sum = 0.0_f32;
+            for j in 0..n {
+                if i == j {
+                    continue;
+                }
+                let r = relatedness(&agents[i], &agents[j]);
+                if r > 0.0 && fitness[j] > 0.0 {
+                    kin_sum += r;
+                }
+            }
+            brute[i] += kin_bonus * kin_sum;
+        }
+
+        // Sparse (HashMap)
+        let mut sparse = fitness.clone();
+        let mut parent_map: HashMap<usize, Vec<usize>> = HashMap::new();
+        let mut grandparent_map: HashMap<usize, Vec<usize>> = HashMap::new();
+        for (i, agent) in agents.iter().enumerate() {
+            for &p in &agent.parent_indices {
+                if let Some(p) = p {
+                    parent_map.entry(p).or_default().push(i);
+                }
+            }
+            for &g in &agent.grandparent_indices {
+                if let Some(g) = g {
+                    grandparent_map.entry(g).or_default().push(i);
+                }
+            }
+        }
+        for i in 0..n {
+            let mut kin_sum = 0.0_f32;
+            let mut seen_sibling = vec![false; n];
+            for &p in &agents[i].parent_indices {
+                if let Some(p) = p {
+                    if let Some(siblings) = parent_map.get(&p) {
+                        for &j in siblings {
+                            if j != i && !seen_sibling[j] && fitness[j] > 0.0 {
+                                kin_sum += 0.5;
+                                seen_sibling[j] = true;
+                            }
+                        }
+                    }
+                }
+            }
+            let mut seen_cousin = vec![false; n];
+            for &g in &agents[i].grandparent_indices {
+                if let Some(g) = g {
+                    if let Some(cousins) = grandparent_map.get(&g) {
+                        for &j in cousins {
+                            if j != i && !seen_sibling[j] && !seen_cousin[j] && fitness[j] > 0.0 {
+                                kin_sum += 0.25;
+                                seen_cousin[j] = true;
+                            }
+                        }
+                    }
+                }
+            }
+            sparse[i] += kin_bonus * kin_sum;
+        }
+
+        for (i, (&b, &s)) in brute.iter().zip(&sparse).enumerate() {
+            assert!((b - s).abs() < 1e-6, "Agent {i}: brute={b}, sparse={s}");
+        }
+    }
+
+    #[test]
+    fn clt_gaussian_distribution() {
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha8Rng;
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let sigma = 0.1_f32;
+        let n = 10_000;
+        let mut sum = 0.0_f32;
+        let mut sum_sq = 0.0_f32;
+        for _ in 0..n {
+            let v = gaussian_noise(sigma, &mut rng);
+            sum += v;
+            sum_sq += v * v;
+        }
+        let mean = sum / n as f32;
+        let variance = sum_sq / n as f32 - mean * mean;
+        let std_dev = variance.sqrt();
+        assert!(
+            mean.abs() < 0.01,
+            "CLT gaussian mean {mean} should be near 0"
+        );
+        assert!(
+            (std_dev - sigma).abs() < 0.02,
+            "CLT gaussian std {std_dev} should be near {sigma}"
+        );
     }
 }

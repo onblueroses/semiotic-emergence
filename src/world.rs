@@ -262,7 +262,8 @@ pub struct World {
     shuffled_indices: Vec<usize>,
     order_scratch: Vec<usize>,
     alive_scratch: Vec<usize>,
-    computed_scratch: Vec<(usize, [f32; INPUTS], ForwardResult, f32)>,
+    #[allow(clippy::type_complexity)]
+    computed_scratch: Vec<(usize, [f32; INPUTS], ForwardResult, f32, usize, Option<u8>)>,
     // Simulation parameters
     pub grid_size: i32,
     pub food_count: usize,
@@ -460,24 +461,25 @@ impl World {
                 let zone_dist = self.nearest_zone_edge_dist(self.prey[i].x, self.prey[i].y);
                 let inputs = self.build_inputs_fast(i);
                 let result = self.prey[i].brain.forward(&inputs);
-                (i, inputs, result, zone_dist)
+                // Action argmax (moved from sequential phase)
+                let mut action = 0;
+                let mut best_val = result.actions[0];
+                for (j, &val) in result.actions[1..].iter().enumerate() {
+                    if val >= best_val {
+                        best_val = val;
+                        action = j + 1;
+                    }
+                }
+                // Emit decision: pure softmax + threshold (moved from sequential phase)
+                let emit = signal::maybe_emit(&result.signals);
+                (i, inputs, result, zone_dist, action, emit)
             })
             .collect_into_vec(&mut computed);
         self.alive_scratch = alive;
 
         // Sequential apply: mutations to world state
-        for &(i, ref inputs, ref result, zone_dist) in &computed {
+        for &(i, ref inputs, ref result, zone_dist, action, emit) in &computed {
             let in_zone = zone_dist <= 0.0;
-
-            // Action selection (always needed for apply_outputs)
-            let mut action = 0;
-            let mut best_val = result.actions[0];
-            for (j, &val) in result.actions[1..].iter().enumerate() {
-                if val >= best_val {
-                    best_val = val;
-                    action = j + 1;
-                }
-            }
 
             if self.collect_metrics {
                 self.total_prey_ticks += 1;
@@ -512,7 +514,7 @@ impl World {
                 self.prey[i].had_signal_prev_tick = has_signal;
             }
 
-            self.apply_outputs(i, action, result, inputs, zone_dist);
+            self.apply_outputs(i, action, emit, inputs, zone_dist);
 
             // Memory EMA update: new_mem = 0.9 * old + 0.1 * output
             for m in 0..MEMORY_SIZE {
@@ -623,7 +625,7 @@ impl World {
         &mut self,
         prey_idx: usize,
         action: usize,
-        result: &ForwardResult,
+        emit: Option<u8>,
         inputs: &[f32; INPUTS],
         zone_dist: f32,
     ) {
@@ -663,12 +665,12 @@ impl World {
             _ => {}
         }
 
-        // Signal emission via softmax - costs energy
+        // Signal emission - emit decision pre-computed in parallel phase
         // Suppressed in counterfactual mode (--no-signals)
         let px = self.prey[prey_idx].x;
         let py = self.prey[prey_idx].y;
         if !self.no_signals && self.prey[prey_idx].energy > self.signal_cost {
-            if let Some(symbol) = signal::maybe_emit(&result.signals) {
+            if let Some(symbol) = emit {
                 self.prey[prey_idx].energy -= self.signal_cost;
                 if self.collect_metrics {
                     self.signal_events.push(SignalEvent {
@@ -1161,13 +1163,13 @@ mod tests {
         });
         world.food_grid.insert(5, 5, 0);
 
-        let result = ForwardResult {
+        let _result = ForwardResult {
             actions: [0.0, 0.0, 0.0, 0.0, 1.0],
             signals: [0.0; crate::brain::SIGNAL_OUTPUTS],
             memory_write: [0.0; MEMORY_SIZE],
         };
         let inputs = [0.0_f32; INPUTS];
-        world.apply_outputs(0, 4, &result, &inputs, f32::MAX);
+        world.apply_outputs(0, 4, None, &inputs, f32::MAX);
 
         assert!((world.prey[0].energy - 0.8).abs() < 1e-6);
     }
@@ -1183,13 +1185,13 @@ mod tests {
         });
         world.food_grid.insert(5, 5, 0);
 
-        let result = ForwardResult {
+        let _result = ForwardResult {
             actions: [0.0, 0.0, 0.0, 0.0, 1.0],
             signals: [0.0; crate::brain::SIGNAL_OUTPUTS],
             memory_write: [0.0; MEMORY_SIZE],
         };
         let inputs = [0.0_f32; INPUTS];
-        world.apply_outputs(0, 4, &result, &inputs, f32::MAX);
+        world.apply_outputs(0, 4, None, &inputs, f32::MAX);
 
         assert!((world.prey[0].energy - 1.0).abs() < 1e-6);
     }
@@ -1439,13 +1441,13 @@ mod tests {
         world.food_grid.insert(5, 5, 0);
         world.rebuild_prey_grid();
 
-        let result = ForwardResult {
+        let _result = ForwardResult {
             actions: [0.0, 0.0, 0.0, 0.0, 1.0],
             signals: [0.0; crate::brain::SIGNAL_OUTPUTS],
             memory_write: [0.0; MEMORY_SIZE],
         };
         let inputs = [0.0_f32; INPUTS];
-        world.apply_outputs(0, 4, &result, &inputs, f32::MAX);
+        world.apply_outputs(0, 4, None, &inputs, f32::MAX);
 
         // Solo prey should NOT consume patch food
         assert_eq!(
@@ -1467,13 +1469,13 @@ mod tests {
         world.food_grid.insert(5, 5, 0);
         world.rebuild_prey_grid();
 
-        let result = ForwardResult {
+        let _result = ForwardResult {
             actions: [0.0, 0.0, 0.0, 0.0, 1.0],
             signals: [0.0; crate::brain::SIGNAL_OUTPUTS],
             memory_write: [0.0; MEMORY_SIZE],
         };
         let inputs = [0.0_f32; INPUTS];
-        world.apply_outputs(0, 4, &result, &inputs, f32::MAX);
+        world.apply_outputs(0, 4, None, &inputs, f32::MAX);
 
         assert_eq!(
             world.food.len(),
@@ -1494,13 +1496,13 @@ mod tests {
         world.food_grid.insert(5, 5, 0);
         world.rebuild_prey_grid();
 
-        let result = ForwardResult {
+        let _result = ForwardResult {
             actions: [0.0, 0.0, 0.0, 0.0, 1.0],
             signals: [0.0; crate::brain::SIGNAL_OUTPUTS],
             memory_write: [0.0; MEMORY_SIZE],
         };
         let inputs = [0.0_f32; INPUTS];
-        world.apply_outputs(0, 4, &result, &inputs, f32::MAX);
+        world.apply_outputs(0, 4, None, &inputs, f32::MAX);
 
         assert_eq!(
             world.food.len(),

@@ -30,6 +30,14 @@ pub const MAX_GENOME_LEN: usize = INPUTS * MAX_BASE_HIDDEN
     + MAX_BASE_HIDDEN * MEMORY_OUTPUTS
     + MEMORY_OUTPUTS;
 
+/// Pade [1/1] approximation of tanh, clamped to [-1, 1]. 3-5x faster than std.
+#[allow(clippy::inline_always)]
+#[inline(always)]
+fn fast_tanh(x: f32) -> f32 {
+    let x2 = x * x;
+    (x * (27.0 + x2) / (27.0 + 9.0 * x2)).clamp(-1.0, 1.0)
+}
+
 // Segment offsets for genome indexing and mutation scoping
 pub const SEG_INPUT_BASE: usize = 0;
 pub const SEG_BASE_BIAS: usize = SEG_INPUT_BASE + INPUTS * MAX_BASE_HIDDEN;
@@ -88,7 +96,7 @@ impl Brain {
             for i in 0..INPUTS {
                 sum += inputs[i] * w[SEG_INPUT_BASE + i * MAX_BASE_HIDDEN + h];
             }
-            base_hidden[h] = sum.tanh();
+            base_hidden[h] = fast_tanh(sum);
         }
 
         // 2. Base hidden -> Movement outputs (raw)
@@ -108,7 +116,7 @@ impl Brain {
             for b in 0..bh {
                 sum += base_hidden[b] * w[SEG_BASE_SIGHID + b * MAX_SIGNAL_HIDDEN + h];
             }
-            sig_hidden[h] = sum.tanh();
+            sig_hidden[h] = fast_tanh(sum);
         }
 
         // 4. Signal hidden -> Signal outputs (raw, softmax applied in signal.rs)
@@ -128,7 +136,7 @@ impl Brain {
             for h in 0..bh {
                 sum += base_hidden[h] * w[SEG_BASE_MEM + h * MEMORY_OUTPUTS + o];
             }
-            memory_write[o] = sum.tanh();
+            memory_write[o] = fast_tanh(sum);
         }
 
         ForwardResult {
@@ -315,5 +323,35 @@ mod tests {
         assert_eq!(brain.base_hidden_size, DEFAULT_BASE_HIDDEN);
         assert_eq!(brain.signal_hidden_size, DEFAULT_SIGNAL_HIDDEN);
         assert!(brain.weights.iter().all(|&w| w == 0.0));
+    }
+
+    #[test]
+    fn fast_tanh_accuracy() {
+        // Within [-3, 3] (where most NN activations fall), error is <3%
+        for i in -30..=30 {
+            let x = i as f32 / 10.0;
+            let approx = fast_tanh(x);
+            let exact = x.tanh();
+            let err = (approx - exact).abs();
+            assert!(
+                err < 0.03,
+                "fast_tanh({x}) = {approx}, std = {exact}, err = {err}"
+            );
+        }
+        // At extremes, clamped to [-1, 1]
+        assert!((fast_tanh(10.0) - 1.0).abs() < 1e-6);
+        assert!((fast_tanh(-10.0) + 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn fast_tanh_zero_and_odd() {
+        assert!((fast_tanh(0.0)).abs() < 1e-10);
+        for i in 1..=50 {
+            let x = i as f32 / 10.0;
+            assert!(
+                (fast_tanh(x) + fast_tanh(-x)).abs() < 1e-6,
+                "fast_tanh not odd at {x}"
+            );
+        }
     }
 }
