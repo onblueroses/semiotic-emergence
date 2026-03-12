@@ -3,6 +3,7 @@ output.csv
 trajectory.csv
 input_mi.csv
 divergence.csv
+runs.tsv
 output/
 nul
 *.ps1

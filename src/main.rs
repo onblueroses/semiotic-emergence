@@ -4,7 +4,7 @@ mod metrics;
 mod signal;
 mod world;
 
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::Write;
 
 use rand::Rng;
@@ -41,6 +41,7 @@ struct SimParams {
     patch_ratio: f32,
     kin_bonus: f32,
     metrics_interval: usize,
+    fast_fail_tick: u32,
 }
 
 impl SimParams {
@@ -54,8 +55,21 @@ impl SimParams {
         let patch_ratio = parse_flag(args, "--patch-ratio").unwrap_or(0.5);
         let kin_bonus = parse_flag(args, "--kin-bonus").unwrap_or(0.1);
         let metrics_interval = parse_flag(args, "--metrics-interval").unwrap_or(1);
-        let zone_radius = parse_flag(args, "--zone-radius").unwrap_or(8.0);
+        let zone_radius: f32 = parse_flag(args, "--zone-radius").unwrap_or(8.0);
         let zone_speed = parse_flag(args, "--zone-speed").unwrap_or(0.5);
+        let fast_fail_tick: u32 = parse_flag(args, "--fast-fail").unwrap_or(0);
+
+        let zone_coverage: Option<f32> = parse_flag(args, "--zone-coverage");
+        let num_zones = if let Some(coverage) = zone_coverage {
+            if parse_flag::<usize>(args, "--pred").is_some() {
+                eprintln!("Warning: --zone-coverage overrides --pred");
+            }
+            let grid_area = (grid_size as f32).powi(2);
+            let zone_area = std::f32::consts::PI * zone_radius.powi(2);
+            (coverage * grid_area / zone_area).ceil() as usize
+        } else {
+            num_zones
+        };
 
         let scale = grid_size as f32 / 20.0;
         let signal_range = 8.0 * scale;
@@ -86,6 +100,7 @@ impl SimParams {
             patch_ratio,
             kin_bonus,
             metrics_interval: metrics_interval.max(1),
+            fast_fail_tick,
         }
     }
 }
@@ -102,6 +117,11 @@ struct RunResult {
     avg_fitness: f32,
     max_fitness: f32,
     mutual_info: f32,
+    sender_fit_corr: f32,
+    receiver_fit_corr: f32,
+    response_fit_corr: f32,
+    zone_deaths: u32,
+    generations_completed: usize,
 }
 
 struct GenMetrics {
@@ -253,6 +273,13 @@ fn evaluate_generation(
             break;
         }
         world.step(rng);
+        if params.fast_fail_tick > 0 && world.tick == params.fast_fail_tick {
+            for p in &mut world.prey {
+                if p.alive && p.energy <= 0.3 && p.food_eaten == 0 {
+                    p.alive = false;
+                }
+            }
+        }
     }
 
     let fitness: Vec<f32> = world
@@ -490,6 +517,11 @@ fn run_seed(
         avg_fitness: 0.0,
         max_fitness: 0.0,
         mutual_info: 0.0,
+        sender_fit_corr: 0.0,
+        receiver_fit_corr: 0.0,
+        response_fit_corr: 0.0,
+        zone_deaths: 0,
+        generations_completed: 0,
     };
     let mut prev_norm_matrix: Option<[[f32; 4]; NUM_SYMBOLS]> = None;
     let mut traj_jsd_history: Vec<f32> = Vec::new();
@@ -565,6 +597,11 @@ fn run_seed(
                 avg_fitness: gm.avg_fitness,
                 max_fitness: gm.max_fitness,
                 mutual_info: gm.mutual_info,
+                sender_fit_corr: gm.sender_fit_corr,
+                receiver_fit_corr: gm.receiver_fit_corr,
+                response_fit_corr: gm.response_fit_corr,
+                zone_deaths: gm.zone_deaths,
+                generations_completed: gen + 1,
             };
         } else if write_csv && gen.is_multiple_of(10) {
             // Lightweight progress log on non-metrics gens
@@ -719,10 +756,78 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             params.patch_ratio * 100.0,
             params.kin_bonus
         );
+
+        let probe_mode = args.iter().any(|a| a == "--probe");
+        if probe_mode {
+            let zone_coverage =
+                params.num_zones as f32 * std::f32::consts::PI * params.zone_radius.powi(2)
+                    / (params.grid_size as f32).powi(2);
+
+            let mut rng = ChaCha8Rng::seed_from_u64(seed);
+            let population: Vec<Agent> = (0..params.pop_size)
+                .map(|_| Agent {
+                    brain: Brain::random(&mut rng),
+                    x: rng.gen_range(0..params.grid_size),
+                    y: rng.gen_range(0..params.grid_size),
+                    parent_indices: [None; 2],
+                    grandparent_indices: [None; 4],
+                })
+                .collect();
+            let ev = evaluate_generation(&population, &mut rng, &params);
+            let avg_fitness: f32 = ev.fitness.iter().sum::<f32>() / ev.fitness.len() as f32;
+            let max_fitness = ev.fitness.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+            let alive_count = ev.fitness.iter().filter(|&&f| f > 0.0).count();
+            let mi = metrics::compute_mutual_info(&ev.signal_events, &params.mi_bins);
+
+            println!("--- Probe (seed {seed}, random brains) ---");
+            println!("  Zone coverage: {:.1}%", zone_coverage * 100.0);
+            println!("  Floor fitness: avg={avg_fitness:.1} max={max_fitness:.1}");
+            println!(
+                "  Survival: {}/{} alive ({:.0}%)",
+                alive_count,
+                params.pop_size,
+                alive_count as f32 / params.pop_size as f32 * 100.0
+            );
+            println!("  Zone deaths: {}", ev.zone_deaths);
+            println!("  Signals emitted: {}", ev.total_signals);
+            println!("  MI(signal;zone): {mi:.4}");
+            return Ok(());
+        }
+
         if params.no_signals {
             println!("Counterfactual mode: signals disabled");
         }
-        run_seed(seed, generations, &params, true)?;
+        let result = run_seed(seed, generations, &params, true)?;
+
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let mut log = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("runs.tsv")?;
+        writeln!(
+            log,
+            "{timestamp}\tunknown\t{seed}\t{gens}\t{pop}\t{grid}\t{zones}\t{radius:.1}\t{speed:.1}\t{food}\t{ticks}\t{patches:.2}\t{kin}\t{ff}\t{avg:.1}\t{max:.1}\t{mi:.4}\t{sfc:.4}\t{rfc:.4}\t{rpfc:.4}\t{zd}",
+            gens = result.generations_completed,
+            pop = params.pop_size,
+            grid = params.grid_size,
+            zones = params.num_zones,
+            radius = params.zone_radius,
+            speed = params.zone_speed,
+            food = params.food_count,
+            ticks = params.ticks_per_eval,
+            patches = params.patch_ratio,
+            kin = params.kin_bonus,
+            ff = params.fast_fail_tick,
+            avg = result.avg_fitness,
+            max = result.max_fitness,
+            mi = result.mutual_info,
+            sfc = result.sender_fit_corr,
+            rfc = result.receiver_fit_corr,
+            rpfc = result.response_fit_corr,
+            zd = result.zone_deaths,
+        )?;
     }
 
     Ok(())
