@@ -29,7 +29,7 @@ CURRENT_COLUMNS = frozenset({
     "iconicity", "mutual_info", "jsd_no_pred", "jsd_pred",
     "silence_corr", "sender_fit_corr", "traj_fluct_ratio",
     "receiver_fit_corr", "response_fit_corr", "silence_onset_jsd",
-    "silence_move_delta",
+    "silence_move_delta", "signal_entropy",
     "avg_base_hidden", "min_base_hidden", "max_base_hidden",
     "avg_signal_hidden", "min_signal_hidden", "max_signal_hidden",
 })
@@ -78,6 +78,8 @@ COMPARISON_ROWS = [
     ("Sender-fitness",    "sender_fit_corr",      "final",     ".4f"),
     ("Response-fitness",  "response_fit_corr",    "final",     ".4f"),
     ("Max fluct ratio",   "traj_fluct_ratio",     "peak",      ".4f"),
+    ("Signal entropy",    "signal_entropy",        "final",     ".4f"),
+    ("Min entropy",       "signal_entropy",        "min",       ".4f"),
 ]
 
 
@@ -274,7 +276,7 @@ def summary_stats(run: Run) -> dict:
             "peak_gen": int(run.generations[peak_idx]),
             "sustained": float(np.mean(arr[tail_start:])),
         }
-        if name == "silence_corr":
+        if name in ("silence_corr", "signal_entropy"):
             min_idx = int(np.argmin(arr))
             entry["min"] = float(np.min(arr))
             entry["min_gen"] = int(run.generations[min_idx])
