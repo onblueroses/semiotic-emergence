@@ -708,12 +708,9 @@ impl World {
 
     /// Accumulate zone damage on prey inside kill zones. Stacks across overlapping zones.
     /// Zone damage is separate from energy - food cannot offset it. Death at `zone_damage` >= 1.0.
-    /// Prey that die emit a 6-symbol burst so survivors can learn to associate signals with danger.
+    /// Dying prey emit only their brain's last chosen signal (via `apply_outputs` before this runs).
     fn zone_drain(&mut self) {
         let gs = self.grid_size as f32;
-
-        // Collect kill positions before touching self.signals (borrow checker)
-        let mut newly_killed: Vec<(i32, i32)> = Vec::new();
 
         for p in &mut self.prey {
             if !p.alive {
@@ -729,21 +726,7 @@ impl World {
             }
             if p.zone_damage >= 1.0 {
                 p.alive = false;
-                newly_killed.push((p.x, p.y));
                 self.zone_deaths += 1;
-            }
-        }
-
-        // Dying sound: 6-symbol burst from each zone-killed prey.
-        // Multi-channel burst is distinguishable from normal single-symbol emissions.
-        for (x, y) in newly_killed {
-            for symbol in 0..NUM_SYMBOLS as u8 {
-                self.signals.push(Signal {
-                    x,
-                    y,
-                    symbol,
-                    tick_emitted: self.tick,
-                });
             }
         }
     }
@@ -1034,8 +1017,9 @@ mod tests {
     }
 
     #[test]
-    fn dying_sound_emits_all_symbols() {
-        // Prey with zone_damage near threshold should emit 6-symbol burst on death
+    fn zone_death_emits_no_extra_signals() {
+        // zone_drain kills prey but does not inject artificial signals into the channel.
+        // Dying prey signal only via apply_outputs (their brain's last chosen signal).
         let mut world = minimal_world(&[(5, 5)], (5.0, 5.0));
         world.prey[0].zone_damage = 1.0 - ZONE_DRAIN_RATE * 0.5;
         assert!(world.signals.is_empty());
@@ -1043,17 +1027,9 @@ mod tests {
         world.zone_drain();
 
         assert!(!world.prey[0].alive);
-        assert_eq!(
-            world.signals.len(),
-            NUM_SYMBOLS,
-            "Dying prey emits one signal per symbol"
-        );
-        let mut emitted_symbols: Vec<u8> = world.signals.iter().map(|s| s.symbol).collect();
-        emitted_symbols.sort();
-        let expected: Vec<u8> = (0..NUM_SYMBOLS as u8).collect();
-        assert_eq!(
-            emitted_symbols, expected,
-            "All 6 symbols emitted on zone death"
+        assert!(
+            world.signals.is_empty(),
+            "zone_drain must not inject signals - dying prey signal only via apply_outputs"
         );
     }
 
