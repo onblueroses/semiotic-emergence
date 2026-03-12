@@ -130,13 +130,14 @@ struct GenMetrics {
     avg_signal_hidden: f32,
     min_signal_hidden: usize,
     max_signal_hidden: usize,
+    zone_deaths: u32,
 }
 
 impl GenMetrics {
     fn write_csv(&self, f: &mut File, gen: usize) -> Result<(), Box<dyn std::error::Error>> {
         writeln!(
             f,
-            "{gen},{:.1},{:.1},{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.1},{},{},{:.1},{},{}",
+            "{gen},{:.1},{:.1},{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.1},{},{},{:.1},{},{},{}",
             self.avg_fitness,
             self.max_fitness,
             self.total_signals,
@@ -156,7 +157,8 @@ impl GenMetrics {
             self.max_base_hidden,
             self.avg_signal_hidden,
             self.min_signal_hidden,
-            self.max_signal_hidden
+            self.max_signal_hidden,
+            self.zone_deaths
         )?;
         Ok(())
     }
@@ -196,11 +198,12 @@ impl GenMetrics {
             .collect::<Vec<_>>()
             .join(",");
         println!(
-            "gen {gen:>4} | avg {:>7.1} | max {:>7.1} | signals {} | icon {:.3} | MI {:.3} | jsd {:.3}/{:.3} | sym [{sym_str}] | sil {:.3} | base {:.1} [{}-{}] | sig {:.1} [{}-{}]",
+            "gen {gen:>4} | avg {:>7.1} | max {:>7.1} | signals {} | icon {:.3} | MI {:.3} | jsd {:.3}/{:.3} | sym [{sym_str}] | sil {:.3} | zd {} | base {:.1} [{}-{}] | sig {:.1} [{}-{}]",
             self.avg_fitness, self.max_fitness, self.total_signals,
             self.iconicity, self.mutual_info,
             self.jsd_no_pred, self.jsd_pred,
             self.silence_corr,
+            self.zone_deaths,
             self.avg_base_hidden, self.min_base_hidden, self.max_base_hidden,
             self.avg_signal_hidden, self.min_signal_hidden, self.max_signal_hidden
         );
@@ -221,6 +224,7 @@ struct EvalResult {
     actions_with_signal: Vec<[[u32; 5]; 2]>,
     actions_without_signal: Vec<[[u32; 5]; 2]>,
     silence_onset_actions: Vec<[[u32; 5]; 2]>,
+    zone_deaths: u32,
 }
 
 fn evaluate_generation(
@@ -300,6 +304,7 @@ fn evaluate_generation(
         actions_with_signal,
         actions_without_signal,
         silence_onset_actions,
+        zone_deaths: world.zone_deaths,
     }
 }
 
@@ -421,6 +426,7 @@ fn compute_gen_metrics(
         avg_signal_hidden,
         min_signal_hidden,
         max_signal_hidden,
+        zone_deaths: ev.zone_deaths,
     }
 }
 
@@ -451,7 +457,7 @@ fn run_seed(
         .transpose()?;
 
     if let Some(ref mut f) = csv {
-        writeln!(f, "generation,avg_fitness,max_fitness,signals_emitted,iconicity,mutual_info,jsd_no_pred,jsd_pred,silence_corr,sender_fit_corr,traj_fluct_ratio,receiver_fit_corr,response_fit_corr,silence_onset_jsd,silence_move_delta,avg_base_hidden,min_base_hidden,max_base_hidden,avg_signal_hidden,min_signal_hidden,max_signal_hidden")?;
+        writeln!(f, "generation,avg_fitness,max_fitness,signals_emitted,iconicity,mutual_info,jsd_no_pred,jsd_pred,silence_corr,sender_fit_corr,traj_fluct_ratio,receiver_fit_corr,response_fit_corr,silence_onset_jsd,silence_move_delta,avg_base_hidden,min_base_hidden,max_base_hidden,avg_signal_hidden,min_signal_hidden,max_signal_hidden,zone_deaths")?;
     }
     if let Some(ref mut f) = traj_csv {
         write!(f, "generation")?;
@@ -530,6 +536,7 @@ fn run_seed(
                 actions_with_signal: ev.actions_with_signal,
                 actions_without_signal: ev.actions_without_signal,
                 silence_onset_actions: ev.silence_onset_actions,
+                zone_deaths: ev.zone_deaths,
             };
 
             let gm = compute_gen_metrics(

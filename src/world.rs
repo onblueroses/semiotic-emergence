@@ -197,10 +197,14 @@ pub struct Prey {
     pub silence_onset_actions: [[u32; 5]; 2],
     /// Whether this prey received a signal on the previous tick (for onset detection).
     pub had_signal_prev_tick: bool,
+    /// Accumulated zone damage. Separate from energy so food cannot offset it.
+    /// Death occurs at `zone_damage` >= 1.0 (10 ticks at full drain).
+    pub zone_damage: f32,
 }
 
-/// Energy drain per tick when inside a kill zone. 0.02 * 50 ticks = 1.0 = death.
-const ZONE_DRAIN_RATE: f32 = 0.02;
+/// Zone damage per tick when inside a kill zone. Accumulates in `zone_damage`, not energy.
+/// 0.10 * 10 ticks = 1.0 = death. Food cannot offset this.
+const ZONE_DRAIN_RATE: f32 = 0.10;
 
 #[derive(Clone, Debug)]
 pub struct KillZone {
@@ -247,6 +251,8 @@ pub struct World {
     pub min_zone_dist_per_tick: Vec<f32>,
     /// When true, signal emission is suppressed (counterfactual mode).
     pub no_signals: bool,
+    /// Count of prey that died from zone damage this evaluation.
+    pub zone_deaths: u32,
     // Spatial indices (rebuilt each tick for prey, maintained incrementally for food)
     prey_grid: CellGrid,
     food_grid: CellGrid,
@@ -297,6 +303,7 @@ impl World {
                 actions_without_signal: [[0; 5]; 2],
                 silence_onset_actions: [[0; 5]; 2],
                 had_signal_prev_tick: false,
+                zone_damage: 0.0,
             })
             .collect();
 
@@ -339,6 +346,7 @@ impl World {
             alive_per_tick: Vec::new(),
             min_zone_dist_per_tick: Vec::new(),
             no_signals,
+            zone_deaths: 0,
             prey_grid: CellGrid::new(grid_size),
             food_grid,
             shuffled_indices: (0..prey_count).collect(),
@@ -698,9 +706,15 @@ impl World {
         }
     }
 
-    /// Drain energy from prey inside kill zones. Stacks across overlapping zones.
+    /// Accumulate zone damage on prey inside kill zones. Stacks across overlapping zones.
+    /// Zone damage is separate from energy - food cannot offset it. Death at `zone_damage` >= 1.0.
+    /// Prey that die emit a 6-symbol burst so survivors can learn to associate signals with danger.
     fn zone_drain(&mut self) {
         let gs = self.grid_size as f32;
+
+        // Collect kill positions before touching self.signals (borrow checker)
+        let mut newly_killed: Vec<(i32, i32)> = Vec::new();
+
         for p in &mut self.prey {
             if !p.alive {
                 continue;
@@ -710,11 +724,26 @@ impl World {
                 let dy = wrap_delta_f32(p.y as f32, zone.y, gs);
                 let dist = (dx * dx + dy * dy).sqrt();
                 if dist <= zone.radius {
-                    p.energy -= ZONE_DRAIN_RATE;
+                    p.zone_damage += ZONE_DRAIN_RATE;
                 }
             }
-            if p.energy <= 0.0 {
+            if p.zone_damage >= 1.0 {
                 p.alive = false;
+                newly_killed.push((p.x, p.y));
+                self.zone_deaths += 1;
+            }
+        }
+
+        // Dying sound: 6-symbol burst from each zone-killed prey.
+        // Multi-channel burst is distinguishable from normal single-symbol emissions.
+        for (x, y) in newly_killed {
+            for symbol in 0..NUM_SYMBOLS as u8 {
+                self.signals.push(Signal {
+                    x,
+                    y,
+                    symbol,
+                    tick_emitted: self.tick,
+                });
             }
         }
     }
@@ -794,6 +823,7 @@ mod tests {
             actions_without_signal: [[0; 5]; 2],
             silence_onset_actions: [[0; 5]; 2],
             had_signal_prev_tick: false,
+            zone_damage: 0.0,
         }
     }
 
@@ -836,6 +866,7 @@ mod tests {
             neuron_cost: TEST_NEURON_COST,
             signal_cost: TEST_SIGNAL_COST,
             patch_ratio: TEST_PATCH_RATIO,
+            zone_deaths: 0,
         }
     }
 
@@ -915,15 +946,19 @@ mod tests {
     // --- Zone drain ---
 
     #[test]
-    fn zone_drains_energy_when_inside() {
+    fn zone_drains_zone_damage_when_inside() {
         // Prey at (5,5), zone centered at (5.0,5.0) with radius 8 - prey is inside
         let mut world = minimal_world(&[(5, 5)], (5.0, 5.0));
 
-        let before = world.prey[0].energy;
+        let energy_before = world.prey[0].energy;
         world.zone_drain();
-        let after = world.prey[0].energy;
 
-        assert!((before - after - ZONE_DRAIN_RATE).abs() < 1e-6);
+        // zone_damage accumulates; energy is unchanged (food cannot offset zone damage)
+        assert!((world.prey[0].zone_damage - ZONE_DRAIN_RATE).abs() < 1e-6);
+        assert!(
+            (world.prey[0].energy - energy_before).abs() < 1e-6,
+            "Energy unchanged by zone"
+        );
     }
 
     #[test]
@@ -947,13 +982,18 @@ mod tests {
     }
 
     #[test]
-    fn zone_drain_kills_at_zero() {
+    fn zone_drain_kills_at_threshold() {
         let mut world = minimal_world(&[(5, 5)], (5.0, 5.0));
-        world.prey[0].energy = 0.01; // Less than ZONE_DRAIN_RATE
+        // Pre-load zone_damage just below threshold - one more drain should kill
+        world.prey[0].zone_damage = 1.0 - ZONE_DRAIN_RATE * 0.5;
 
         world.zone_drain();
 
-        assert!(!world.prey[0].alive, "Prey should die when energy <= 0");
+        assert!(
+            !world.prey[0].alive,
+            "Prey should die when zone_damage >= 1.0"
+        );
+        assert_eq!(world.zone_deaths, 1);
     }
 
     #[test]
@@ -967,13 +1007,74 @@ mod tests {
             speed: TEST_ZONE_SPEED,
         });
 
-        let before = world.prey[0].energy;
         world.zone_drain();
-        let after = world.prey[0].energy;
 
         assert!(
-            (before - after - 2.0 * ZONE_DRAIN_RATE).abs() < 1e-6,
-            "Drain should stack from two overlapping zones"
+            (world.prey[0].zone_damage - 2.0 * ZONE_DRAIN_RATE).abs() < 1e-6,
+            "Damage should stack from two overlapping zones"
+        );
+    }
+
+    #[test]
+    fn zone_damage_does_not_deplete_energy() {
+        // Energy should remain unchanged regardless of zone damage accumulation
+        let mut world = minimal_world(&[(5, 5)], (5.0, 5.0));
+        let energy_before = world.prey[0].energy;
+
+        for _ in 0..5 {
+            world.zone_drain();
+            // Keep prey alive by resetting zone_damage
+            world.prey[0].zone_damage = 0.0;
+        }
+
+        assert!(
+            (world.prey[0].energy - energy_before).abs() < 1e-6,
+            "Zone drain must not deplete energy"
+        );
+    }
+
+    #[test]
+    fn dying_sound_emits_all_symbols() {
+        // Prey with zone_damage near threshold should emit 6-symbol burst on death
+        let mut world = minimal_world(&[(5, 5)], (5.0, 5.0));
+        world.prey[0].zone_damage = 1.0 - ZONE_DRAIN_RATE * 0.5;
+        assert!(world.signals.is_empty());
+
+        world.zone_drain();
+
+        assert!(!world.prey[0].alive);
+        assert_eq!(
+            world.signals.len(),
+            NUM_SYMBOLS,
+            "Dying prey emits one signal per symbol"
+        );
+        let mut emitted_symbols: Vec<u8> = world.signals.iter().map(|s| s.symbol).collect();
+        emitted_symbols.sort();
+        let expected: Vec<u8> = (0..NUM_SYMBOLS as u8).collect();
+        assert_eq!(
+            emitted_symbols, expected,
+            "All 6 symbols emitted on zone death"
+        );
+    }
+
+    #[test]
+    fn zone_no_drain_energy_when_outside() {
+        // Prey at (0,0), zone centered far away - neither energy nor zone_damage changes
+        let mut world = minimal_world(&[(0, 0)], (15.0, 15.0));
+        world.zones[0].x = 10.0;
+        world.zones[0].y = 10.0;
+        world.zones[0].radius = 2.0;
+
+        let energy_before = world.prey[0].energy;
+        world.zone_drain();
+
+        assert!(
+            (world.prey[0].energy - energy_before).abs() < 1e-6,
+            "No energy change when outside zone"
+        );
+        assert!(
+            world.prey[0].zone_damage < 1e-6,
+            "No zone_damage when outside zone"
         );
     }
 
