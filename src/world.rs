@@ -251,6 +251,8 @@ pub struct World {
     pub min_zone_dist_per_tick: Vec<f32>,
     /// When true, signal emission is suppressed (counterfactual mode).
     pub no_signals: bool,
+    /// When false, skip metrics bookkeeping (signal events, receiver tracking, observer distances).
+    pub collect_metrics: bool,
     /// Count of prey that died from zone damage this evaluation.
     pub zone_deaths: u32,
     // Spatial indices (rebuilt each tick for prey, maintained incrementally for food)
@@ -278,6 +280,7 @@ impl World {
         num_zones: usize,
         rng: &mut impl Rng,
         no_signals: bool,
+        collect_metrics: bool,
         grid_size: i32,
         food_count: usize,
         signal_range: f32,
@@ -338,7 +341,11 @@ impl World {
             signals: Vec::new(),
             tick: 0,
             signals_emitted: 0,
-            signal_events: Vec::new(),
+            signal_events: if collect_metrics {
+                Vec::with_capacity(50_000)
+            } else {
+                Vec::new()
+            },
             ticks_in_zone: 0,
             total_prey_ticks: 0,
             receiver_counts: [[[0u32; 5]; 2]; 1 + NUM_SYMBOLS],
@@ -346,6 +353,7 @@ impl World {
             alive_per_tick: Vec::new(),
             min_zone_dist_per_tick: Vec::new(),
             no_signals,
+            collect_metrics,
             zone_deaths: 0,
             prey_grid: CellGrid::new(grid_size),
             food_grid,
@@ -396,17 +404,19 @@ impl World {
         self.rebuild_prey_grid();
 
         // Track minimum zone-edge distance to alive prey this tick (observer metric)
-        let mut min_zone_dist = f32::MAX;
-        for p in &self.prey {
-            if !p.alive {
-                continue;
+        if self.collect_metrics {
+            let mut min_zone_dist = f32::MAX;
+            for p in &self.prey {
+                if !p.alive {
+                    continue;
+                }
+                let d = self.nearest_zone_edge_dist(p.x, p.y);
+                if d < min_zone_dist {
+                    min_zone_dist = d;
+                }
             }
-            let d = self.nearest_zone_edge_dist(p.x, p.y);
-            if d < min_zone_dist {
-                min_zone_dist = d;
-            }
+            self.min_zone_dist_per_tick.push(min_zone_dist);
         }
-        self.min_zone_dist_per_tick.push(min_zone_dist);
 
         // Shuffle prey processing order to prevent index bias
         self.shuffled_indices.clear();
@@ -457,24 +467,9 @@ impl World {
 
         // Sequential apply: mutations to world state
         for &(i, ref inputs, ref result, zone_dist) in &computed {
-            self.total_prey_ticks += 1;
             let in_zone = zone_dist <= 0.0;
-            if in_zone {
-                self.ticks_in_zone += 1;
-            }
 
-            // Receiver response spectrum: classify signal state, context, and chosen action
-            let mut max_str = 0.0_f32;
-            let mut best_sym = 0;
-            for s in 0..NUM_SYMBOLS {
-                let str_val = inputs[SIGNAL_INPUT_START + s * 3];
-                if str_val > max_str {
-                    max_str = str_val;
-                    best_sym = s;
-                }
-            }
-            let signal_state: usize = if max_str > 0.0 { 1 + best_sym } else { 0 };
-            let context = usize::from(in_zone); // 0=not in zone, 1=in zone
+            // Action selection (always needed for apply_outputs)
             let mut action = 0;
             let mut best_val = result.actions[0];
             for (j, &val) in result.actions[1..].iter().enumerate() {
@@ -483,17 +478,38 @@ impl World {
                     action = j + 1;
                 }
             }
-            self.receiver_counts[signal_state][context][action] += 1;
 
-            // Per-prey receiver tracking for three-way coupling + silence onset
-            let has_signal = max_str > 0.0;
-            if has_signal {
-                self.prey[i].actions_with_signal[context][action] += 1;
-            } else {
-                self.prey[i].actions_without_signal[context][action] += 1;
-                if self.prey[i].had_signal_prev_tick {
-                    self.prey[i].silence_onset_actions[context][action] += 1;
+            if self.collect_metrics {
+                self.total_prey_ticks += 1;
+                if in_zone {
+                    self.ticks_in_zone += 1;
                 }
+
+                // Receiver response spectrum: classify signal state, context, and chosen action
+                let mut max_str = 0.0_f32;
+                let mut best_sym = 0;
+                for s in 0..NUM_SYMBOLS {
+                    let str_val = inputs[SIGNAL_INPUT_START + s * 3];
+                    if str_val > max_str {
+                        max_str = str_val;
+                        best_sym = s;
+                    }
+                }
+                let signal_state: usize = if max_str > 0.0 { 1 + best_sym } else { 0 };
+                let context = usize::from(in_zone); // 0=not in zone, 1=in zone
+                self.receiver_counts[signal_state][context][action] += 1;
+
+                // Per-prey receiver tracking for three-way coupling + silence onset
+                let has_signal = max_str > 0.0;
+                if has_signal {
+                    self.prey[i].actions_with_signal[context][action] += 1;
+                } else {
+                    self.prey[i].actions_without_signal[context][action] += 1;
+                    if self.prey[i].had_signal_prev_tick {
+                        self.prey[i].silence_onset_actions[context][action] += 1;
+                    }
+                }
+                self.prey[i].had_signal_prev_tick = has_signal;
             }
 
             self.apply_outputs(i, action, result, inputs, zone_dist);
@@ -505,7 +521,6 @@ impl World {
             }
 
             self.prey[i].ticks_alive += 1;
-            self.prey[i].had_signal_prev_tick = has_signal;
         }
         self.computed_scratch = computed;
 
@@ -525,10 +540,12 @@ impl World {
             }
         }
 
-        self.signals_per_tick
-            .push(self.signals_emitted - signals_before);
-        self.alive_per_tick
-            .push(self.prey.iter().filter(|p| p.alive).count() as u32);
+        if self.collect_metrics {
+            self.signals_per_tick
+                .push(self.signals_emitted - signals_before);
+            self.alive_per_tick
+                .push(self.prey.iter().filter(|p| p.alive).count() as u32);
+        }
     }
 
     /// Build input vector using spatial grid for ally/food lookup.
@@ -653,12 +670,14 @@ impl World {
         if !self.no_signals && self.prey[prey_idx].energy > self.signal_cost {
             if let Some(symbol) = signal::maybe_emit(&result.signals) {
                 self.prey[prey_idx].energy -= self.signal_cost;
-                self.signal_events.push(SignalEvent {
-                    symbol,
-                    zone_dist,
-                    inputs: *inputs,
-                    emitter_idx: prey_idx,
-                });
+                if self.collect_metrics {
+                    self.signal_events.push(SignalEvent {
+                        symbol,
+                        zone_dist,
+                        inputs: *inputs,
+                        emitter_idx: prey_idx,
+                    });
+                }
                 self.signals.push(Signal {
                     x: px,
                     y: py,
@@ -836,6 +855,7 @@ mod tests {
             alive_per_tick: Vec::new(),
             min_zone_dist_per_tick: Vec::new(),
             no_signals: true,
+            collect_metrics: true,
             prey_grid: CellGrid::new(TEST_GRID),
             food_grid: CellGrid::new(TEST_GRID),
             shuffled_indices: (0..prey_count).collect(),
@@ -1088,6 +1108,7 @@ mod tests {
             1,
             &mut rng,
             false,
+            true,
             TEST_GRID,
             TEST_FOOD,
             TEST_SIGNAL_RANGE,
@@ -1506,6 +1527,7 @@ mod tests {
             1,
             &mut rng,
             false,
+            true,
             TEST_GRID,
             TEST_FOOD,
             TEST_SIGNAL_RANGE,

@@ -242,3 +242,94 @@ No performance impact from the change: zone movement is simpler than predator ch
 (random walk vs. nearest-prey targeting). The per-tick zone distance computation uses
 the existing CellGrid infrastructure. Signal processing and brain forward pass are
 unchanged.
+
+## Bottleneck Analysis (2026-03-10, samply profile)
+
+### Per-tick cost breakdown
+
+Each tick runs for ~384 prey (minus dead). 500 ticks per generation.
+
+| Component | % of runtime | Location | Complexity |
+|-----------|-------------|----------|------------|
+| `receive_detailed` | 41% | signal.rs:54-89 | O(prey * active_signals) |
+| `CellGrid::nearest` | 6.7% | world.rs:126-179 | O(ring_area), early exit |
+| `tanh` | 6.4% | brain.rs:79-132 | ~30 calls/prey/tick |
+| Metrics computation | ~7% | metrics.rs | Once/gen (or per metrics-interval) |
+| Sorting (evolution) | ~2% | evolution.rs | Once/gen |
+| Everything else | ~37% | world.rs step() | Metabolism, signals, food, zones, memory |
+
+### Why receive_detailed dominates
+
+Inner loop (signal.rs:69-87) runs for every (prey, signal) pair per tick:
+- ~96 active signals per tick (decays over 4 ticks, ~48k signals/gen / 500 ticks)
+- 384 prey * ~96 signals = ~37k distance computations per tick
+- 500 ticks = ~18M distance computations per generation
+- Each: 2x wrap_delta (modular arithmetic), 2x mul, add, compare, conditional sqrt+div
+- At 50k generations: ~900 billion distance computations total
+
+No spatial filtering - every prey checks every signal. This is the O(n^2) term
+that makes population scaling worse than linear (see "Scaling with population" above).
+
+### Parallelism status
+
+The par_iter block (world.rs:447-455) parallelizes build_inputs_fast + brain.forward
+across cores via rayon. This covers receive_detailed + CellGrid::nearest + forward.
+The sequential apply phase (world.rs:459-509) mutates world state and cannot be
+parallelized. On 12-core Hetzner VPS, the parallel phase scales well since each
+prey's computation is independent.
+
+### Optimization roadmap
+
+**High impact:**
+
+1. **Signal spatial grid.** Same CellGrid pattern as prey_grid/food_grid, rebuilt
+   each tick for active signals. receive_detailed would only check signals within
+   signal_range cells instead of all signals. With 96 signals on a 56x56 grid,
+   most prey would check ~5-15 signals instead of ~96. Expected: 3-8x on
+   receive_detailed = 1.5-3x overall. Moderate implementation complexity.
+
+2. **SIMD distance batch.** After spatial filtering, batch remaining candidates
+   into SSE/AVX lanes (4-8 signals at once). Pure arithmetic inner loop is ideal
+   for vectorization. The conditional strongest-per-symbol logic needs horizontal
+   reduction. Expected: 2-4x on remaining receive_detailed work. High complexity.
+
+3. **Signal grid + SIMD combined.** Spatial filter to ~15 candidates, SIMD batch
+   the survivors. Expected: 5-10x on receive_detailed = 2-4x overall.
+
+**Medium impact:**
+
+4. **wrap_delta lookup table.** 56x56 = 3136 entries, fits L1 cache. Replaces
+   two modular arithmetic ops with a table lookup per distance calc. Small
+   constant-factor win.
+
+5. **tanh approximation.** Fast polynomial (Pade) or lookup table for the 6.4%
+   spent in tanh. Risk: slightly different evolutionary dynamics from precision
+   loss. The brain forward pass does ~30 tanh calls/prey/tick (12 base_hidden +
+   6 signal_hidden + 8 memory + 4 remaining).
+
+6. **Batch brain forward.** Restructure as matrix multiply across all prey.
+   Enables BLAS-style optimization. Requires genome layout changes for
+   row-major access.
+
+**Not worth it:**
+
+7. **I/O decoupling (ring buffer, async writes).** I/O is not the bottleneck.
+   CSV writes happen once per generation. runs.tsv is one line per run.
+
+8. **GPU offload.** Complex branching in step() (alive checks, food, zones)
+   maps poorly to GPU. Brain forward pass at 384x12 neurons is too small to
+   amortize transfer overhead.
+
+9. **target-cpu=native.** Already tested - no measurable difference. LLVM
+   auto-vectorizes with SSE2, and hot loops are branch-heavy.
+
+### Key files for optimization work
+
+| File | Lines | What |
+|------|-------|------|
+| signal.rs | 54-89 | receive_detailed - THE hot loop |
+| world.rs | 387-532 | step() - the tick |
+| world.rs | 444-455 | par_iter block |
+| world.rs | 534-585 | build_inputs_fast (calls receive_detailed) |
+| world.rs | 86-179 | CellGrid (spatial index pattern to copy for signals) |
+| brain.rs | 79-132 | forward() |

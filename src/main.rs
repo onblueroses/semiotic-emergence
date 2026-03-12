@@ -5,7 +5,7 @@ mod signal;
 mod world;
 
 use std::fs::{File, OpenOptions};
-use std::io::Write;
+use std::io::{BufWriter, Write};
 
 use rand::Rng;
 use rand::SeedableRng;
@@ -151,13 +151,14 @@ struct GenMetrics {
     min_signal_hidden: usize,
     max_signal_hidden: usize,
     zone_deaths: u32,
+    signal_entropy: f32,
 }
 
 impl GenMetrics {
-    fn write_csv(&self, f: &mut File, gen: usize) -> Result<(), Box<dyn std::error::Error>> {
+    fn write_csv(&self, f: &mut impl Write, gen: usize) -> Result<(), Box<dyn std::error::Error>> {
         writeln!(
             f,
-            "{gen},{:.1},{:.1},{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.1},{},{},{:.1},{},{},{}",
+            "{gen},{:.1},{:.1},{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.1},{},{},{:.1},{},{},{},{:.4}",
             self.avg_fitness,
             self.max_fitness,
             self.total_signals,
@@ -178,12 +179,17 @@ impl GenMetrics {
             self.avg_signal_hidden,
             self.min_signal_hidden,
             self.max_signal_hidden,
-            self.zone_deaths
+            self.zone_deaths,
+            self.signal_entropy
         )?;
         Ok(())
     }
 
-    fn write_input_mi(&self, f: &mut File, gen: usize) -> Result<(), Box<dyn std::error::Error>> {
+    fn write_input_mi(
+        &self,
+        f: &mut impl Write,
+        gen: usize,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         write!(f, "{gen}")?;
         for &v in &self.input_mi {
             write!(f, ",{v:.4}")?;
@@ -192,7 +198,11 @@ impl GenMetrics {
         Ok(())
     }
 
-    fn write_trajectory(&self, f: &mut File, gen: usize) -> Result<(), Box<dyn std::error::Error>> {
+    fn write_trajectory(
+        &self,
+        f: &mut impl Write,
+        gen: usize,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         write!(f, "{gen}")?;
         for row in &self.gen_matrix {
             for &val in row {
@@ -218,9 +228,9 @@ impl GenMetrics {
             .collect::<Vec<_>>()
             .join(",");
         println!(
-            "gen {gen:>4} | avg {:>7.1} | max {:>7.1} | signals {} | icon {:.3} | MI {:.3} | jsd {:.3}/{:.3} | sym [{sym_str}] | sil {:.3} | zd {} | base {:.1} [{}-{}] | sig {:.1} [{}-{}]",
+            "gen {gen:>4} | avg {:>7.1} | max {:>7.1} | signals {} | icon {:.3} | MI {:.3} | ent {:.3} | jsd {:.3}/{:.3} | sym [{sym_str}] | sil {:.3} | zd {} | base {:.1} [{}-{}] | sig {:.1} [{}-{}]",
             self.avg_fitness, self.max_fitness, self.total_signals,
-            self.iconicity, self.mutual_info,
+            self.iconicity, self.mutual_info, self.signal_entropy,
             self.jsd_no_pred, self.jsd_pred,
             self.silence_corr,
             self.zone_deaths,
@@ -251,12 +261,14 @@ fn evaluate_generation(
     population: &[Agent],
     rng: &mut ChaCha8Rng,
     params: &SimParams,
+    collect_metrics: bool,
 ) -> EvalResult {
     let mut world = World::new_with_positions(
         population,
         params.num_zones,
         rng,
         params.no_signals,
+        collect_metrics,
         params.grid_size,
         params.food_count,
         params.signal_range,
@@ -352,6 +364,7 @@ fn compute_gen_metrics(
         params.zone_radius,
     );
     let mutual_info = metrics::compute_mutual_info(&ev.signal_events, &params.mi_bins);
+    let signal_entropy = metrics::compute_signal_entropy(&ev.signal_events);
     let (jsd_no_pred, jsd_pred) = metrics::compute_receiver_jsd(&ev.receiver_counts);
     let per_sym_jsd = metrics::compute_per_symbol_jsd(&ev.receiver_counts);
     let normalized_signal_rate: Vec<f32> = ev
@@ -454,6 +467,7 @@ fn compute_gen_metrics(
         min_signal_hidden,
         max_signal_hidden,
         zone_deaths: ev.zone_deaths,
+        signal_entropy,
     }
 }
 
@@ -475,16 +489,18 @@ fn run_seed(
         })
         .collect();
 
-    let mut csv = write_csv.then(|| File::create("output.csv")).transpose()?;
+    let mut csv = write_csv
+        .then(|| File::create("output.csv").map(BufWriter::new))
+        .transpose()?;
     let mut traj_csv = write_csv
-        .then(|| File::create("trajectory.csv"))
+        .then(|| File::create("trajectory.csv").map(BufWriter::new))
         .transpose()?;
     let mut input_mi_csv = write_csv
-        .then(|| File::create("input_mi.csv"))
+        .then(|| File::create("input_mi.csv").map(BufWriter::new))
         .transpose()?;
 
     if let Some(ref mut f) = csv {
-        writeln!(f, "generation,avg_fitness,max_fitness,signals_emitted,iconicity,mutual_info,jsd_no_pred,jsd_pred,silence_corr,sender_fit_corr,traj_fluct_ratio,receiver_fit_corr,response_fit_corr,silence_onset_jsd,silence_move_delta,avg_base_hidden,min_base_hidden,max_base_hidden,avg_signal_hidden,min_signal_hidden,max_signal_hidden,zone_deaths")?;
+        writeln!(f, "generation,avg_fitness,max_fitness,signals_emitted,iconicity,mutual_info,jsd_no_pred,jsd_pred,silence_corr,sender_fit_corr,traj_fluct_ratio,receiver_fit_corr,response_fit_corr,silence_onset_jsd,silence_move_delta,avg_base_hidden,min_base_hidden,max_base_hidden,avg_signal_hidden,min_signal_hidden,max_signal_hidden,zone_deaths,signal_entropy")?;
     }
     if let Some(ref mut f) = traj_csv {
         write!(f, "generation")?;
@@ -527,7 +543,8 @@ fn run_seed(
     let mut traj_jsd_history: Vec<f32> = Vec::new();
 
     for gen in 0..generations {
-        let ev = evaluate_generation(&population, &mut rng, params);
+        let is_metrics_gen = gen % params.metrics_interval == 0 || gen == generations - 1;
+        let ev = evaluate_generation(&population, &mut rng, params, is_metrics_gen);
 
         // Apply kin fitness bonus
         let mut fitness = ev.fitness.clone();
@@ -549,8 +566,6 @@ fn run_seed(
 
         let mut scored: Vec<(usize, f32)> =
             fitness.iter().enumerate().map(|(i, &f)| (i, f)).collect();
-
-        let is_metrics_gen = gen % params.metrics_interval == 0 || gen == generations - 1;
 
         if is_metrics_gen {
             // Use original fitness (without kin bonus) for metrics to avoid confounding
@@ -640,6 +655,17 @@ fn run_seed(
             params.fallback_radius,
             &mut rng,
         );
+    }
+
+    // Flush buffered writers
+    if let Some(ref mut f) = csv {
+        f.flush()?;
+    }
+    if let Some(ref mut f) = traj_csv {
+        f.flush()?;
+    }
+    if let Some(ref mut f) = input_mi_csv {
+        f.flush()?;
     }
 
     if write_csv {
@@ -773,7 +799,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     grandparent_indices: [None; 4],
                 })
                 .collect();
-            let ev = evaluate_generation(&population, &mut rng, &params);
+            let ev = evaluate_generation(&population, &mut rng, &params, true);
             let avg_fitness: f32 = ev.fitness.iter().sum::<f32>() / ev.fitness.len() as f32;
             let max_fitness = ev.fitness.iter().copied().fold(f32::NEG_INFINITY, f32::max);
             let alive_count = ev.fitness.iter().filter(|&&f| f > 0.0).count();
