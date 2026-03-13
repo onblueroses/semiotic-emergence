@@ -38,6 +38,7 @@ struct SimParams {
     base_drain: f32,
     neuron_cost: f32,
     signal_cost: f32,
+    zone_drain_rate: f32,
     no_signals: bool,
     patch_ratio: f32,
     kin_bonus: f32,
@@ -58,6 +59,8 @@ impl SimParams {
         let metrics_interval = parse_flag(args, "--metrics-interval").unwrap_or(1);
         let zone_radius: f32 = parse_flag(args, "--zone-radius").unwrap_or(8.0);
         let zone_speed = parse_flag(args, "--zone-speed").unwrap_or(0.5);
+        let zone_drain_rate = parse_flag(args, "--zone-drain").unwrap_or(0.02);
+        let signal_cost = parse_flag(args, "--signal-cost").unwrap_or(0.002);
         let fast_fail_tick: u32 = parse_flag(args, "--fast-fail").unwrap_or(0);
 
         let zone_coverage: Option<f32> = parse_flag(args, "--zone-coverage");
@@ -96,7 +99,8 @@ impl SimParams {
             mutation_sigma: 0.1,
             base_drain: 0.0008,
             neuron_cost: 0.0,
-            signal_cost: 0.002,
+            signal_cost,
+            zone_drain_rate,
             no_signals,
             patch_ratio,
             kin_bonus,
@@ -279,6 +283,7 @@ fn evaluate_generation(
         params.neuron_cost,
         params.signal_cost,
         params.patch_ratio,
+        params.zone_drain_rate,
     );
 
     for _ in 0..params.ticks_per_eval {
@@ -725,16 +730,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or(200);
 
         println!(
-            "Config: pop={} grid={} zones={} radius={:.1} speed={:.1} food={} ticks={} patches={:.0}% kin_bonus={:.2}",
+            "Config: pop={} grid={} zones={} radius={:.1} speed={:.1} drain={:.3} food={} ticks={} patches={:.0}% kin_bonus={:.2} sig_cost={:.4}",
             params.pop_size,
             params.grid_size,
             params.num_zones,
             params.zone_radius,
             params.zone_speed,
+            params.zone_drain_rate,
             params.food_count,
             params.ticks_per_eval,
             params.patch_ratio * 100.0,
-            params.kin_bonus
+            params.kin_bonus,
+            params.signal_cost
         );
         println!("Batch mode: {n} seeds x {generations} generations");
         let mut results: Vec<RunResult> = Vec::new();
@@ -808,16 +815,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or(200);
 
         println!(
-            "Config: pop={} grid={} zones={} radius={:.1} speed={:.1} food={} ticks={} patches={:.0}% kin_bonus={:.2}",
+            "Config: pop={} grid={} zones={} radius={:.1} speed={:.1} drain={:.3} food={} ticks={} patches={:.0}% kin_bonus={:.2} sig_cost={:.4}",
             params.pop_size,
             params.grid_size,
             params.num_zones,
             params.zone_radius,
             params.zone_speed,
+            params.zone_drain_rate,
             params.food_count,
             params.ticks_per_eval,
             params.patch_ratio * 100.0,
-            params.kin_bonus
+            params.kin_bonus,
+            params.signal_cost
         );
 
         let probe_mode = args.iter().any(|a| a == "--probe");
