@@ -84,6 +84,9 @@ impl Brain {
     }
 
     /// Split forward pass: inputs -> base hidden (tanh) -> {movement (raw), signal hidden (tanh) -> signal (raw), memory (tanh)}.
+    /// Loop order is flipped vs naive (outer=source, inner=dest) so weight access is
+    /// contiguous in memory, enabling LLVM auto-vectorization (AVX2 on x86).
+    #[allow(clippy::needless_range_loop)]
     pub fn forward(&self, inputs: &[f32; INPUTS]) -> ForwardResult {
         let w = &self.weights;
         let bh = self.base_hidden_size;
@@ -91,52 +94,66 @@ impl Brain {
 
         // 1. Input -> Base hidden (tanh)
         let mut base_hidden = [0.0_f32; MAX_BASE_HIDDEN];
-        for h in 0..bh {
-            let mut sum = w[SEG_BASE_BIAS + h];
-            for i in 0..INPUTS {
-                sum += inputs[i] * w[SEG_INPUT_BASE + i * MAX_BASE_HIDDEN + h];
+        base_hidden[..bh].copy_from_slice(&w[SEG_BASE_BIAS..SEG_BASE_BIAS + bh]);
+        for i in 0..INPUTS {
+            let inp_val = inputs[i];
+            let w_start = SEG_INPUT_BASE + i * MAX_BASE_HIDDEN;
+            for h in 0..bh {
+                base_hidden[h] += inp_val * w[w_start + h];
             }
-            base_hidden[h] = fast_tanh(sum);
+        }
+        for h in 0..bh {
+            base_hidden[h] = fast_tanh(base_hidden[h]);
         }
 
         // 2. Base hidden -> Movement outputs (raw)
         let mut actions = [0.0_f32; MOVEMENT_OUTPUTS];
-        for o in 0..MOVEMENT_OUTPUTS {
-            let mut sum = w[SEG_MOVE_BIAS + o];
-            for h in 0..bh {
-                sum += base_hidden[h] * w[SEG_BASE_MOVE + h * MOVEMENT_OUTPUTS + o];
+        actions.copy_from_slice(&w[SEG_MOVE_BIAS..SEG_MOVE_BIAS + MOVEMENT_OUTPUTS]);
+        for h in 0..bh {
+            let hidden_val = base_hidden[h];
+            let w_start = SEG_BASE_MOVE + h * MOVEMENT_OUTPUTS;
+            for o in 0..MOVEMENT_OUTPUTS {
+                actions[o] += hidden_val * w[w_start + o];
             }
-            actions[o] = sum;
         }
 
         // 3. Base hidden -> Signal hidden (tanh)
         let mut sig_hidden = [0.0_f32; MAX_SIGNAL_HIDDEN];
-        for h in 0..sh {
-            let mut sum = w[SEG_SIGHID_BIAS + h];
-            for b in 0..bh {
-                sum += base_hidden[b] * w[SEG_BASE_SIGHID + b * MAX_SIGNAL_HIDDEN + h];
+        sig_hidden[..sh].copy_from_slice(&w[SEG_SIGHID_BIAS..SEG_SIGHID_BIAS + sh]);
+        for b in 0..bh {
+            let hidden_val = base_hidden[b];
+            let w_start = SEG_BASE_SIGHID + b * MAX_SIGNAL_HIDDEN;
+            for h in 0..sh {
+                sig_hidden[h] += hidden_val * w[w_start + h];
             }
-            sig_hidden[h] = fast_tanh(sum);
+        }
+        for h in 0..sh {
+            sig_hidden[h] = fast_tanh(sig_hidden[h]);
         }
 
         // 4. Signal hidden -> Signal outputs (raw, softmax applied in signal.rs)
         let mut signals = [0.0_f32; SIGNAL_OUTPUTS];
-        for o in 0..SIGNAL_OUTPUTS {
-            let mut sum = w[SEG_SIGOUT_BIAS + o];
-            for h in 0..sh {
-                sum += sig_hidden[h] * w[SEG_SIGHID_SIGOUT + h * SIGNAL_OUTPUTS + o];
+        signals.copy_from_slice(&w[SEG_SIGOUT_BIAS..SEG_SIGOUT_BIAS + SIGNAL_OUTPUTS]);
+        for h in 0..sh {
+            let hidden_val = sig_hidden[h];
+            let w_start = SEG_SIGHID_SIGOUT + h * SIGNAL_OUTPUTS;
+            for o in 0..SIGNAL_OUTPUTS {
+                signals[o] += hidden_val * w[w_start + o];
             }
-            signals[o] = sum;
         }
 
         // 5. Base hidden -> Memory outputs (tanh to bound [-1, 1])
         let mut memory_write = [0.0_f32; MEMORY_OUTPUTS];
-        for o in 0..MEMORY_OUTPUTS {
-            let mut sum = w[SEG_MEM_BIAS + o];
-            for h in 0..bh {
-                sum += base_hidden[h] * w[SEG_BASE_MEM + h * MEMORY_OUTPUTS + o];
+        memory_write.copy_from_slice(&w[SEG_MEM_BIAS..SEG_MEM_BIAS + MEMORY_OUTPUTS]);
+        for h in 0..bh {
+            let hidden_val = base_hidden[h];
+            let w_start = SEG_BASE_MEM + h * MEMORY_OUTPUTS;
+            for o in 0..MEMORY_OUTPUTS {
+                memory_write[o] += hidden_val * w[w_start + o];
             }
-            memory_write[o] = fast_tanh(sum);
+        }
+        for o in 0..MEMORY_OUTPUTS {
+            memory_write[o] = fast_tanh(memory_write[o]);
         }
 
         ForwardResult {

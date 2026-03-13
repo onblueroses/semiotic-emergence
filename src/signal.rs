@@ -116,6 +116,9 @@ pub struct ReceivedSignal {
 }
 
 /// Compute detailed received signals using spatial grid for O(nearby) instead of O(all).
+/// Defers sqrt: tracks closest signal per symbol by `dist_sq`, computes strength only
+/// for the 6 winners at the end (saves N-6 sqrt calls per receiver).
+#[allow(clippy::similar_names)]
 pub fn receive_detailed_grid(
     signals: &[Signal],
     grid: &SignalGrid,
@@ -127,15 +130,12 @@ pub fn receive_detailed_grid(
     let grid_size_i = grid_size as i32;
     let range_sq = signal_range * signal_range;
     let range_i = signal_range as i32;
-    let mut result = std::array::from_fn::<_, NUM_SYMBOLS, _>(|_| ReceivedSignal {
-        strength: 0.0,
-        dx: 0.0,
-        dy: 0.0,
-    });
+    let mut best_dist_sq = [f32::MAX; NUM_SYMBOLS];
+    let mut best_dx = [0.0_f32; NUM_SYMBOLS];
+    let mut best_dy = [0.0_f32; NUM_SYMBOLS];
     for idx in grid.nearby_indices(rx, ry) {
         let sig = &signals[idx as usize];
         let dx = wrap_delta(rx, sig.x, grid_size_i);
-        // Early axis bailout
         if dx > range_i || dx < -range_i {
             continue;
         }
@@ -149,16 +149,29 @@ pub fn receive_detailed_grid(
         if dist_sq > range_sq {
             continue;
         }
-        let dist = dist_sq.sqrt();
-        let strength = 1.0 - dist / signal_range;
         let sym = sig.symbol as usize;
-        if sym < NUM_SYMBOLS && strength > result[sym].strength {
-            result[sym].strength = strength;
-            result[sym].dx = dxf / grid_size;
-            result[sym].dy = dyf / grid_size;
+        if sym < NUM_SYMBOLS && dist_sq < best_dist_sq[sym] {
+            best_dist_sq[sym] = dist_sq;
+            best_dx[sym] = dxf;
+            best_dy[sym] = dyf;
         }
     }
-    result
+    std::array::from_fn(|s| {
+        if best_dist_sq[s] < f32::MAX {
+            let dist = best_dist_sq[s].sqrt();
+            ReceivedSignal {
+                strength: 1.0 - dist / signal_range,
+                dx: best_dx[s] / grid_size,
+                dy: best_dy[s] / grid_size,
+            }
+        } else {
+            ReceivedSignal {
+                strength: 0.0,
+                dx: 0.0,
+                dy: 0.0,
+            }
+        }
+    })
 }
 
 /// Fallback: compute detailed received signals by scanning all signals (no grid).
