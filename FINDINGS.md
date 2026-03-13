@@ -1,24 +1,133 @@
 # Findings
 
-## Runs 1-2 (84k and 68k generations)
+Experimental history of semiotic-emergence. Each era documents what we tested, what we found, and what we changed in response. Standing conclusions at the bottom.
 
-Two runs analyzed: local (unknown seed, 84,139 gens) and VPS seed 42 (68,428 gens). Both at 8x defaults (pop=384, grid=56, pred=16, food=200, ticks=500). Signal cost = 0.0 (free). Evasion boost active.
+## Table of Contents
 
-## 1. Signals Are Fuel, Not Language
+- [Run Registry](#run-registry)
+- [Era 1: Baseline](#era-1-baseline-20x20-48-prey-fixed-brain) - 20x20, 48 prey, fixed brain
+- [Era 2: 8x Scale](#era-2-8x-scale-56x56-384-prey-evolvable-brain) - 56x56, 384 prey, evolvable brain
+- [Era 3: Architecture v2](#era-3-architecture-v2) - Split-head brain, 6 symbols, memory, patches, kin
+- [Era 4: Kill Zones](#era-4-kill-zones) - Invisible danger, zone damage, food encoding
+- [Era 5: Counterfactual Testing](#era-5-counterfactual-testing) - Do signals have adaptive value?
+- [Standing Conclusions](#standing-conclusions)
 
-The evasion boost mechanic (+1 movement when receiving any signal near a predator) dominates the evolutionary dynamics. The signal channel evolved as a survival resource, not a communication medium.
+---
 
-Evidence:
-- seed42: Pearson(signals_emitted, avg_fitness) = 0.989, survives detrending (r=0.989)
-- Both runs: silence_corr is the #2 fitness predictor after signal volume
-- response_fit_corr = 0 in both runs across all generations - behavioral response to signals has zero fitness coupling
-- receiver_fit_corr is positive (0.36, 0.39) but is a spatial confound: Pearson(MI, receiver_fit_corr) = -0.220 in local (more information, LESS receiver fitness) and ~0 in seed42
+## Run Registry
 
-Evolution maximized signal volume (~48k signals/gen, 30%+ of theoretical max) while minimizing emission near danger (negative silence_corr). The content is irrelevant - the presence of signal triggers the boost.
+Every significant run, its parameters, and headline result.
 
-## 2. MI Is Confounded with Symbol Diversity
+| ID | Era | Seeds | Gens | Key params | Headline result |
+|----|-----|-------|------|-----------|----------------|
+| baseline-10k | 1 | 42 | 10,000 | 48 prey, 20x20, 2 pred, fixed 6 hidden, 3 sym | 5 semiotic epochs, peak MI 0.237, no stability |
+| 8x-100k | 2 | 42 | 100,000 | 384 prey, 56x56, 16 pred, 4-16 hidden, 3 sym, cost 0.0002/neuron, signal cost 0.01 | Brain collapse to 4 neurons, signals are spandrels |
+| boost-84k | 2 | unknown | 84,139 | + evasion boost, free signals, cheap neurons | Signals are fuel not language |
+| boost-68k | 2 | 42 | 68,428 | same as boost-84k | Same outcome, different evolutionary path |
+| run3-100k | 2 | 42 | 100,000 | boost removed, signal cost 0.002, pred=3, 4-124 hidden | Genuine encoding emerged then collapsed (MI 0.669 peak) |
+| kz-42 | 4 | 42 | 36,084 | Kill zones, drain 0.02, free brains, split-head, 6 sym | Food encoding (MI 0.107) |
+| kz-43 | 4 | 43 | 37,441 | same | Two-tier signal relay |
+| kz-99 | 4 | 99 | 93,000 | same, metrics-interval 1000 | Food encoding (MI 0.114), five-act trajectory |
+| cf-s100 | 5 | 100 | 96,570 | drain 0.10 (accidental), signals on | Signals net negative (-25.5% vs mute) |
+| cf-s101 | 5 | 101 | 95,270 | same | Reproduces cf-s100 within 1.7% fitness |
+| mute-s100 | 5 | 100 | 148,970 | drain 0.10, --no-signals | 20-25% fitter than baselines |
 
-The local run's MI spike (0.68 at gen 37k) corresponded to a symbol transition period, not genuine encoding:
+Detailed per-run analysis: `findings/` directory. Data files: `analysis/` directory.
+
+---
+
+## Era 1: Baseline (20x20, 48 prey, fixed brain)
+
+*Question: Can communication emerge in a minimal system?*
+
+**Parameters:** 48 prey, 20x20 toroidal grid, 2 visible predators, fixed 6-neuron hidden layer, 3 symbols, 500 ticks/gen, vision 4.0, signal range 8.0 (2:1 ratio), signal cost 0.01.
+
+**Runs:** seed 42, 50/200/3k/10k generations.
+
+### Findings
+
+**1. Silence-as-sign is immediate.** Silence correlation is negative from gen 0 (-0.37) and stays negative across all timescales. Prey suppress signals near predators. But the gen-0 value suggests this is an architectural spandrel - random weights in a shared 6-neuron layer create incidental predator-to-signal-suppression pathways. Evolution maintains but does not amplify it.
+
+**2. Symbol 0 goes extinct.** From gen ~700 onward, sym0 is never emitted. The population self-compressed from 3 to 2 symbols without any selection pressure for vocabulary size. The 6-neuron layer can't maintain three differentiated outputs.
+
+**3. Five distinct semiotic epochs appear in 10k gens.**
+
+| Epoch | Gens | Duration | Peak MI | Notable |
+|-------|------|----------|---------|---------|
+| 1 | 600-900 | ~300 | 0.020 | JSD hits 0.693 (theoretical max) |
+| 2 | 1670-1900 | ~230 | 0.130 | Sender-side coherence |
+| 3 | 2300-2460 | ~160 | 0.213 | First high-MI epoch |
+| 4 | 3100-3270 | ~170 | 0.185 | Repeat of epoch 3 pattern |
+| 5 | 8890-9350 | ~460 | 0.237 | Longest, highest MI, positive iconicity |
+
+Gap between epoch 4 and 5: 5,500 generations of drift.
+
+Epoch 1 was receiver-dominated - all per-symbol JSDs simultaneously hit 0.693 (maximum), then collapsed. Epoch 5 was the strongest by multiple measures, and the first time positive iconicity appeared (prey signaling MORE near predators - alarm calling instead of silence). It appeared only after 9,000 generations.
+
+**4. No stable attractor.** Every epoch collapses back to low MI. The 6-neuron hidden layer can find weight configurations supporting communication but can't maintain them against drift. Movement, silence suppression, and differentiated emission compete for the same 6 neurons.
+
+**5. Receiver infrastructure matures independently.** jsd_pred stays elevated (0.2-0.6) from gen ~4,000 even between sender-side MI epochs. Receivers develop signal sensitivity that persists when sender behavior drifts. The receiver side is more robust than the sender side.
+
+**6. response_fit_corr and silence onset metrics are data-starved.** The 30-sample minimum threshold is too high for 48 agents over 500 ticks. response_fit_corr produces non-zero values in 1 of 200 generations.
+
+### What we changed (for Era 2)
+
+Moved to 8x scale with an evolvable hidden layer to test whether larger brains and populations stabilize semiotic states. Hidden size became a heritable gene (4-16 range) with energy cost proportional to neuron count.
+
+Detailed analysis: `findings/2026-03-09-baseline-runs.md`
+
+---
+
+## Era 2: 8x Scale (56x56, 384 prey, evolvable brain)
+
+*Question: Does scale + evolvable brains stabilize communication?*
+
+This era had three sub-phases as we diagnosed and addressed structural barriers.
+
+### Phase 1: Initial 8x run (100k gens)
+
+**Parameters:** 384 prey, 56x56, 16 predators (pred speed 8 cells/tick), 4-16 evolvable hidden, 3 symbols, neuron cost 0.0002/tick, signal cost 0.01, food 200.
+
+**Run:** seed 42, 100,000 generations.
+
+**1. Brain collapse is the root problem.** Evolution drives hidden size to 4 (minimum). The cost difference between 4 and 6 neurons is 0.2 energy over 500 ticks - equivalent to two-thirds of a food pellet. With 4 neurons shared between 16 inputs and 8 outputs, there's zero spare capacity for signal processing.
+
+**2. Signals are spandrels, not communication.** 70-91% of signals come from prey that can already see the predator. Neural crosstalk from flee behavior activating shared hidden neurons, not intentional warning.
+
+**3. Signaling actively hurts fitness.** sender_fit_corr stabilizes at -0.34 by gen 30k. Active signalers pay metabolic cost with no kin-selection benefit.
+
+**4. Receiver benefit is a spatial confound.** receiver_fit_corr is rock-solid at ~0.48 for all 100k gens. Entirely explained by position: center prey hear more AND have more neighbors between them and predators. response_fit_corr = 0.0 throughout.
+
+**5. Symbol vocabulary collapses to monopoly.** 3 symbols -> 1 dominant + 1 vestigial + 1 extinct. Without differentiation pressure, the system collapses to a single signal type.
+
+**6. Speed mismatch makes warning useless.** Predator moves 8 cells/tick, prey 1 cell/tick. A warned prey at signal range can only move 3 cells in the ~3 ticks before the predator arrives.
+
+**7. Trajectory freezes completely.** Trajectory JSD declines from 0.016 (0-10k) to 0.0006 (90-100k). The semiotic landscape is frozen by end of run.
+
+Detailed analysis: `findings/2026-03-09-100k-8x-scale.md`
+
+### Phase 2: Pro-communication tuning
+
+Four changes to address the structural barriers identified in Phase 1:
+
+| Change | From | To | Why |
+|--------|------|----|-----|
+| Neuron cost | 0.0002 | 0.00002 | Brain of 16 now costs 0.56 vs 0.44 for brain of 4 - negligible delta |
+| Signal cost | 0.01 | 0.0 (free) | Removes -0.34 sender fitness penalty |
+| Predator speed | round(3*scale) | round(1.5*scale) | Warned prey now have ~6 ticks to react instead of ~3 |
+| Evasion boost | none | +1 movement when receiving signal near predator | Direct fitness benefit for signal-responsive prey |
+
+Rationale: `findings/2026-03-09-pro-communication-tuning.md`
+
+### Phase 3: Evasion boost era (runs 1-2)
+
+**Parameters:** 384 prey, 56x56, 16 predators (speed 4), free signals, neuron cost 0.00002, evasion boost active.
+
+**Runs:** local (unknown seed, 84,139 gens), VPS seed 42 (68,428 gens).
+
+**1. Signals are fuel, not language.** The evasion boost (+1 movement on signal reception near predator) dominates. Pearson(signals_emitted, avg_fitness) = 0.989. Evolution maximized signal volume (~48k signals/gen, 30%+ of theoretical max) while the content remained irrelevant.
+
+**2. MI is confounded with symbol diversity.** The local run's MI spike (0.68 at gen 37k) corresponded to a symbol transition, not genuine encoding. Pearson(HHI, MI) = -0.521. MI mechanically requires symbol variety.
 
 | Gen | sym0 | sym1 | sym2 | MI | Phase |
 |-----|------|------|------|----|-------|
@@ -27,346 +136,187 @@ The local run's MI spike (0.68 at gen 37k) corresponded to a symbol transition p
 | 45k | 33% | 37% | 30% | 0.082 | max diversity |
 | 60k | 0% | 0% | 100% | 0.008 | sym2 monopoly |
 
-Pearson(HHI, MI) = -0.521. MI mechanically requires symbol variety - when one symbol dominates, MI collapses regardless of encoding quality. Only 1,320 gens showed monopoly + MI > 0.05, and those averaged only MI = 0.085.
+**3. The causal chain almost never completes.** Requiring MI > 0.05, jsd_pred > 0.05, and response_fit_corr > 0.05 simultaneously: local achieved this for 5.4% of its run (scattered, transient), seed42 for 0.0% (29 gens total).
 
-## 3. The Causal Chain Almost Never Completes
+**4. Two different evolutionary paths, same outcome.** The runs diverged dramatically (local: brain peaked late at 31.6, MI peaked at 0.68; seed42: brain peaked early at 36.4, MI peaked at 0.11) then converged to the same steady state (~133 fitness, ~48k signals/gen, zero MI).
 
-For genuine communication, all three are required simultaneously:
-- (A) Sender encodes context: MI > 0.05
-- (B) Receiver changes behavior: jsd_pred > 0.05
-- (C) Changed behavior helps fitness: response_fit_corr > 0.05
+**5. Silence onset effect is mechanical.** When signals stop, prey freeze 80.5% of the time - not a learned response but the evasion boost turning off.
 
-| Run | A+B+C | % of run | Interpretation |
-|-----|-------|----------|---------------|
-| Local | 4,527 gens | 5.4% | Scattered, transient |
-| Seed42 | 29 gens | 0.0% | Essentially never |
+**6. Predator saturation undermines information asymmetry.** 16 predators on 56x56: 88% of the time prey have a predator within vision. The signal channel can't bridge a gap that barely exists.
 
-Each component appears independently but they cannot be sustained together.
+**7. Vestigial danger symbol in seed42.** Rare sym1 (0.2%) concentrates 88.1% in d0 (nearest predator bin), vs 27.6% for dominant sym0. A ghost of functional differentiation - sym1 once meant "danger here" but was nearly extinct.
 
-## 4. Two Radically Different Evolutionary Paths, Same Outcome
+**Diagnosis:** Three structural features prevent emergence: (1) evasion boost rewards signal presence not content, (2) free signals have no cost pressure against noise, (3) predator saturation eliminates information asymmetry. These interact: the boost makes presence valuable, free cost allows noise to proliferate, and saturation means there's nothing to communicate.
 
-Despite identical mechanics, the runs diverged dramatically then converged to the same steady state.
+### What we changed (for run 3)
 
-| Metric | Local | Seed42 |
-|--------|-------|--------|
-| Brain peak | 31.6 (gen 80k, late) | 36.4 (gen 14.5k, early) |
-| Final brain | 25.8 | 18.4 |
-| Peak MI | 0.68 (gen 37k) | 0.11 (gen 1.4k) |
-| Final MI | 0.000 | 0.000 |
-| Lag direction | MI leads brain | Brain leads MI |
-| Sustained fitness | 131 | 136 |
-| Signals/gen | 48k | 47k |
+| Change | From | To | Why |
+|--------|------|----|-----|
+| Evasion boost | active | removed | Rewarded presence not content |
+| Signal cost | 0.0 | 0.002 | Create pressure against noise |
+| Predator count | 16 | 3 | Create information gap (~55% of prey outside vision but within signal range) |
+| Food | 200 | 100 | Maintain resource pressure at lower predator count |
 
-Both converged: all metrics STABLE in the last 20k gens. Different brain sizes (25.8 vs 18.4), same fitness (~133). Seed42's smaller brain saves 0.05 energy/500 ticks - barely measurable.
+### Phase 4: Run 3 (100k gens, single hidden layer)
 
-## 5. Universal Silence Strategy
+**Parameters:** 384 prey, 56x56, 3 visible predators (speed 4), signal cost 0.002, single hidden layer 4-124, 3 symbols.
 
-Both runs converge on silence near the predator: silence_corr = -0.24 (local), -0.36 (seed42). This is the most consistent emergent behavior - it appears across seeds and persists indefinitely.
+**Run:** seed 42, 100,000 generations.
 
-## 6. The Silence Onset Effect Is Mechanical
+**1. Brain size is the rate-limiting factor.** Small brains (~6-10 neurons): MI peaks at 0.05. Large brains (~15 neurons): MI reaches 0.624. Brain size naturally evolved to the MAX_HIDDEN=16 ceiling, suggesting the constraint was artificial. (Brain capacity later expanded to 124.)
 
-When signals stop, prey FREEZE 80.5% of the time (negative silence_move_delta). This is not a learned information-processing response - it's the evasion boost turning off. Prey moved because the boost added +1 movement; when signals cease, their base movement rate takes over.
+**2. Brain expansion destroys then rebuilds semiotic structure.** At gen 46-50k, avg_hidden exploded from 10 to 15. Total semiotic collapse followed - MI, iconicity, sender_fit_corr all dropped to zero. The old 6-neuron signal strategy didn't transfer to 15 neurons. Took ~25k gens to rebuild, but the rebuilt system was stronger (MI sustained above 0.2 for 6,187 consecutive gens).
 
-## 7. Vestigial Danger Symbol in Seed42
+**3. Genuine encoding emerged during MI surge (gen 75-100k).** Input MI showed signals encoded predator information: predator distance (MI 0.472), predator dy (0.267), predator dx (0.199). Signal-0-strength MI of 0.179 suggested signal relaying.
 
-Seed42's rare sym1 (0.2% of signals) concentrates 88.1% in d0 (nearest predator distance bin), vs 27.6% for dominant sym0. This is a ghost of functional symbol differentiation - sym1 once meant "danger here" but was nearly driven extinct. Evidence of Level 3 semiotic potential, but not sustained.
+**4. The coupling problem.** Single hidden layer means movement and signal outputs share all weights. Every movement adaptation changes signal behavior. This creates spandrels, fragility, and the convention collapse at gen 46-50k.
 
-## 8. Predator Saturation Undermines Information Asymmetry
+**5. Convention instability.** MI peaked at 0.669 but collapsed due to neutral drift - fitness barely changed whether prey communicated or not. The signal channel didn't matter enough to defend itself against genetic drift.
 
-With 16 predators on a 56x56 grid, 88% of the time prey have at least one predator within vision range. The 2:1 vision/signal ratio was designed to create information asymmetry (some prey see danger, others don't), but with this predator density almost everyone can see a predator. There's insufficient "safe" space for the signal channel to bridge an information gap.
+### What we changed (for Era 3)
 
-## 9. Fitness Efficiency and Volatility
-
-Both runs sustain only ~27% of theoretical maximum fitness (133/500). Fitness volatility is high (std ~40) and does not decrease over time. The fitness surface is noisy, not stabilizing.
-
-During the local MI spike window (gen 30-55k), high-MI gens had +34 fitness over low-MI gens. But sender_fit_corr was -0.176 during high MI (senders were hurt). Classic altruism problem - population benefits but individual senders pay.
-
-## 10. Encoding Collapse
-
-Both runs end with zero sustained input MI across all 16 input dimensions. Signals encode nothing about any input by the end. Encoding stability is negative (Spearman: -0.53 local, -0.37 seed42 early vs late) - what signals encode keeps changing, preventing stable conventions.
+The coupling problem and convention instability motivated the v2 architecture: split-head brain to decouple movement from signaling, plus supporting changes to create stronger selection pressure for communication.
 
 ---
 
-## Diagnosis
+## Era 3: Architecture v2
 
-Three structural features of the current parameter regime prevent genuine semiotic emergence:
+*Question: Does decoupled signal processing + richer vocabulary enable stable communication?*
 
-1. **The evasion boost rewards signal presence, not signal content.** Any signal triggers the boost regardless of symbol or context. Evolution exploits this by maximizing volume.
+Five changes to address structural barriers from eras 1-2:
 
-2. **Free signals have no cost pressure.** With signal_cost = 0.0, there's no penalty for noise. The only selective pressure against meaningless signaling is indirect (noise could confuse neighbors), but the evasion boost overwhelms this.
+### 1. Split-head brain
 
-3. **Predator saturation eliminates information asymmetry.** 16 predators on 56x56 means prey almost always see a predator. The signal channel can't bridge a gap that barely exists.
-
-These interact: the boost makes signal presence valuable, free cost removes the penalty for noise, and predator saturation means there's no information to transmit anyway.
-
----
-
-## Parameter Changes (Run 3+)
-
-Based on findings above, three changes applied to address all three structural barriers:
-
-### 1. Evasion boost removed
-
-The +1 movement boost for signal reception rewarded signal presence regardless of content. Evolution exploited this by maximizing volume (~48k signals/gen) while encoding nothing. Removing it forces signals to compete on information value alone - receivers must learn useful behavioral responses to signal content, not just benefit from signal existence.
-
-### 2. Signal cost: 0.0 -> 0.002
-
-Free signals allowed noise to proliferate unchecked. At 0.002 per emission, a prey signaling every tick pays 1.0 energy over 500 ticks (entire starting energy). The observed ~0.25 signals/prey/tick rate would cost 0.0005/tick, roughly 60% of base metabolic drain. This creates selective pressure: signals that don't help the sender's kin (or the sender via reciprocity) are a net energy loss.
-
-### 3. Predators: 16 -> 3, Food: 200 -> 100
-
-16 predators on 56x56 gave 88% vision coverage - almost every prey could see a predator at any time. With 3 predators, vision coverage drops to ~33%, creating a ~55% information gap (prey within signal range but outside vision range of any predator). This is the gap the signal channel needs to bridge. Food halved to 100 to maintain resource pressure at the lower predator count.
-
-### Expected effects
-
-- Signal volume should drop dramatically (no boost incentive, cost penalty)
-- Any signals that persist face genuine selection for content quality
-- Information asymmetry creates real value for danger communication
-- The altruism problem (senders pay, population benefits) may still limit sender evolution, but the absence of the boost removes the dominant exploitation pathway
-
----
-
-## Run 3 (100k generations, seed 42)
-
-Parameters: pop=384, grid=56, pred=3, food=100, ticks=500. Evasion boost removed, signal cost 0.002, single hidden layer (4-124 neurons), 3 symbols.
-
-Full analysis in [PERFORMANCE.md](PERFORMANCE.md). Key findings:
-
-### 1. Brain size is the rate-limiting factor for semiotic emergence
-
-Small brains (~6-10 neurons): MI peaks at 0.05. Large brains (~15 neurons): MI reaches 0.624. The hidden layer capacity determines whether evolution can isolate signaling from fleeing behavior. Brain size naturally evolved to the MAX_HIDDEN=16 ceiling, suggesting the constraint was artificial.
-
-### 2. Brain expansion destroys then rebuilds semiotic structure
-
-At gen 46k-50k, avg_hidden exploded from 10 to 15. Total semiotic collapse followed - MI, iconicity, sender_fit_corr all dropped to zero. The old 6-neuron signal strategy didn't transfer to 15 neurons. It took ~25k generations to rebuild, but the rebuilt system was far stronger (MI sustained above 0.2 for 6,187 consecutive generations).
-
-### 3. Genuine encoding emerged during the MI surge (gen 75k-100k)
-
-Input MI analysis showed signals primarily encoded predator information: predator distance (MI 0.472), predator dy (0.267), predator dx (0.199). Signal-0-strength MI of 0.179 suggested signal relaying - prey re-emitting received signals to extend warning range.
-
-### 4. The coupling problem
-
-With a single hidden layer, movement and signal outputs share all weights. Every movement adaptation changes signal behavior and vice versa. This creates:
-- Spandrels (signal-context correlations from movement weight sharing, not communication intent)
-- Fragility (movement optimization can destroy signal conventions)
-- The convention collapse at gen 46k-50k was likely caused by brain expansion disrupting coupled weight configurations
-
-### 5. Convention instability
-
-MI peaked at 0.669 but the convention collapsed due to neutral drift - fitness barely changed whether prey communicated or not. The signal channel didn't matter enough to defend itself against genetic drift. This motivated the v2 architecture changes.
-
----
-
-## Architecture v2
-
-Five changes address the structural barriers identified in runs 1-3:
-
-### 1. Split-head brain architecture
-
-Single hidden layer replaced with base hidden (4-64, shared) + signal hidden (2-32, dedicated). Signal outputs now pass through their own hidden layer, giving evolution capacity for independent signal control. Two separate hidden size genes evolve independently. This directly addresses the coupling problem from run 3.
+Single hidden layer replaced with base hidden (4-64, shared across all outputs) + signal hidden (2-32, dedicated to signal outputs). Two separate hidden size genes evolve independently. Addresses the coupling problem: signal outputs now pass through their own hidden layer.
 
 ### 2. Six symbols (was 3)
 
-More signal vocabulary enables richer encoding (food, zone proximity, direction) instead of just 3 coarse states. Harder for one symbol to monopolize - driving MI to zero by dominating 100% of 6 symbols is harder than 3.
+Richer vocabulary for encoding food, zone proximity, direction. Harder for one symbol to monopolize - driving MI to zero by dominating 6 symbols is harder than 3.
 
 ### 3. Recurrent memory (8 cells)
 
-Each prey has 8 memory cells updated via EMA (0.9 * old + 0.1 * tanh(output)). Memory is input to the brain, creating a recurrent loop. Enables temporal reasoning - prey can track signal patterns across ticks.
+EMA update (0.9*old + 0.1*tanh(output)). Memory feeds back as input, creating a recurrent loop. Enables temporal reasoning across ticks.
 
 ### 4. Cooperative food patches
 
-50% of food requires 2+ prey within Chebyshev distance 2 to consume. Creates direct fitness incentive for spatial coordination, which signals can facilitate.
+50% of food requires 2+ prey within Chebyshev distance 2. Creates direct fitness incentive for spatial coordination via signals.
 
 ### 5. Kin fitness
 
-Siblings (shared parent) get 0.5 bonus, cousins (shared grandparent) get 0.25 bonus added to selection fitness. Lineage tracked via parent and grandparent population indices. Supports altruistic signaling by making it individually advantageous to help relatives.
+Siblings (+0.5) and cousins (+0.25) bonus on selection fitness. Lineage tracked via parent/grandparent indices. Supports altruistic signaling.
 
 ### Supporting changes
 
-- Vision range halved (11.2 -> 5.6 at grid=56), signal range unchanged (22.4). 4:1 ratio forces heavy signal reliance.
-- Neuron cost halved (0.00002 -> 0.00001). Allows complex signal processing without metabolic collapse.
-- Predator speed reduced (round(1.5*scale) -> round(scale)). Gave prey more time to respond to warnings (predators later replaced by kill zones).
+- Vision halved (11.2 -> 5.6 at grid=56), signal range unchanged (22.4). 4:1 ratio forces signal reliance.
+- Neuron cost halved (0.00002 -> 0.00001).
+- Predator speed reduced (round(1.5*scale) -> round(scale)). More time to respond to warnings.
 - Softmax emission replaces threshold-based. Emit if max(softmax) > 1/6.
 
-### Early observations (1000 gen smoke test, with visible predators)
+### Early observations (1000 gen smoke test, visible predators)
 
-Brain compression: base hidden shrinks from 12 to ~4.4, signal hidden stays ~5-6. Evolution finds minimal base processing sufficient but retains signal capacity - the split architecture is working as intended. JSD rising steadily, MI climbing. Silence correlation consistently negative (-0.37 to -0.51).
+Brain compression: base hidden shrinks from 12 to ~4.4, signal hidden stays ~5-6. The split architecture is working as intended - evolution finds minimal base processing sufficient but retains signal capacity. JSD rising, MI climbing, silence correlation consistently negative (-0.37 to -0.51).
+
+But across 5 seeds with visible predators, MI correlated negatively with fitness. Communication was actively harmful. Prey that signaled paid the metabolic cost (0.002/emission) while giving away their position for no compensating advantage.
+
+**The fundamental issue:** when prey can see the threat, signals are redundant. Evolution found that shutting up and running was strictly better than warning neighbors. This motivated the most significant change since the split-head brain.
 
 ---
 
-## Kill Zones (current)
+## Era 4: Kill Zones
 
-Visible predators replaced with invisible kill zones. This is the most significant architectural change since the split-head brain - it changes what communication is *for*.
+*Question: Does making danger invisible force communication to become structurally necessary?*
 
-### The problem with visible predators
+### The design
 
-Across all prior runs with visible predators, prey could see danger directly (brain inputs 0-2 encoded nearest predator dx/dy/distance). Communication was optional - prey could flee on their own visual information. The signal channel never became structurally necessary. MI correlated negatively with fitness across 5 seeds: communication was actively harmful. Prey that signaled paid the metabolic cost (0.002/emission) while giving away their position for no compensating survival advantage.
-
-The fundamental issue: when prey can see the threat, signals are redundant. Evolution found that shutting up and running was strictly better than warning neighbors.
-
-### The kill zone design
-
-Three invisible circular zones (radius 8.0, ~19% grid coverage) drift randomly across the 56x56 grid. Zone speed is 0.5 (probabilistic - moves one cell ~every other tick in a random cardinal direction). Prey inside a zone lose 0.02 energy per tick from each overlapping zone. At starting energy 1.0, a zone kills in 50 ticks.
-
-The critical change: zones are invisible. Brain inputs 0-2 are always zero (dead inputs, preserved for genome layout compatibility). Prey cannot see zones. The only self-signal of danger is energy loss (brain input 35) - but energy drops don't tell you *which direction* to flee.
+Three invisible circular zones (radius 8.0, ~19% grid coverage) drift randomly across the 56x56 grid. Zone speed 0.5 (probabilistic). Brain inputs 0-2 are always zero - prey cannot see zones. The only self-signal of danger is energy loss (input 35), which doesn't indicate direction.
 
 This creates structural information asymmetry:
-- A prey inside a zone knows only that energy is dropping, not where the zone boundary is
+- A prey inside a zone knows only that energy is dropping, not where the boundary is
 - Random fleeing has ~50% chance of going deeper into the zone
 - Signals from nearby prey carry dx/dy directional information - the only source of escape direction
-- A prey outside the zone can signal toward it, providing information the endangered prey cannot obtain alone
+- Communication is the difference between directed escape and a coin flip
 
-Communication is no longer optional. It's the difference between directed escape and a coin flip.
+### Initial implementation and immediate problems (drain 0.10)
 
-### Implementation details
+First kill zone runs (seeds 42/43, ~900 gens) used ZONE_DRAIN_RATE = 0.10, killing in 10 ticks.
 
-- `KillZone { x: f32, y: f32, radius: f32, speed: f32 }` - f32 position for sub-cell precision
-- Movement: probabilistic random walk, 1 cell per move, `speed` = probability of moving each tick
-- Energy drain: `ZONE_DRAIN_RATE` (0.02) per tick per zone, stacks across overlapping zones
-- Observer metrics use actual zone distance (prey can't see zones, but we measure signal-zone correlation)
-- MI distance bins: `[zone_radius, signal_range, signal_range * 1.375]` - zone radius replaces vision range as the "close danger" boundary
-- Receiver context is binary: in_zone vs not_in_zone (replaces predator_visible vs not_visible)
-- `--pred N` CLI flag repurposed for zone count; `--zone-radius F` and `--zone-speed F` added
-- signal.rs, brain.rs, evolution.rs unchanged - the change is purely in the world model
+Early smoke test showed promising metrics: positive iconicity (alarm calling), 6:1 jsd_pred/jsd_no_pred ratio, receiver_fit_corr 0.76. But three structural issues emerged:
 
-### Early observations (100 gen smoke test)
+**1. Dead silence vs behavioral silence.** silence_corr showed strong negatives (-0.58 to -0.90), but this was a mortality artifact: zones killing prey reduces total signal volume regardless of behavior. Fix: normalize signals_per_tick by alive_per_tick.
 
-Promising results from the initial smoke test after implementation:
+**2. Zone lethality too fast for communication.** At 0.10 drain, zones kill in 10 ticks. A prey at zone boundary needs ~8 ticks to walk out. Communication window is 2-3 ticks - too short for signal-response-escape. Fix: ZONE_DRAIN_RATE reduced to 0.02 (50-tick kill).
 
-| Metric | Value | Interpretation |
-|--------|-------|---------------|
-| Iconicity | positive | Prey signal more inside zones (alarm calling, not silence) |
-| jsd_pred / jsd_no_pred | 6:1 | Receivers respond 6x more strongly inside zones |
-| receiver_fit_corr | 0.76 | Strong positive correlation between hearing signals and surviving |
-| Fitness | ~225 | Healthy population despite invisible danger |
+**3. Brain collapse to minimum (again).** avg base hidden = 4.2, signal hidden = 2.2. Same collapse seen at every neuron cost tested (0.0002, 0.00002, 0.00001). The cost doesn't matter - larger brains provide no fitness advantage when communication hasn't emerged yet. Fix: neuron_cost set to 0.0 (free brains).
 
-The iconicity flip is the most striking change. With visible predators, iconicity was consistently negative (prey went silent near danger). With invisible zones, iconicity is positive from the start - prey signal *more* when in danger. This makes evolutionary sense: if you can't see the threat, broadcasting your distress is the only way to elicit help from those who might provide directional information.
+### Zone damage separated from energy
 
-Long-duration runs (open-ended, seeds 42 and 43) are accumulating data on the VPS to determine whether these early signals develop into sustained communication systems or collapse like prior runs.
+Initially, zone drain reduced the same energy pool that food replenished. This meant prey could offset zone damage by eating, undermining the lethality model. Zone damage was separated into its own accumulator (zone_damage field, death at >= 1.0). Food cannot heal zone damage. Energy and zone damage are independent threats.
 
----
+### The dying sound experiment (added then removed)
 
-## Parameter Changes (Post Kill-Zone Runs)
+When a prey died to zone damage, it emitted all 6 symbols simultaneously - a "dying scream." The hypothesis: dying sounds would create a strong spatial signal that survivors could learn to flee from.
 
-Three structural issues identified from the initial kill-zone runs (seeds 42/43, ~900 gens):
+**Result: catastrophic.** With 3 zones and high death rates, dying bursts created near-constant grid-wide signal coverage (3 zones * high death rate * 22-cell signal range). This:
+- Suppressed MI to ~0 (constant signal noise drowns out any structured information)
+- Prevented silence transitions (the grid is never quiet)
+- Made the signal channel useless by flooding it
 
-### 1. Dead silence vs behavioral silence
+The dying sound was removed. Dying prey now signal only via their brain's normal final emission before zone_drain runs. This was an important lesson: more signal != more communication. The channel needs quiet periods for structured information to have value.
 
-The silence_corr metric (Pearson between signals_per_tick and min_zone_dist) showed strong negative values (-0.58 to -0.90), suggesting prey go silent near zones. However, this is a mortality artifact: zones kill in 10 ticks, dead prey emit no signals, so signal volume drops when zones are nearby because there are fewer living prey - not because survivors choose silence.
+### Long-duration results (seeds 42/43/99, drain 0.02, free brains)
 
-**Fix:** Normalize signals_per_tick by alive_per_tick before computing the correlation. This isolates behavioral silence (living prey choosing to signal less) from dead silence (fewer prey alive to signal).
+**Parameters:** pop=384, grid=56, zones=3, radius=8.0, speed=0.5, food=100, ticks=500, signal_cost=0.002, kin_bonus=0.10, neuron_cost=0.0, 6 symbols, split-head brain. ZONE_DRAIN_RATE=0.02.
 
-### 2. Zone lethality too fast for communication
+seed99 at metrics-interval 1000 (94 data points); seeds 42/43 at full resolution.
 
-At 0.1 energy/tick drain, zones kill in 10 ticks. A prey at the zone boundary (radius 8.0) needs ~8 ticks to walk out even knowing the right direction. The window between receiving a useful signal and dying is 2-3 ticks - too short for a meaningful signal-response-escape loop to provide fitness advantage.
+#### Universal findings (all three seeds)
 
-**Fix:** ZONE_DRAIN_RATE reduced from 0.1 to 0.02 (50-tick kill). Prey now have 30-40 useful ticks to receive directional signals and escape. Communication becomes structurally valuable because there's time to act on information.
+**1. Signal hidden converges to maximum.** All three independently evolved near-max signal processing: seed42 avg 29.0, seed43 avg 30.8, seed99 avg 25.3. Starting from ~6, all sprinted to high signal_hidden by gen 18-25k. With free brains, this reflects genuine selection pressure for signal processing capacity.
 
-### 3. Brain size collapse to minimum
+**2. Zone encoding is zero, universally.** mi_zone_dist = 0.000 in all three seeds across entire runs. Zones create lethal pressure but never appear in signal content.
 
-Both seeds showed avg base hidden = 4.2 (floor = 4), avg signal hidden = 2.2. With 4 shared base neurons, the split-head architecture has no capacity for independent signal control. Positive iconicity at ~900 gens is likely a spandrel (energy-drop → signal output through shared neurons), not intentional alarm calling. MI near zero (0.004) confirms symbols carry no zone information.
+**3. response_fit_corr = 0.000, universally.** The three-way coupling chain (encode -> respond -> survive) never closes.
 
-Prior runs at every neuron cost tested (0.0002, 0.00002, 0.00001) showed the same collapse. The cost doesn't matter - what matters is that larger brains provide no fitness advantage when communication hasn't emerged yet.
+**4. receiver_fit_corr ~0.79-0.87.** Confirmed spatial confound. Consistent since run 1, does not indicate signal utility.
 
-**Fix:** neuron_cost set to 0.0 (free brains). Under neutral drift with 5% hidden-size mutation rate, brain sizes will explore the full range [4-64] base / [2-32] signal. This gives the split-head architecture actual capacity, and if even a small fitness gradient emerges for useful signaling, evolution can exploit existing capacity instead of needing to build it from scratch.
+**5. Sender selection is real but moderate.** sender_fit_corr = 0.36-0.46. Likely through cooperative patch harvesting - active signalers are co-located with others, satisfying the 2+ prey requirement for patch food.
 
-### Expected effects
-
-- Fitness should increase (longer survival in zones, no brain metabolic cost)
-- Signal volume may change unpredictably (longer-lived prey emit more; but no metabolic incentive to signal)
-- silence_corr values will change magnitude (normalized metric, different denominator)
-- Brain sizes should drift above minimum over hundreds of generations
-- MI may rise if brains develop enough capacity for zone-correlated signaling
-- The critical test: does response_fit_corr ever leave zero? That's the real signal of communication.
-
----
-
-## Kill Zone Runs: First Long-Duration Analysis
-
-**Seeds: 42 (36,084 gens), 43 (37,441 gens), 99 (93,000 gens)**
-Parameters: pop=384, grid=56, zones=3, radius=8.0, speed=0.5, food=100, ticks=500, signal_cost=0.002, kin_bonus=0.10, neuron_cost=0.0, 6 symbols, split-head brain.
-seed99 run with `--metrics-interval 1000` (94 data points at ~1000-gen intervals); seed42/43 at default (one row per gen, full resolution).
-
-### Universal Findings (all three seeds independently confirmed)
-
-**1. Signal hidden layer converges to maximum.**
-
-All three seeds independently evolved to near-maximum signal processing capacity: seed42 avg 29.0 [26-32], seed43 avg 30.8 [26-32], seed99 avg 25.3 [19-31]. Starting from random initialization around 6, all three sprinted to high signal_hidden by gen 18-25k. With neuron_cost=0.0, this is not energetically forced - it reflects genuine selection pressure for signal processing capacity.
-
-**2. Zone encoding is zero, universally.**
-
-`mi_zone_dist = 0.000` in all three seeds across the entire run. Zones create lethal pressure but never appear in signal content. Prey that survive zones do so through other means; no stable convention of danger signaling emerges.
-
-**3. response_fit_corr = 0.000, universally.**
-
-No individual prey benefits from changing its behavior based on signal content. The three-way coupling chain (encode → respond → survive) never closes. Signals influence the environment but not through content-sensitive behavioral responses.
-
-**4. receiver_fit_corr ~0.79-0.87 in all runs.**
-
-High but confirmed to be a spatial confound: center prey hear more signals AND survive more (better food access, further from zone edges on average). This metric has been consistent since run 1 with visible predators and does not indicate signal utility.
-
-**5. Sender selection is real but moderate.**
-
-sender_fit_corr = 0.36-0.46 across all runs. Signaling propensity correlates positively with fitness, likely through cooperative patch harvesting: prey that signal more are more active and more likely to be co-located with other active prey, satisfying the 2+ prey requirement for patch food.
-
-### Divergent Attractors: Same Pressure, Three Solutions
-
-Despite identical mechanics, the three seeds found completely different stable symbol systems:
+#### Divergent attractors: same pressure, three solutions
 
 | Seed | Final symbol distribution | Primary encoding |
 |------|--------------------------|-----------------|
-| seed42 | s1=33%, s3=32%, s4=25% (3-way split) | Food location (mi_food_dy=0.119, mi_food_dist=0.107) |
-| seed43 | s3=78%, s5=19% (near monopoly + satellite) | Other signals (mi_sig5_str=0.072, mi_sig5_dx=0.020) |
-| seed99 | s2=28%, s5=25%, s0=20%, s4=16% (4-way spread) | Food location (mi_food_dist=0.114, mi_food_dx=0.100) |
+| 42 | s1=33%, s3=32%, s4=25% (3-way split) | Food location (mi_food_dy=0.119, mi_food_dist=0.107) |
+| 43 | s3=78%, s5=19% (near monopoly + satellite) | Signal relay (mi_sig5_str=0.072) |
+| 99 | s2=28%, s5=25%, s0=20%, s4=16% (4-way spread) | Food location (mi_food_dist=0.114, mi_food_dx=0.100) |
 
-Symbol 0 is extinct in both VPS seeds; symbol 3 is extinct in seed99. The specific symbols that survive are arbitrary (index has no semantic prior), but the convergence on food encoding is not.
+The specific surviving symbols are arbitrary, but the convergence on food encoding is not.
 
-### The seed42/seed99 Pattern: Direct Food Encoding
+**The seed42/seed99 pattern: direct food encoding.** Both converge on signals encoding food location. Multiple active symbols carry food proximity information. seed99's encoding is cleaner at 93k (MI 0.114) than seed42's at 36k (MI 0.107), suggesting consolidation over time.
 
-Both seed42 (at gen 36k) and seed99 (at gen 93k) converge on the same solution: signals encode food location. Top sustained input MI in both runs has food_dy, food_dist, and food_dx as the dominant dimensions. Multiple symbols (3-4 active) all carry food proximity information with similar zone-proximity ratios (~1.4-1.5x), indicating this is a spandrel - the elevation near zones is because active/stressed prey are more prevalent there, not because prey are signaling about zones.
+**The seed43 anomaly: two-tier signal relay.** Symbol 3 (78%) encodes the strength and direction of symbol 5 (19%), which encodes food location. A second-order relay: s5 -> food proximity -> s3 -> where s5 activity is concentrated. Achieves the same result as direct food encoding through an indirect route, but at lower fitness (620 vs 695/736) and higher signal_hidden (30.8). The relay is less efficient.
 
-seed99's encoding is cleaner at 93k gens (food_dist=0.114) than seed42's at 36k gens (food_dist=0.107), suggesting the food encoding strategy consolidates further given more time. The VPS runs are mid-consolidation.
+#### Evolutionary trajectory: five acts (seed99)
 
-### The seed43 Anomaly: A Two-Tier Signal Relay
+1. **Gen 0-5k: Chaotic sweeps.** Signal hidden oscillates wildly. Symbol 3 hits 61% then goes permanently extinct.
+2. **Gen 15-25k: Low-complexity monopoly.** One symbol at 72-79%, signal_hidden small (2-6). Cheapest viable strategy.
+3. **Gen 30-35k: Breakthrough.** Signal hidden explodes (+11.9 in one window). Genotype sweep with high signal processing capacity.
+4. **Gen 35-55k: Turbulent semiotic window.** Closest to danger signaling: MI peaks at 0.006, silence_corr hits -0.231, jsd_pred peaks at 0.311. All three couple briefly at gen ~45k. Coherence dissolves immediately.
+5. **Gen 55-93k: Food encoding consolidation.** Signal_hidden climbs to 25-31. Food MI grows 0.15 -> 0.34. Zone MI stays at 0.000. Danger signaling abandoned; food coordination is the stable attractor.
 
-seed43 found a structurally distinct solution. Symbol 3 dominates (78%) and its top inputs are `mi_sig5_str=0.072` and `mi_sig5_dx=0.020` - the dominant symbol encodes the strength and direction of the minority symbol s5 (19%). Meanwhile s5 encodes food location (mi_food_dx and mi_food_dy appear in its encoding profile). The resulting chain:
+The turbulent semiotic window (act 4) appears in all three seeds during the post-breakthrough phase. Always transient. Danger signaling is attempted and abandoned in favor of food encoding.
 
-**s5 → food proximity → s3 → where s5 activity is concentrated → transitively, where active prey near food are**
+#### Why danger signaling fails
 
-This is a second-order relay: prey emit s3 in response to hearing s5, re-broadcasting where s5 activity clusters. Functionally it achieves the same thing as direct food encoding but through an indirect route. Evidence that seed43 needed more signal processing capacity to sustain this: it has the highest signal_hidden (30.8 avg vs 29.0/25.3) and the lowest sustained fitness (620 vs 695/736) - the relay is less efficient than direct encoding.
+- **Food encoding competes.** Prey are more active near food, which correlates spatially with zones. A zone-signaling convention would require reducing signals near food patches that happen to overlap zones - unstable.
+- **Timing.** Even at 0.02 drain (50-tick kill), the signal-response-escape loop may be too slow to generate fitness advantage.
+- **Ecological niche exclusion.** Once food encoding occupies 4-5 symbols, there's no room for danger conventions.
 
-seed43 also shows the most volatile evolutionary history: early vs late encoding stability Spearman = 0.188 (vs 0.461/0.461 for seed42/seed99), and the largest JSD spike cluster (gen 33k, values up to 0.375) - a late-run symbol reshuffling event not seen in the other seeds.
-
-### Evolutionary Trajectory: Five Acts (seed99 detail)
-
-seed99's 93k gens at sparse resolution reveals a consistent five-phase pattern likely present but compressed in the shorter runs:
-
-1. **Gen 0-5k: Chaotic sweeps.** Signal hidden oscillates wildly (+16, -12 in single 1k-gen windows). One symbol briefly dominates then is permanently eliminated via selective sweep (symbol 3 hits 61%, then goes extinct and never recovers).
-
-2. **Gen 15-25k: Low-complexity monopoly.** One symbol owns 72-79% of signals while signal_hidden stays small (2-6). Minimal processing, no real encoding. The cheapest viable signaling strategy.
-
-3. **Gen 30-35k: The breakthrough.** Signal hidden explodes (+11.9 in a single window). A new genotype sweeps through with high signal processing capacity. Symbol reshuffling accompanies the sweep.
-
-4. **Gen 35-55k: The turbulent semiotic window.** The closest the population gets to danger signaling: MI peaks at 0.006, silence_corr hits -0.231 (prey going quiet near zones), jsd_pred peaks at 0.311. All three couple briefly at gen ~45k. The coherence dissolves immediately - another sweep crashes signal_hidden from 17 to 10 in one step.
-
-5. **Gen 55-93k: Food encoding consolidation.** Signal_hidden climbs steadily to 25-31. Food MI grows 0.15→0.34. Zone MI stays permanently at 0.000. The danger-signaling niche is abandoned; food coordination becomes the stable attractor.
-
-### The Danger Signaling Problem
-
-The turbulent semiotic window (Act 4) appears in all three seeds during the initial post-breakthrough phase. It is always transient. Several factors work against stable danger convention formation:
-
-- **Silence near zones conflicts with food encoding near zones.** Prey are more active (and thus signal more) when near food, which correlates spatially with zones. A stable zone-signaling convention would require prey to signal *less* near food patches that happen to be near zones - evolutionarily unstable given the food encoding pressure.
-
-- **The causal chain timing.** Zones kill in 50 ticks. A prey already inside a zone has limited time to receive signals, update behavior, and escape. For danger signaling to close the response_fit_corr gap, the signal-response loop needs to work faster than the simulation dynamics allow.
-
-- **Free riding on food encoding.** Once food encoding is established, the signal channel is already occupied. Inserting zone information requires differentiated symbols - which appears in seed43's two-tier relay but at a significant fitness cost.
-
-### Cross-Run Summary Table
+#### Cross-run summary
 
 | Metric | seed42 (36k) | seed43 (37k) | seed99 (93k) |
 |--------|-------------|-------------|-------------|
 | avg_fitness | 695.3 | 620.0 | 736.2 |
-| sig_hidden | 29.0 | **30.8** | 25.3 |
+| signal_hidden | 29.0 | 30.8 | 25.3 |
 | mutual_info (final) | 0.0001 | 0.0003 | 0.0001 |
 | jsd_pred | 0.215 | 0.155 | 0.018 |
 | silence_corr | +0.046 | -0.018 | -0.012 |
@@ -377,26 +327,15 @@ The turbulent semiotic window (Act 4) appears in all three seeds during the init
 | Top encoding | food location | signal relay | food location |
 | Encoding stability | 0.461 | 0.188 | ~0.46 |
 
-### What This Means for the Design
-
-The kill-zone regime successfully replaced the evasion-boost exploit (signals as fuel) with signals that carry real information content. Food encoding with MI values of 0.09-0.12 is meaningful - these are genuine sender-world correlations. The architecture is working: signal_hidden at max, stable multi-symbol vocabularies, food information in the channel.
-
-The open question is whether danger signaling is achievable in this regime or whether food encoding always outcompetes it. The turbulent semiotic windows suggest the population briefly tries danger signaling before abandoning it. Three possible interpretations:
-
-1. **Insufficient selection pressure**: danger zones cover ~19% of the grid and kill in 50 ticks. The fitness advantage from danger signaling may be too small relative to food coordination gains to sustain.
-
-2. **Convention fragility**: danger conventions require correlated behavior across many prey simultaneously. Random drift dissolves them faster than selection can reinforce them, as seen in run 3 with visible predators.
-
-3. **Ecological niche exclusion**: food encoding and danger encoding compete for the same symbol vocabulary. Once food encoding occupies 4-5 symbols (seed42/99) or a two-tier relay occupies them (seed43), there's no room for stable danger conventions.
-
-Distinguishing these requires a counterfactual: a run with cooperative food patches disabled (`--patch-ratio 0.0`) to remove the food coordination driver. If danger signaling emerges when food encoding pressure is absent, that confirms ecological niche exclusion.
-
 ---
 
-## Overnight Counterfactual Experiment (2026-03-12/13)
+## Era 5: Counterfactual Testing
 
-Three runs from the same binary, same parameters except the signal channel. The first
-controlled counterfactual in the project's history.
+*Question: Do signals actually improve fitness, or are they noise that evolution tolerates?*
+
+### Experimental design
+
+First controlled counterfactual in the project's history. Three runs, same binary, same parameters except the signal channel.
 
 | Run | Seed | Signals | Threads | Gens reached |
 |-----|------|---------|---------|-------------|
@@ -404,24 +343,17 @@ controlled counterfactual in the project's history.
 | mute-s100 | 100 | --no-signals | 4 | 148,970 |
 | baseline-s101 | 101 | enabled | 4 | 95,270 |
 
-Parameters: pop=384, grid=56, zones=3, radius=8.0, speed=0.5, food=100, ticks=500,
-signal_cost=0.002, kin_bonus=0.10, neuron_cost=0.0. Binary commit 29c5f98.
+Parameters: pop=384, grid=56, zones=3, radius=8.0, speed=0.5, food=100, ticks=500, signal_cost=0.002, kin_bonus=0.10, neuron_cost=0.0. Binary commit 29c5f98.
 
-### Critical parameter discovery
+### Critical discovery: wrong zone lethality
 
-The binary ran with `ZONE_DRAIN_RATE = 0.10` (10-tick kill). The previous runs
-(seeds 42/43/99 above, fitness 620-736) used 0.02 (50-tick kill). The fix documented
-in "Parameter Changes (Post Kill-Zone Runs)" was either reverted during performance
-optimization commits or never committed to main.
+The binary ran with ZONE_DRAIN_RATE = 0.10 (10-tick kill). The Era 4 runs (seeds 42/43/99, fitness 620-736) used 0.02 (50-tick kill). The fix was either reverted during performance optimization commits or never committed to main.
 
-At 0.10 drain, 71% of prey (272/384) die to zones per generation. A prey at zone edge
-needs ~8 ticks to walk out; with a 10-tick kill window, the communication window is
-2-3 ticks. Too short for signal-response-escape loops to provide fitness advantage.
+This does not invalidate the experiment. It answers a different but useful question: at high zone lethality, can signals pay for themselves? The 71% per-generation zone mortality rate (272/384) means most prey die before any signal-response loop can complete.
 
-This does not invalidate the experiment - it tells us precisely that at high zone
-lethality, signals cannot pay for themselves.
+### Findings
 
-### 1. Signals are net negative (-25.5%)
+**1. Signals are net negative (-25.5%).** Mute population outperforms both baselines.
 
 | Metric | baseline-s100 | baseline-s101 | mute-s100 |
 |--------|--------------|--------------|-----------|
@@ -430,12 +362,9 @@ lethality, signals cannot pay for themselves.
 | Peak avg fitness | 360.1 | 378.4 | 413.0 |
 | Zone deaths/gen | 272 | 223 | 251 |
 
-Counterfactual signal value integral: -3,936,072. The fitness gap is stable across
-96k generations - not converging, not diverging. Mute found a higher plateau early
-and stayed there. Level 1 of the evidence hierarchy is answered for this parameter
-regime: signals do not have adaptive value at 0.10 zone drain.
+Counterfactual signal value integral: -3,936,072. The gap is stable across 96k gens - not converging, not diverging. Level 1 of the evidence hierarchy answered for this parameter regime: signals do not have adaptive value at 0.10 drain.
 
-### 2. Brain architecture parasitism
+**2. Brain architecture parasitism.** The signal environment inflates base_hidden by 115% (14.2 vs mute's 6.6). With 18 of 36 inputs being signal channels, evolution selects for processing capacity even when it provides zero survival benefit.
 
 | Run | base_hidden | signal_hidden | total |
 |-----|-------------|---------------|-------|
@@ -443,70 +372,114 @@ regime: signals do not have adaptive value at 0.10 zone drain.
 | baseline-s101 | 4.5 [4-7] | 21.7 [15-29] | 26.2 |
 | mute-s100 | 6.6 [5-8] | 13.8 [8-18] | 20.4 |
 
-The signal environment inflates base_hidden by 115% (14.2 vs mute's 6.6). With 18 of
-36 brain inputs being signal channels, evolution selects for brains that process signal
-noise even when that processing provides zero survival benefit.
+baseline-s101 found a partial escape: collapse base_hidden to near-minimum, shunt to signal_hidden. Marginally higher fitness (257 vs 253) but still loses to mute (306).
 
-baseline-s101 found a partial escape: collapse base_hidden to near-minimum (4.5), shunt
-everything to signal_hidden (21.7). Marginally higher fitness (257 vs 253) but still
-loses to mute (306). Mute's signal_hidden drifts randomly under zero selection pressure.
+**3. Signals encode memory, not world state.** Previous runs at 0.02 drain encoded food location (MI 0.107-0.114). Overnight runs encode memory cells (MI 0.003-0.018) and incoming signal strength (self-referential relay). An order of magnitude less information. "Signals about signals about nothing."
 
-### 3. Signals encode memory, not world state
+**4. Sender fitness correlation flipped negative.** sender_fit_corr: -0.443 (s100), -0.558 (s101). Previously +0.36 to +0.46. At high lethality, signaling is pure cost with no compensating benefit. Kin bonus (0.10) is insufficient.
 
-Previous runs at 0.02 drain encoded food location (mi_food_dist=0.107-0.114). The
-overnight runs' top input MI dimensions are memory cells (mi_mem1-7, values 0.003-0.018)
-and incoming signal strength (self-referential relay). Food and energy MI are minimal.
-Zone MI is zero. An order of magnitude less information than previous runs.
+**5. Symbol monopoly returns.** s100: symbol 4 at 97.9% (HHI 0.959). s101: symbol 3 at 79.7% (HHI 0.663). Monopoly kills MI. Previous runs at 0.02 drain maintained 3-4 active symbols.
 
-### 4. Sender fitness correlation flipped negative
+**6. response_fit_corr remains zero.** Still 0.000. The three-way causal chain has never closed in the project's history.
 
-sender_fit_corr: -0.443 (s100), -0.558 (s101). Previously +0.36 to +0.46. At high
-zone lethality, signaling is pure cost with no compensating benefit. The kin bonus
-(0.10) is insufficient when information has no time to be useful.
+**7. Fitness converges, everything else diverges.** Sustained fitness differs by 1.7% between s100 and s101. base_hidden differs by 3.2x, signal entropy by 50x, dominant symbol is different. Fitness is constrained by world physics; brain architecture and symbol system are contingent path-dependent convention without function.
 
-### 5. Symbol monopoly returns
+**8. Signal channel costs 35% of computation.** Mute reached 149k gens vs baseline's 96k in the same wall time. The receive_detailed() inner loop is O(alive_prey * active_signals).
 
-baseline-s100: symbol 4 at 97.9% (HHI 0.959). baseline-s101: symbol 3 at 79.7% with
-symbol 2 satellite at 16% (HHI 0.663). Different dominant symbols (arbitrary convention).
-Monopoly mechanically kills MI. Previous runs at 0.02 drain maintained 3-4 active symbols.
-
-### 6. response_fit_corr remains zero
-
-Still 0.000 across all runs. The three-way causal chain (encode -> respond -> survive)
-has never closed in the project's history. Receivers change behavior (jsd_pred 0.19-0.23)
-but that change does not predict survival. The in-zone/out-of-zone JSD ratio is only
-1.14x (down from ~6x in early 50k salvaged data).
-
-### 7. Reproducibility: fitness converges, everything else diverges
-
-Sustained fitness differs by 1.7% between s100 and s101 (252.5 vs 256.9). base_hidden
-differs by 3.2x, signal entropy by 50x, dominant symbol is different, encoding profile
-is different. Fitness is constrained by world physics; brain architecture and symbol
-system are contingent, path-dependent convention - but convention without function.
-
-### 8. Computational cost of the signal channel
-
-Mute reached 149k gens vs baseline's 96k in the same wall time (55% faster). The signal
-channel consumes ~35% of total computation via the `receive_detailed()` inner loop
-(O(alive_prey * active_signals)). Zero signals means trivial reception.
-
-### 9. Epoch oscillations around a phase transition
-
-baseline-s100 shows boom-bust cycles: signal_hidden grows, jsd_pred peaks (0.41-0.47),
-then signal_hidden crashes because the response doesn't improve survival. MI leads
-base_hidden by ~70 gens (r=0.502) - brief information episodes create selection for
-brain capacity, but the capacity outlasts the information. The system orbits a phase
-transition boundary without crossing it.
+**9. Epoch oscillations around a phase transition.** baseline-s100 shows boom-bust cycles: signal_hidden grows, jsd_pred peaks (0.41-0.47), then signal_hidden crashes because response doesn't improve survival. MI leads base_hidden by ~70 gens (r=0.502). The system orbits a phase transition boundary without crossing it.
 
 ### What this means
 
-The overnight experiment establishes a clear negative result at 0.10 drain: signals
-cannot provide adaptive value when zones kill too fast for communication to help. The
-next experiment should rerun the same counterfactual at 0.02 drain (the parameter used
-for the successful food-encoding runs above) to test whether signals have adaptive value
-when prey have time to act on information.
+The experiment establishes a clear negative result at 0.10 drain. The next experiment: rerun at 0.02 drain (the parameter used for food-encoding runs) to test whether signals have adaptive value when prey have time to act on information.
 
-Combined with the 0.10-drain data, this would produce a 2x2 matrix (lethality x signals)
-isolating the interaction between zone lethality and signal value.
+Combined, this would produce a 2x2 matrix isolating the interaction:
 
-Detailed analysis with charts: `findings/2026-03-13-overnight-analysis.md`
+|  | 0.10 drain | 0.02 drain |
+|--|-----------|-----------|
+| signals enabled | net negative (-25.5%) | not yet tested |
+| signals disabled | baseline (mute-s100) | not yet tested |
+
+Detailed analysis: `findings/2026-03-13-overnight-analysis.md`
+Experimental design: `findings/2026-03-12-overnight-experiment.md`
+
+---
+
+## Standing Conclusions
+
+What holds true across all runs, what's been disproven, and what remains open.
+
+### Universal patterns (every era, every seed)
+
+- **response_fit_corr = 0.** The three-way causal chain (encode -> respond -> survive) has never closed. Receivers change behavior in response to signals but that change does not predict survival. This is the single most persistent negative result.
+- **receiver_fit_corr is a spatial confound.** Center prey hear more signals AND survive more. Consistently 0.48-0.87 across all eras. Not evidence of signal utility.
+- **Silence near danger.** Prey reduce per-capita signaling near threats. Present from gen 0, maintained but not amplified by evolution. Likely an architectural spandrel of shared hidden layers, not a learned strategy.
+- **Symbol monopoly under weak selection.** Without strong differentiation pressure, one symbol dominates. Seen in eras 1, 2 (phase 3), and 5. Only resisted when signals encode useful information (era 4 at 0.02 drain).
+- **Fitness converges, conventions diverge.** Different seeds reach similar fitness but with completely different brain architectures, dominant symbols, and encoding profiles. Fitness is constrained by physics; everything else is contingent.
+
+### Disproven hypotheses
+
+| Hypothesis | Era tested | Result |
+|-----------|-----------|--------|
+| Larger brains stabilize communication | 2 (phase 1) | Brain collapses to minimum when there's no fitness gradient for signal processing |
+| Free signals enable communication | 2 (phase 3) | Free signals + evasion boost -> volume maximization, not content |
+| Evasion boost creates receiver benefit | 2 (phase 3) | Rewards signal presence not content, evolution exploits |
+| Visible predators create communication pressure | 3 | Prey see danger directly, signals are redundant, shutting up and running is strictly better |
+| High zone lethality forces communication | 5 | Zones kill too fast for signal-response loops, signals become net cost |
+| Neuron cost drives brain collapse | 4 (initial) | Same collapse at every cost tested (0.0002, 0.00002, 0.00001, 0.0) |
+| Dying sound provides useful danger signal | 4 | Floods grid with noise, suppresses MI to ~0 |
+
+### What works
+
+| Feature | Era introduced | Status |
+|---------|---------------|--------|
+| Split-head brain | 3 | Working. signal_hidden independently selected, reaches near-max |
+| Kill zones (invisible danger) | 4 | Working. Creates structural information asymmetry |
+| Free brains (neuron_cost=0) | 4 | Working. Brain sizes explore freely, signal capacity grows |
+| Cooperative food patches | 3 | Working. Creates coordination incentive that signals exploit |
+| 4:1 vision:signal ratio | 3 | Working. Forces reliance on social information |
+| Zone drain 0.02 (50-tick kill) | 4 | Working. Enough time for signal-response loops |
+| Food encoding | 4 | Emerged independently in 3 seeds. MI 0.10-0.12 sustained |
+| Signal relay (seed43) | 4 | Emerged spontaneously as alternative to direct encoding |
+
+### Open questions
+
+1. **Do signals have adaptive value at 0.02 drain?** The 2x2 counterfactual matrix is half-complete. The 0.10-drain result (net negative) doesn't predict the 0.02-drain result where food encoding already works.
+
+2. **Can danger signaling coexist with food encoding?** The turbulent semiotic windows (era 4, all seeds) show populations briefly attempting danger signaling before abandoning it. Is this niche exclusion (food encoding occupies the channel) or insufficient selection pressure?
+
+3. **Why is response_fit_corr always zero?** Three possible explanations: (a) the metric threshold is too strict (10+ samples per bucket per prey), (b) receiver behavioral changes are real but orthogonal to fitness, (c) the architecture genuinely cannot close the loop. A counterfactual at 0.02 drain with and without patch food would distinguish (a) from (c).
+
+4. **Publication readiness (ALIFE 2026, August, Waterloo).** Need MI > 0.3 sustained across 5+ seeds. Currently have MI 0.10-0.12 across 3 seeds at 0.02 drain. The food-encoding result is publishable as-is if framed correctly (emergent coordination rather than referential communication).
+
+### Evidence hierarchy status
+
+| Level | Claim | Status |
+|-------|-------|--------|
+| 1 | Signals have adaptive value | NO at 0.10 drain. Untested at 0.02 drain (where food encoding exists) |
+| 2 | Receivers change behavior | Weak yes (JSD nonzero, but in-zone ratio degraded from 6x to 1.14x at high lethality) |
+| 3 | Different symbols carry different info | Yes at 0.02 drain (3-4 active symbols with food encoding). No at 0.10 drain (monopoly) |
+| 4 | Responses are appropriate | Never observed (response_fit_corr = 0) |
+| 5 | Genuine reference | Not testable without levels 1-4 |
+
+### Parameter history
+
+Tracks every significant parameter change and why.
+
+| Parameter | Era 1 | Era 2 (phase 1) | Era 2 (phase 2) | Era 2 (phase 4) | Era 3 | Era 4 (current) |
+|-----------|-------|-----------------|-----------------|-----------------|-------|-----------------|
+| Population | 48 | 384 | 384 | 384 | 384 | 384 |
+| Grid | 20x20 | 56x56 | 56x56 | 56x56 | 56x56 | 56x56 |
+| Threat | 2 pred (vis) | 16 pred (vis) | 16 pred (vis) | 3 pred (vis) | 3 pred (vis) | 3 zones (invis) |
+| Threat speed | - | 8 | 4 | 4 | round(scale) | 0.5 prob |
+| Hidden layer | 6 fixed | 4-16 evolv | 4-16 evolv | 4-124 evolv | 4-64 base + 2-32 sig | same |
+| Symbols | 3 | 3 | 3 | 3 | 6 | 6 |
+| Signal cost | 0.01 | 0.01 | 0.0 | 0.002 | 0.002 | 0.002 |
+| Neuron cost | 0 (fixed) | 0.0002 | 0.00002 | 0.00002 | 0.00001 | 0.0 |
+| Evasion boost | no | no | yes | no | no | no |
+| Vision | 4.0 | 11.2 | 11.2 | 11.2 | 5.6 | 5.6 |
+| Signal range | 8.0 | 22.4 | 22.4 | 22.4 | 22.4 | 22.4 |
+| Memory | no | no | no | no | 8 cells | 8 cells |
+| Patches | no | no | no | no | 50% | 50% |
+| Kin fitness | no | no | no | no | 0.5/0.25 | 0.5/0.25 |
+| Zone drain | - | - | - | - | - | 0.02 (code: 0.10) |
+| Food | 25 | 200 | 200 | 100 | 100 | 100 |
