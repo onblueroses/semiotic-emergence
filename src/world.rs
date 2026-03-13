@@ -4,7 +4,7 @@ use rayon::prelude::*;
 
 use crate::brain::{Brain, ForwardResult, INPUTS, MEMORY_SIZE};
 use crate::evolution::Agent;
-use crate::signal::{self, Signal, NUM_SYMBOLS};
+use crate::signal::{self, Signal, SignalGrid, NUM_SYMBOLS};
 
 // Input layout offsets derived from constants
 const SIGNAL_INPUT_START: usize = 9; // after pred(3) + food(3) + ally(3)
@@ -254,9 +254,10 @@ pub struct World {
     pub collect_metrics: bool,
     /// Count of prey that died from zone damage this evaluation.
     pub zone_deaths: u32,
-    // Spatial indices (rebuilt each tick for prey, maintained incrementally for food)
+    // Spatial indices (rebuilt each tick for prey/signals, maintained incrementally for food)
     prey_grid: CellGrid,
     food_grid: CellGrid,
+    signal_grid: SignalGrid,
     // Pre-allocated per-tick buffers (reused across ticks to avoid allocation)
     shuffled_indices: Vec<usize>,
     order_scratch: Vec<usize>,
@@ -360,6 +361,7 @@ impl World {
             zone_deaths: 0,
             prey_grid: CellGrid::new(grid_size),
             food_grid,
+            signal_grid: SignalGrid::new(grid_size, signal_range),
             shuffled_indices: (0..prey_count).collect(),
             order_scratch: Vec::with_capacity(prey_count),
             alive_scratch: Vec::with_capacity(prey_count),
@@ -404,7 +406,8 @@ impl World {
         self.signals
             .retain(|s| self.tick.saturating_sub(s.tick_emitted) <= 4);
 
-        // Build prey spatial grid
+        // Rebuild spatial grids
+        self.signal_grid.rebuild(&self.signals, self.tick);
         self.rebuild_prey_grid();
 
         // Track minimum zone-edge distance to alive prey this tick (observer metric)
@@ -601,8 +604,14 @@ impl World {
         }
 
         // Incoming signals (strength + direction per symbol)
-        let sig =
-            signal::receive_detailed(&self.signals, p.x, p.y, self.tick, gs, self.signal_range);
+        let sig = signal::receive_detailed_grid(
+            &self.signals,
+            &self.signal_grid,
+            p.x,
+            p.y,
+            gs,
+            self.signal_range,
+        );
         for (s, rs) in sig.iter().enumerate() {
             let base = SIGNAL_INPUT_START + s * 3;
             inp[base] = rs.strength;
@@ -877,6 +886,7 @@ mod tests {
             collect_metrics: true,
             prey_grid: CellGrid::new(TEST_GRID),
             food_grid: CellGrid::new(TEST_GRID),
+            signal_grid: SignalGrid::new(TEST_GRID, TEST_SIGNAL_RANGE),
             shuffled_indices: (0..prey_count).collect(),
             order_scratch: Vec::with_capacity(prey_count),
             alive_scratch: Vec::with_capacity(prey_count),

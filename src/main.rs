@@ -76,7 +76,7 @@ impl SimParams {
         };
 
         let scale = grid_size as f32 / 20.0;
-        let signal_range = 8.0 * scale;
+        let signal_range = parse_flag(args, "--signal-range").unwrap_or(8.0 * scale);
         let reproduction_radius = 6.0 * scale;
         let fallback_radius = 10.0 * scale;
         let mi_bins = [zone_radius, signal_range, signal_range * 1.375];
@@ -730,7 +730,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or(200);
 
         println!(
-            "Config: pop={} grid={} zones={} radius={:.1} speed={:.1} drain={:.3} food={} ticks={} patches={:.0}% kin_bonus={:.2} sig_cost={:.4}",
+            "Config: pop={} grid={} zones={} radius={:.1} speed={:.1} drain={:.3} food={} ticks={} patches={:.0}% kin_bonus={:.2} sig_cost={:.4} sig_range={:.1}",
             params.pop_size,
             params.grid_size,
             params.num_zones,
@@ -741,7 +741,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             params.ticks_per_eval,
             params.patch_ratio * 100.0,
             params.kin_bonus,
-            params.signal_cost
+            params.signal_cost,
+            params.signal_range
         );
         println!("Batch mode: {n} seeds x {generations} generations");
         let mut results: Vec<RunResult> = Vec::new();
@@ -815,7 +816,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or(200);
 
         println!(
-            "Config: pop={} grid={} zones={} radius={:.1} speed={:.1} drain={:.3} food={} ticks={} patches={:.0}% kin_bonus={:.2} sig_cost={:.4}",
+            "Config: pop={} grid={} zones={} radius={:.1} speed={:.1} drain={:.3} food={} ticks={} patches={:.0}% kin_bonus={:.2} sig_cost={:.4} sig_range={:.1}",
             params.pop_size,
             params.grid_size,
             params.num_zones,
@@ -826,7 +827,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             params.ticks_per_eval,
             params.patch_ratio * 100.0,
             params.kin_bonus,
-            params.signal_cost
+            params.signal_cost,
+            params.signal_range
         );
 
         let probe_mode = args.iter().any(|a| a == "--probe");
