@@ -390,3 +390,123 @@ The open question is whether danger signaling is achievable in this regime or wh
 3. **Ecological niche exclusion**: food encoding and danger encoding compete for the same symbol vocabulary. Once food encoding occupies 4-5 symbols (seed42/99) or a two-tier relay occupies them (seed43), there's no room for stable danger conventions.
 
 Distinguishing these requires a counterfactual: a run with cooperative food patches disabled (`--patch-ratio 0.0`) to remove the food coordination driver. If danger signaling emerges when food encoding pressure is absent, that confirms ecological niche exclusion.
+
+---
+
+## Overnight Counterfactual Experiment (2026-03-12/13)
+
+Three runs from the same binary, same parameters except the signal channel. The first
+controlled counterfactual in the project's history.
+
+| Run | Seed | Signals | Threads | Gens reached |
+|-----|------|---------|---------|-------------|
+| baseline-s100 | 100 | enabled | 4 | 96,570 |
+| mute-s100 | 100 | --no-signals | 4 | 148,970 |
+| baseline-s101 | 101 | enabled | 4 | 95,270 |
+
+Parameters: pop=384, grid=56, zones=3, radius=8.0, speed=0.5, food=100, ticks=500,
+signal_cost=0.002, kin_bonus=0.10, neuron_cost=0.0. Binary commit 29c5f98.
+
+### Critical parameter discovery
+
+The binary ran with `ZONE_DRAIN_RATE = 0.10` (10-tick kill). The previous runs
+(seeds 42/43/99 above, fitness 620-736) used 0.02 (50-tick kill). The fix documented
+in "Parameter Changes (Post Kill-Zone Runs)" was either reverted during performance
+optimization commits or never committed to main.
+
+At 0.10 drain, 71% of prey (272/384) die to zones per generation. A prey at zone edge
+needs ~8 ticks to walk out; with a 10-tick kill window, the communication window is
+2-3 ticks. Too short for signal-response-escape loops to provide fitness advantage.
+
+This does not invalidate the experiment - it tells us precisely that at high zone
+lethality, signals cannot pay for themselves.
+
+### 1. Signals are net negative (-25.5%)
+
+| Metric | baseline-s100 | baseline-s101 | mute-s100 |
+|--------|--------------|--------------|-----------|
+| Sustained avg fitness | 252.5 | 256.9 | 306.2 |
+| Final avg fitness | 239.7 | 279.9 | 334.7 |
+| Peak avg fitness | 360.1 | 378.4 | 413.0 |
+| Zone deaths/gen | 272 | 223 | 251 |
+
+Counterfactual signal value integral: -3,936,072. The fitness gap is stable across
+96k generations - not converging, not diverging. Mute found a higher plateau early
+and stayed there. Level 1 of the evidence hierarchy is answered for this parameter
+regime: signals do not have adaptive value at 0.10 zone drain.
+
+### 2. Brain architecture parasitism
+
+| Run | base_hidden | signal_hidden | total |
+|-----|-------------|---------------|-------|
+| baseline-s100 | 14.2 [10-16] | 13.8 [10-17] | 28.0 |
+| baseline-s101 | 4.5 [4-7] | 21.7 [15-29] | 26.2 |
+| mute-s100 | 6.6 [5-8] | 13.8 [8-18] | 20.4 |
+
+The signal environment inflates base_hidden by 115% (14.2 vs mute's 6.6). With 18 of
+36 brain inputs being signal channels, evolution selects for brains that process signal
+noise even when that processing provides zero survival benefit.
+
+baseline-s101 found a partial escape: collapse base_hidden to near-minimum (4.5), shunt
+everything to signal_hidden (21.7). Marginally higher fitness (257 vs 253) but still
+loses to mute (306). Mute's signal_hidden drifts randomly under zero selection pressure.
+
+### 3. Signals encode memory, not world state
+
+Previous runs at 0.02 drain encoded food location (mi_food_dist=0.107-0.114). The
+overnight runs' top input MI dimensions are memory cells (mi_mem1-7, values 0.003-0.018)
+and incoming signal strength (self-referential relay). Food and energy MI are minimal.
+Zone MI is zero. An order of magnitude less information than previous runs.
+
+### 4. Sender fitness correlation flipped negative
+
+sender_fit_corr: -0.443 (s100), -0.558 (s101). Previously +0.36 to +0.46. At high
+zone lethality, signaling is pure cost with no compensating benefit. The kin bonus
+(0.10) is insufficient when information has no time to be useful.
+
+### 5. Symbol monopoly returns
+
+baseline-s100: symbol 4 at 97.9% (HHI 0.959). baseline-s101: symbol 3 at 79.7% with
+symbol 2 satellite at 16% (HHI 0.663). Different dominant symbols (arbitrary convention).
+Monopoly mechanically kills MI. Previous runs at 0.02 drain maintained 3-4 active symbols.
+
+### 6. response_fit_corr remains zero
+
+Still 0.000 across all runs. The three-way causal chain (encode -> respond -> survive)
+has never closed in the project's history. Receivers change behavior (jsd_pred 0.19-0.23)
+but that change does not predict survival. The in-zone/out-of-zone JSD ratio is only
+1.14x (down from ~6x in early 50k salvaged data).
+
+### 7. Reproducibility: fitness converges, everything else diverges
+
+Sustained fitness differs by 1.7% between s100 and s101 (252.5 vs 256.9). base_hidden
+differs by 3.2x, signal entropy by 50x, dominant symbol is different, encoding profile
+is different. Fitness is constrained by world physics; brain architecture and symbol
+system are contingent, path-dependent convention - but convention without function.
+
+### 8. Computational cost of the signal channel
+
+Mute reached 149k gens vs baseline's 96k in the same wall time (55% faster). The signal
+channel consumes ~35% of total computation via the `receive_detailed()` inner loop
+(O(alive_prey * active_signals)). Zero signals means trivial reception.
+
+### 9. Epoch oscillations around a phase transition
+
+baseline-s100 shows boom-bust cycles: signal_hidden grows, jsd_pred peaks (0.41-0.47),
+then signal_hidden crashes because the response doesn't improve survival. MI leads
+base_hidden by ~70 gens (r=0.502) - brief information episodes create selection for
+brain capacity, but the capacity outlasts the information. The system orbits a phase
+transition boundary without crossing it.
+
+### What this means
+
+The overnight experiment establishes a clear negative result at 0.10 drain: signals
+cannot provide adaptive value when zones kill too fast for communication to help. The
+next experiment should rerun the same counterfactual at 0.02 drain (the parameter used
+for the successful food-encoding runs above) to test whether signals have adaptive value
+when prey have time to act on information.
+
+Combined with the 0.10-drain data, this would produce a 2x2 matrix (lethality x signals)
+isolating the interaction between zone lethality and signal value.
+
+Detailed analysis with charts: `findings/2026-03-13-overnight-analysis.md`
