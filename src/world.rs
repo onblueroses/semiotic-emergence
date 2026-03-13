@@ -13,9 +13,9 @@ const ENERGY_INPUT_IDX: usize = MEMORY_INPUT_START + MEMORY_SIZE;
 const _: () = assert!(ENERGY_INPUT_IDX + 1 == INPUTS, "input layout size mismatch");
 
 pub const INPUT_NAMES: [&str; INPUTS] = [
-    "zone_dx",
-    "zone_dy",
-    "zone_dist",
+    "zone_damage",
+    "energy_delta",
+    "dead_spare",
     "food_dx",
     "food_dy",
     "food_dist",
@@ -198,13 +198,12 @@ pub struct Prey {
     /// Whether this prey received a signal on the previous tick (for onset detection).
     pub had_signal_prev_tick: bool,
     /// Accumulated zone damage. Separate from energy so food cannot offset it.
-    /// Death occurs at `zone_damage` >= 1.0 (10 ticks at full drain).
+    /// Death occurs at `zone_damage` >= 1.0. Ticks to die depends on `zone_drain_rate`
+    /// and distance from zone center (gradient damage).
     pub zone_damage: f32,
+    /// Energy at the start of the previous tick. Used to compute `energy_delta` input.
+    pub prev_energy: f32,
 }
-
-/// Zone damage per tick when inside a kill zone. Accumulates in `zone_damage`, not energy.
-/// 0.10 * 10 ticks = 1.0 = death. Food cannot offset this.
-const ZONE_DRAIN_RATE: f32 = 0.10;
 
 #[derive(Clone, Debug)]
 pub struct KillZone {
@@ -272,6 +271,7 @@ pub struct World {
     pub neuron_cost: f32,
     pub signal_cost: f32,
     pub patch_ratio: f32,
+    pub zone_drain_rate: f32,
 }
 
 impl World {
@@ -291,6 +291,7 @@ impl World {
         neuron_cost: f32,
         signal_cost: f32,
         patch_ratio: f32,
+        zone_drain_rate: f32,
     ) -> Self {
         let prey: Vec<Prey> = agents
             .iter()
@@ -308,6 +309,7 @@ impl World {
                 silence_onset_actions: [[0; 5]; 2],
                 had_signal_prev_tick: false,
                 zone_damage: 0.0,
+                prev_energy: 1.0,
             })
             .collect();
 
@@ -369,6 +371,7 @@ impl World {
             neuron_cost,
             signal_cost,
             patch_ratio,
+            zone_drain_rate,
         }
     }
 
@@ -428,6 +431,13 @@ impl World {
         self.order_scratch.clear();
         self.order_scratch.extend_from_slice(&self.shuffled_indices);
         let order = std::mem::take(&mut self.order_scratch);
+
+        // Snapshot energy for energy_delta input (computed next tick)
+        for &i in &order {
+            if self.prey[i].alive {
+                self.prey[i].prev_energy = self.prey[i].energy;
+            }
+        }
 
         // Apply metabolism sequentially (mutates prey energy/alive, cheap)
         for &i in &order {
@@ -551,15 +561,19 @@ impl World {
     }
 
     /// Build input vector using spatial grid for ally/food lookup.
-    /// Layout: [zone(3 dead), food(3), ally(3), signals(18), memory(8), energy(1)] = 36
-    /// Inputs 0-2 are always zero (zones are invisible).
+    /// Layout: [danger(2)+spare(1), food(3), ally(3), signals(18), memory(8), energy(1)] = 36
+    /// Inputs 0-1: `zone_damage`, `energy_delta`. Input 2: spare (zero).
     #[allow(clippy::similar_names)]
     fn build_inputs_fast(&self, prey_idx: usize) -> [f32; INPUTS] {
         let p = &self.prey[prey_idx];
         let mut inp = [0.0_f32; INPUTS];
         let gs = self.grid_size as f32;
 
-        // 0-2: Dead inputs (zones are invisible, always zero)
+        // 0: accumulated zone damage (body state - prey's own pain, not zone perception)
+        inp[0] = p.zone_damage;
+        // 1: energy delta since last tick (disambiguates zone damage from metabolism)
+        inp[1] = p.energy - p.prev_energy;
+        // 2: spare slot (always zero)
 
         // 3-5: Nearest food (dx, dy, distance)
         if let Some((fi, food_dist_sq)) =
@@ -742,7 +756,8 @@ impl World {
                 let dy = wrap_delta_f32(p.y as f32, zone.y, gs);
                 let dist = (dx * dx + dy * dy).sqrt();
                 if dist <= zone.radius {
-                    p.zone_damage += ZONE_DRAIN_RATE;
+                    let gradient = 1.0 - dist / zone.radius;
+                    p.zone_damage += self.zone_drain_rate * gradient;
                 }
             }
             if p.zone_damage >= 1.0 {
@@ -812,6 +827,7 @@ mod tests {
     const TEST_NEURON_COST: f32 = 0.00002;
     const TEST_SIGNAL_COST: f32 = 0.0;
     const TEST_PATCH_RATIO: f32 = 0.0;
+    const TEST_ZONE_DRAIN_RATE: f32 = 0.10;
 
     fn test_prey(x: i32, y: i32) -> Prey {
         Prey {
@@ -828,6 +844,7 @@ mod tests {
             silence_onset_actions: [[0; 5]; 2],
             had_signal_prev_tick: false,
             zone_damage: 0.0,
+            prev_energy: 1.0,
         }
     }
 
@@ -871,6 +888,7 @@ mod tests {
             neuron_cost: TEST_NEURON_COST,
             signal_cost: TEST_SIGNAL_COST,
             patch_ratio: TEST_PATCH_RATIO,
+            zone_drain_rate: TEST_ZONE_DRAIN_RATE,
             zone_deaths: 0,
         }
     }
@@ -959,7 +977,7 @@ mod tests {
         world.zone_drain();
 
         // zone_damage accumulates; energy is unchanged (food cannot offset zone damage)
-        assert!((world.prey[0].zone_damage - ZONE_DRAIN_RATE).abs() < 1e-6);
+        assert!((world.prey[0].zone_damage - TEST_ZONE_DRAIN_RATE).abs() < 1e-6);
         assert!(
             (world.prey[0].energy - energy_before).abs() < 1e-6,
             "Energy unchanged by zone"
@@ -990,7 +1008,7 @@ mod tests {
     fn zone_drain_kills_at_threshold() {
         let mut world = minimal_world(&[(5, 5)], (5.0, 5.0));
         // Pre-load zone_damage just below threshold - one more drain should kill
-        world.prey[0].zone_damage = 1.0 - ZONE_DRAIN_RATE * 0.5;
+        world.prey[0].zone_damage = 1.0 - TEST_ZONE_DRAIN_RATE * 0.5;
 
         world.zone_drain();
 
@@ -1004,9 +1022,9 @@ mod tests {
     #[test]
     fn zone_drain_stacks_across_overlapping_zones() {
         let mut world = minimal_world(&[(5, 5)], (5.0, 5.0));
-        // Add a second zone also covering (5,5)
+        // Add a second zone also centered at (5,5) so both have dist=0, gradient=1.0
         world.zones.push(KillZone {
-            x: 6.0,
+            x: 5.0,
             y: 5.0,
             radius: TEST_ZONE_RADIUS,
             speed: TEST_ZONE_SPEED,
@@ -1015,8 +1033,46 @@ mod tests {
         world.zone_drain();
 
         assert!(
-            (world.prey[0].zone_damage - 2.0 * ZONE_DRAIN_RATE).abs() < 1e-6,
+            (world.prey[0].zone_damage - 2.0 * TEST_ZONE_DRAIN_RATE).abs() < 1e-6,
             "Damage should stack from two overlapping zones"
+        );
+    }
+
+    #[test]
+    fn zone_drain_gradient_scales_with_distance() {
+        // Prey halfway between center and edge gets ~half the damage
+        let mut world = minimal_world(&[(5, 5)], (5.0, 5.0));
+        // Place prey at distance = radius/2 from zone center
+        let half_r = (TEST_ZONE_RADIUS / 2.0).round() as i32;
+        world.prey[0].x = 5 + half_r;
+
+        world.zone_drain();
+
+        let dist = half_r as f32; // exact integer distance
+        let expected_gradient = 1.0 - dist / TEST_ZONE_RADIUS;
+        let expected_damage = TEST_ZONE_DRAIN_RATE * expected_gradient;
+        assert!(
+            (world.prey[0].zone_damage - expected_damage).abs() < 1e-4,
+            "Gradient damage: expected {expected_damage}, got {}",
+            world.prey[0].zone_damage
+        );
+    }
+
+    #[test]
+    fn zone_drain_zero_at_edge() {
+        // Prey right at zone edge gets near-zero damage
+        let mut world = minimal_world(&[(5, 5)], (5.0, 5.0));
+        // Place prey at distance ~= radius (just inside)
+        let edge_dist = (TEST_ZONE_RADIUS - 0.1).round() as i32;
+        world.prey[0].x = 5 + edge_dist;
+
+        world.zone_drain();
+
+        // Should be very small but non-zero
+        assert!(
+            world.prey[0].zone_damage < TEST_ZONE_DRAIN_RATE * 0.3,
+            "Edge prey should get much less damage than center prey, got {}",
+            world.prey[0].zone_damage
         );
     }
 
@@ -1043,7 +1099,7 @@ mod tests {
         // zone_drain kills prey but does not inject artificial signals into the channel.
         // Dying prey signal only via apply_outputs (their brain's last chosen signal).
         let mut world = minimal_world(&[(5, 5)], (5.0, 5.0));
-        world.prey[0].zone_damage = 1.0 - ZONE_DRAIN_RATE * 0.5;
+        world.prey[0].zone_damage = 1.0 - TEST_ZONE_DRAIN_RATE * 0.5;
         assert!(world.signals.is_empty());
 
         world.zone_drain();
@@ -1120,6 +1176,7 @@ mod tests {
             TEST_NEURON_COST,
             TEST_SIGNAL_COST,
             TEST_PATCH_RATIO,
+            TEST_ZONE_DRAIN_RATE,
         );
 
         assert_eq!(world.prey[0].x, 3);
@@ -1254,39 +1311,62 @@ mod tests {
         assert!(world.food.len() <= initial_count);
     }
 
-    // --- Input building (zone inputs always zero) ---
+    // --- Danger sense inputs ---
 
     #[test]
-    fn zone_inputs_always_zero() {
-        // Inputs 0-2 should be zero regardless of zone proximity (zones are invisible)
-        let mut world = minimal_world(&[(5, 5)], (5.0, 5.0)); // prey inside zone
-        world.food.push(Food {
-            x: 10,
-            y: 10,
-            is_patch: false,
-        });
+    fn input_zone_damage_reflects_accumulation() {
+        let mut world = minimal_world(&[(5, 5)], (5.0, 5.0)); // prey at zone center
+        world.prey[0].zone_damage = 0.5;
 
         let inputs = world.build_inputs(0);
 
-        assert!((inputs[0]).abs() < 1e-6, "zone_dx should be zero");
-        assert!((inputs[1]).abs() < 1e-6, "zone_dy should be zero");
-        assert!((inputs[2]).abs() < 1e-6, "zone_dist should be zero");
+        assert!(
+            (inputs[0] - 0.5).abs() < 1e-6,
+            "Input 0 should be zone_damage"
+        );
     }
 
     #[test]
-    fn zone_inputs_zero_when_far() {
-        let mut world = minimal_world(&[(0, 0)], (15.0, 15.0)); // prey far from zone
-        world.food.push(Food {
-            x: 10,
-            y: 10,
-            is_patch: false,
-        });
+    fn input_energy_delta_negative_after_drain() {
+        let mut world = minimal_world(&[(5, 5)], (15.0, 15.0)); // prey far from zone
+        world.zones[0].radius = 1.0;
+        // Simulate: prev_energy was 1.0, energy dropped to 0.9 from metabolism
+        world.prey[0].prev_energy = 1.0;
+        world.prey[0].energy = 0.9;
 
         let inputs = world.build_inputs(0);
 
-        assert!((inputs[0]).abs() < 1e-6);
-        assert!((inputs[1]).abs() < 1e-6);
-        assert!((inputs[2]).abs() < 1e-6);
+        assert!(
+            (inputs[1] - (-0.1)).abs() < 1e-4,
+            "Input 1 should be energy_delta = energy - prev_energy"
+        );
+    }
+
+    #[test]
+    fn input_energy_delta_positive_after_food() {
+        let mut world = minimal_world(&[(5, 5)], (15.0, 15.0));
+        world.zones[0].radius = 1.0;
+        // Simulate: prey ate food, energy went up
+        world.prey[0].prev_energy = 0.5;
+        world.prey[0].energy = 0.8;
+
+        let inputs = world.build_inputs(0);
+
+        assert!(
+            (inputs[1] - 0.3).abs() < 1e-4,
+            "Input 1 should be positive after food"
+        );
+    }
+
+    #[test]
+    fn input_spare_slot_always_zero() {
+        let mut world = minimal_world(&[(5, 5)], (5.0, 5.0));
+        world.prey[0].zone_damage = 0.5;
+        world.prey[0].energy = 0.7;
+
+        let inputs = world.build_inputs(0);
+
+        assert!((inputs[2]).abs() < 1e-6, "Input 2 (spare) should be zero");
     }
 
     // --- Per-prey receiver tracking ---
@@ -1539,6 +1619,7 @@ mod tests {
             TEST_NEURON_COST,
             TEST_SIGNAL_COST,
             TEST_PATCH_RATIO,
+            TEST_ZONE_DRAIN_RATE,
         );
 
         for &m in &world.prey[0].memory {
