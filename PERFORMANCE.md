@@ -84,7 +84,7 @@ Lower gain at higher thread counts is expected (sequential phase dominates more 
 
 | Component | % runtime | Location | Complexity |
 |-----------|-----------|----------|------------|
-| `receive_detailed` | 41% | signal.rs:54-89 | O(prey * active_signals) |
+| `receive_detailed_grid` | 41% | signal.rs:122-175 | O(prey * nearby_signals) |
 | `CellGrid::nearest` | 6.7% | world.rs:126-179 | O(ring_area), early exit |
 | `tanh` | 6.4% | brain.rs:79-132 | ~30 calls/prey/tick |
 | Metrics | ~7% | metrics.rs | Once per metrics-interval |
@@ -93,7 +93,7 @@ Lower gain at higher thread counts is expected (sequential phase dominates more 
 
 ### Why receive_detailed dominates
 
-Every (prey, signal) pair checked every tick. ~96 active signals per tick (4-tick persistence), 384 prey = ~37k distance computations per tick. Over 500 ticks that is ~18M per generation. Each computation: 2x wrap_delta, 2x mul, add, compare, conditional sqrt+div. No spatial filtering - every prey checks every signal.
+Signal reception uses `SignalGrid` spatial index for O(nearby) lookup instead of O(all). Each prey checks only signals in nearby grid cells (flat buffer with prefix-sum offsets). Still dominates because signal density is high relative to cell size. ~96 active signals per tick (4-tick persistence, configurable via `--signal-ticks`), 384 prey. Each check: 2x wrap_delta, 2x mul, add, compare, deferred sqrt (only 6 winners).
 
 ### Scaling with population
 

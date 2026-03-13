@@ -273,6 +273,7 @@ pub struct World {
     pub signal_cost: f32,
     pub patch_ratio: f32,
     pub zone_drain_rate: f32,
+    pub signal_ticks: u32,
 }
 
 impl World {
@@ -293,6 +294,7 @@ impl World {
         signal_cost: f32,
         patch_ratio: f32,
         zone_drain_rate: f32,
+        signal_ticks: u32,
     ) -> Self {
         let prey: Vec<Prey> = agents
             .iter()
@@ -374,6 +376,7 @@ impl World {
             signal_cost,
             patch_ratio,
             zone_drain_rate,
+            signal_ticks,
         }
     }
 
@@ -403,8 +406,9 @@ impl World {
 
         let signals_before = self.signals_emitted;
 
+        let sig_ticks = self.signal_ticks;
         self.signals
-            .retain(|s| self.tick.saturating_sub(s.tick_emitted) <= 4);
+            .retain(|s| self.tick.saturating_sub(s.tick_emitted) <= sig_ticks);
 
         // Rebuild spatial grids
         self.signal_grid.rebuild(&self.signals, self.tick);
@@ -442,7 +446,8 @@ impl World {
             }
         }
 
-        // Apply metabolism sequentially (mutates prey energy/alive, cheap)
+        // Metabolism + alive filter in one pass (saves an O(n) traversal)
+        self.alive_scratch.clear();
         for &i in &order {
             if !self.prey[i].alive {
                 continue;
@@ -453,15 +458,9 @@ impl World {
             self.prey[i].energy -= drain;
             if self.prey[i].energy <= 0.0 {
                 self.prey[i].alive = false;
+                continue;
             }
-        }
-
-        // Pre-filter alive indices for indexed parallel iteration
-        self.alive_scratch.clear();
-        for &i in &order {
-            if self.prey[i].alive {
-                self.alive_scratch.push(i);
-            }
+            self.alive_scratch.push(i);
         }
         self.order_scratch = order;
 
@@ -899,6 +898,7 @@ mod tests {
             signal_cost: TEST_SIGNAL_COST,
             patch_ratio: TEST_PATCH_RATIO,
             zone_drain_rate: TEST_ZONE_DRAIN_RATE,
+            signal_ticks: 4,
             zone_deaths: 0,
         }
     }
@@ -1187,6 +1187,7 @@ mod tests {
             TEST_SIGNAL_COST,
             TEST_PATCH_RATIO,
             TEST_ZONE_DRAIN_RATE,
+            4,
         );
 
         assert_eq!(world.prey[0].x, 3);
@@ -1630,6 +1631,7 @@ mod tests {
             TEST_SIGNAL_COST,
             TEST_PATCH_RATIO,
             TEST_ZONE_DRAIN_RATE,
+            4,
         );
 
         for &m in &world.prey[0].memory {

@@ -44,6 +44,7 @@ struct SimParams {
     kin_bonus: f32,
     metrics_interval: usize,
     fast_fail_tick: u32,
+    signal_ticks: u32,
 }
 
 impl SimParams {
@@ -62,6 +63,7 @@ impl SimParams {
         let zone_drain_rate = parse_flag(args, "--zone-drain").unwrap_or(0.02);
         let signal_cost = parse_flag(args, "--signal-cost").unwrap_or(0.002);
         let fast_fail_tick: u32 = parse_flag(args, "--fast-fail").unwrap_or(0);
+        let signal_ticks: u32 = parse_flag(args, "--signal-ticks").unwrap_or(4);
 
         let zone_coverage: Option<f32> = parse_flag(args, "--zone-coverage");
         let num_zones = if let Some(coverage) = zone_coverage {
@@ -106,6 +108,7 @@ impl SimParams {
             kin_bonus,
             metrics_interval: metrics_interval.max(1),
             fast_fail_tick,
+            signal_ticks,
         }
     }
 }
@@ -284,6 +287,7 @@ fn evaluate_generation(
         params.signal_cost,
         params.patch_ratio,
         params.zone_drain_rate,
+        params.signal_ticks,
     );
 
     for _ in 0..params.ticks_per_eval {

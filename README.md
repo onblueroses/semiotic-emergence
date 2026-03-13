@@ -34,11 +34,11 @@ cargo run --release -- --batch 10 300             # cross-population divergence
 
 CLI flags: `--pop N`, `--grid N`, `--pred N` (zone count), `--food N`, `--ticks N`, `--zone-radius F`, `--zone-speed F`, `--patch-ratio F`, `--kin-bonus F`.
 
-Output: `output.csv` (21 columns), `trajectory.csv`, `input_mi.csv`. Batch mode also writes `divergence.csv`.
+Output: `output.csv` (23 columns), `trajectory.csv`, `input_mi.csv`. Batch mode also writes `divergence.csv`.
 
 ## Metrics
 
-Per-generation CSV tracks 21 columns including:
+Per-generation CSV tracks 23 columns including:
 
 - **MI** (mutual information) - does symbol choice correlate with sender context (zone distance)?
 - **JSD** (Jensen-Shannon divergence) - do receivers change behavior depending on which signal they get?
@@ -60,7 +60,7 @@ src/evolution.rs  - Spatial evolution, lineage tracking, scoped mutation per hid
 src/world.rs      - Grid, invisible kill zones, food patches, memory, energy economy
 src/signal.rs     - Six symbols, softmax emission, linear decay, one-tick delay
 src/metrics.rs    - 10 instruments: MI, JSD, silence, trajectory, divergence, fitness coupling
-src/main.rs       - Generation loop, kin fitness, batch mode, counterfactual mode, 21-column CSV
+src/main.rs       - Generation loop, kin fitness, batch mode, counterfactual mode, 23-column CSV
 ```
 
 ## Findings so far

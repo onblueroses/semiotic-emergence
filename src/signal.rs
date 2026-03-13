@@ -15,9 +15,14 @@ pub struct Signal {
 /// (`cell_size` >= 1), so multiple world cells map to one signal cell.
 /// Cell size is chosen to evenly divide `grid_size` (no uneven edge cells).
 /// Rebuilt each tick from the active signal list.
+///
+/// Uses a flat buffer with per-cell offsets instead of Vec-of-Vec to eliminate
+/// heap indirection and improve cache locality in the inner loop.
 pub struct SignalGrid {
-    /// Each cell holds indices into the signal vec.
-    cells: Vec<Vec<u16>>,
+    /// Flat buffer of signal indices, grouped by cell.
+    buf: Vec<u16>,
+    /// Per-cell (start, len) into `buf`.
+    offsets: Vec<(u32, u16)>,
     cell_size: i32,
     cells_per_axis: i32,
     cells_radius: i32,
@@ -36,7 +41,8 @@ impl SignalGrid {
         let cells_radius = (signal_range / cell_size as f32).ceil() as i32;
         let total = (cells_per_axis * cells_per_axis) as usize;
         Self {
-            cells: vec![Vec::new(); total],
+            buf: Vec::new(),
+            offsets: vec![(0, 0); total],
             cell_size,
             cells_per_axis,
             cells_radius,
@@ -45,9 +51,31 @@ impl SignalGrid {
     }
 
     pub fn rebuild(&mut self, signals: &[Signal], current_tick: u32) {
-        for cell in &mut self.cells {
-            cell.clear();
+        let total_cells = self.offsets.len();
+        // Count signals per cell
+        for o in &mut self.offsets {
+            *o = (0, 0);
         }
+        let mut count = 0u32;
+        for sig in signals {
+            if sig.tick_emitted >= current_tick {
+                continue;
+            }
+            let cx = sig.x.rem_euclid(self.grid_size) / self.cell_size;
+            let cy = sig.y.rem_euclid(self.grid_size) / self.cell_size;
+            let ci = (cy * self.cells_per_axis + cx) as usize;
+            self.offsets[ci].1 += 1;
+            count += 1;
+        }
+        // Prefix sum to compute start offsets
+        let mut running = 0u32;
+        for ci in 0..total_cells {
+            self.offsets[ci].0 = running;
+            running += u32::from(self.offsets[ci].1);
+        }
+        // Fill flat buffer using offsets[ci].0 as write cursor, then restore
+        self.buf.clear();
+        self.buf.resize(count as usize, 0);
         for (i, sig) in signals.iter().enumerate() {
             if sig.tick_emitted >= current_tick {
                 continue;
@@ -55,7 +83,12 @@ impl SignalGrid {
             let cx = sig.x.rem_euclid(self.grid_size) / self.cell_size;
             let cy = sig.y.rem_euclid(self.grid_size) / self.cell_size;
             let ci = (cy * self.cells_per_axis + cx) as usize;
-            self.cells[ci].push(i as u16);
+            self.buf[self.offsets[ci].0 as usize] = i as u16;
+            self.offsets[ci].0 += 1;
+        }
+        // Restore start offsets (each was advanced by len)
+        for ci in 0..total_cells {
+            self.offsets[ci].0 -= u32::from(self.offsets[ci].1);
         }
     }
 
@@ -70,7 +103,9 @@ impl SignalGrid {
                 let ncx = (cx + dx).rem_euclid(cpa);
                 let ncy = (cy + dy).rem_euclid(cpa);
                 let ci = (ncy * cpa + ncx) as usize;
-                self.cells[ci].iter().copied()
+                let (start, len) = self.offsets[ci];
+                let s = start as usize;
+                self.buf[s..s + len as usize].iter().copied()
             })
         })
     }
