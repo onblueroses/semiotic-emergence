@@ -603,14 +603,7 @@ impl World {
         }
 
         // Incoming signals (strength + direction per symbol)
-        let sig = signal::receive_detailed_grid(
-            &self.signals,
-            &self.signal_grid,
-            p.x,
-            p.y,
-            gs,
-            self.signal_range,
-        );
+        let sig = signal::receive_detailed_grid(&self.signal_grid, p.x, p.y, gs, self.signal_range);
         for (s, rs) in sig.iter().enumerate() {
             let base = SIGNAL_INPUT_START + s * 3;
             inp[base] = rs.strength;
