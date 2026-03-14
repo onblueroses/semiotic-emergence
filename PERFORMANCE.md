@@ -6,6 +6,20 @@
 
 **Binary:** `RUSTFLAGS="-C target-cpu=znver3" cargo build --release`. Fat LTO, codegen-units=1, panic=abort.
 
+### v5 (current) - pop=1000, grid=72
+
+**Config:** 1000 prey, 72x72 grid, ~10 zones (30% coverage), 100 food, 500 ticks/gen, `--metrics-interval 10`.
+
+**Speed (6 threads, 2026-03-14, commit cd04504):** ~125 gens/min (~2.1 gen/sec). Estimated 100k gens in ~13 hours.
+
+### v4 (previous) - pop=1000, grid=72
+
+**Speed (6 threads, commit 29c5f98):** ~43 gens/min (~0.72 gen/sec). 100k gens took ~39 hours.
+
+**v5 vs v4:** 2.9x speedup from hot loop optimizations (#7 below).
+
+### v3 - pop=384, grid=56
+
 **Config:** 384 prey, 56x56 grid, 3 zones, 100 food, 500 ticks/gen, `--metrics-interval 10`.
 
 **Speed (4 threads, overnight 2026-03-13, commit 29c5f98):**
@@ -76,24 +90,52 @@ Five changes in one commit:
 
 Lower gain at higher thread counts is expected (sequential phase dominates more with more parallel workers).
 
+### 7. Hot loop optimizations (2026-03-14, cd04504)
+
+**2.9x speedup** at pop=1000 (43 -> 125 gens/min on VPS, 6 threads).
+
+| Change | Mechanism |
+|--------|-----------|
+| PreyGrid flat array | Replaced `Vec<Vec<u16>>` per-cell allocations with contiguous prefix-sum layout (same pattern as SignalGrid). Eliminates pointer chasing and per-cell heap allocations on rebuild. |
+| zone_drain sqrt skip | Compute `dist_sq` before checking zone containment. `sqrt()` only called for prey actually inside a zone (~70% of prey are outside). Saves ~700 sqrt/tick at pop=1000 with 3 zones. |
+| Kin bonus buffer reuse | Moved `Vec<bool>` allocations (2x pop_size) outside the per-agent loop. `.fill(false)` replaces re-allocation. Eliminated ~2M allocations/gen at pop=1000. |
+| Observer metric caching | Min-zone-distance extracted from parallel phase results instead of redundant O(n) loop with `nearest_zone_edge_dist` calls. |
+
+All changes preserve deterministic behavior (same seed = same results).
+
+### 8. Cache density + computation reduction (2026-03-14)
+
+Six optimizations targeting per-tick overhead:
+
+| Change | Mechanism |
+|--------|-----------|
+| Slim Prey struct | Removed Brain from Prey (~22KB -> ~120 bytes). Brains stored in separate `Vec<Brain>`. Per-prey loops now fit in L2 cache. |
+| CompactBrain dense forward | Packs only active weights contiguously (~700 vs 5491). Dense indexing gives 100% cache utilization vs ~19% for sparse genome layout. |
+| sqrt skip on non-metrics gens | `is_in_zone()` uses dist_sq comparison (no sqrt). Full `nearest_zone_edge_dist` only on metrics generations. |
+| Conditional wrap (rem_euclid elimination) | `wrap_coord()` replaces `rem_euclid()` in all ring loops, movement, and cooperative food checks. Compiles to CMOV (~2 cycles) vs division (~20-40 cycles). |
+| Spatial zone_drain | Iterates zones, queries prey_grid cells within bounding box. ~150 checks vs ~3000 (3 zones x 1000 prey). |
+| Allocation-free tournament selection | Reservoir sampling replaces `Vec<usize>` collection. Single pass, no heap allocation. |
+
+All changes preserve deterministic behavior (same seed = same results within version).
+
 ---
 
 ## Bottleneck Analysis (samply profile, 2026-03-10)
 
-500 ticks per generation, 384 prey per tick.
+Profiled at 384 prey / 56x56 grid. Relative weights shift at higher populations due to O(prey * signals) scaling in signal reception.
 
 | Component | % runtime | Location | Complexity |
 |-----------|-----------|----------|------------|
 | `receive_detailed_grid` | 41% | signal.rs:157-271 | O(prey * nearby_signals) |
-| `CellGrid::nearest` | 6.7% | world.rs:126-179 | O(ring_area), early exit |
-| `tanh` | 6.4% | brain.rs:79-132 | ~30 calls/prey/tick |
+| `CellGrid::nearest` | 6.7% | world.rs:120-173 | O(ring_area), early exit |
+| `tanh` | 6.4% | brain.rs (now fast_tanh) | ~26 calls/prey/tick |
 | Metrics | ~7% | metrics.rs | Once per metrics-interval |
 | Evolution sort | ~2% | evolution.rs | Once/gen |
 | Everything else | ~37% | world.rs step() | Metabolism, signals, food, zones, memory |
 
 ### Why receive_detailed dominates
 
-Signal reception uses `SignalGrid` spatial index for O(nearby) lookup instead of O(all). Each prey checks only signals in nearby grid cells (flat buffer with prefix-sum offsets). Still dominates because signal density is high relative to cell size. ~96 active signals per tick (4-tick persistence, configurable via `--signal-ticks`), 384 prey. Each check: 2x wrap_delta, 2x mul, add, compare, deferred sqrt (only 6 winners).
+Signal reception uses `SignalGrid` spatial index for O(nearby) lookup instead of O(all). Each prey checks only signals in nearby grid cells (flat buffer with prefix-sum offsets). Still dominates because signal density is high relative to cell size. ~96 active signals per tick (4-tick persistence, configurable via `--signal-ticks`). Each check: 2x wrap_delta (inlined), 2x mul, add, compare, deferred sqrt (only 6 winners).
 
 ### Scaling with population
 
@@ -103,27 +145,33 @@ Signal reception uses `SignalGrid` spatial index for O(nearby) lookup instead of
 
 ## Optimization Roadmap
 
+### Done
+
+1. ~~**Signal spatial grid.**~~ Implemented as `SignalGrid` with SoA layout, prefix-sum offsets, ring search with per-symbol early exit.
+2. ~~**Slim Prey struct.**~~ Brain moved to `World.brains` vec. Prey is ~120 bytes, fits in L2.
+3. ~~**CompactBrain dense forward.**~~ Packs active weights contiguously (~700 vs 5491). 100% cache utilization.
+4. ~~**sqrt skip on non-metrics gens.**~~ `is_in_zone()` uses dist_sq, no sqrt. Full distance only on metrics gens.
+5. ~~**rem_euclid -> conditional wrap.**~~ `wrap_coord()` in all ring loops, movement, food checks. CMOV vs division.
+6. ~~**Spatial zone_drain.**~~ Queries prey_grid cells within zone bounding box. ~150 checks vs ~3000.
+7. ~~**Allocation-free tournament selection.**~~ Reservoir sampling, no Vec heap allocation.
+
 ### High impact
 
-1. **Signal spatial grid.** Same CellGrid pattern, rebuilt each tick for active signals. receive_detailed checks only signals within signal_range instead of all signals. With 96 signals on a 56x56 grid, most prey would check ~5-15 instead of ~96. Expected: 3-8x on receive_detailed, 1.5-3x overall.
-
-2. **SIMD distance batch.** After spatial filtering, batch remaining candidates into SSE/AVX lanes (4-8 at once). Pure arithmetic inner loop is ideal for vectorization. Expected: 2-4x on remaining receive_detailed work.
-
-3. **Signal grid + SIMD combined.** Spatial filter to ~15 candidates, SIMD batch the survivors. Expected: 5-10x on receive_detailed, 2-4x overall.
+8. **SIMD distance batch in receive_detailed_grid.** After spatial filtering, batch remaining candidates into SSE/AVX lanes (4-8 at once). Pure arithmetic inner loop is ideal for vectorization. Expected: 2-4x on remaining receive_detailed work.
 
 ### Medium impact
 
-4. **wrap_delta lookup table.** 56x56 = 3,136 entries, fits L1 cache. Replaces modular arithmetic with table lookup.
-
-5. **Batch brain forward.** Restructure as matrix multiply across all prey. Enables BLAS-style optimization. Requires genome layout changes for row-major access.
+9. **Batch brain forward.** Restructure as matrix multiply across all prey. Enables BLAS-style optimization. Requires genome layout changes for row-major access.
 
 ### Not worth it
 
-6. **I/O decoupling.** CSV writes happen once per generation. Not the bottleneck.
+10. **I/O decoupling.** CSV writes happen once per generation. Not the bottleneck.
 
-7. **GPU offload.** Branch-heavy step() maps poorly to GPU. Brain forward at 384x12 neurons is too small to amortize transfer overhead.
+11. **GPU offload.** Branch-heavy step() maps poorly to GPU. Brain forward at 1000x12 neurons is too small to amortize transfer overhead.
 
-8. **target-cpu=native on laptop.** Tested on i7-12650H (AVX2). No measurable difference - LLVM auto-vectorizes with SSE2, hot loops are branch-heavy not SIMD-friendly. (VPS znver3 targeting does help via Zen 3 specific scheduling.)
+12. **target-cpu=native on laptop.** Tested on i7-12650H (AVX2). No measurable difference - LLVM auto-vectorizes with SSE2, hot loops are branch-heavy not SIMD-friendly. (VPS znver3 targeting does help via Zen 3 specific scheduling.)
+
+13. **wrap_delta lookup table.** With conditional wrap replacing `rem_euclid`, the LUT approach is unnecessary. The branch predictor handles the conditional well.
 
 ---
 
@@ -134,3 +182,5 @@ Signal reception uses `SignalGrid` spatial index for O(nearby) lookup instead of
 **I/O overhead.** PowerShell `Tee-Object` piping costs ~2.6x (535 gens/min measured vs 1,392 benchmark on i7-12650H). VPS runs write directly to file, avoiding this.
 
 **Laptop vs VPS.** i7-12650H (6P+4E cores) measures higher gens/min than Hetzner shared vCPUs at the same thread count due to higher per-core frequency. VPS numbers are the authoritative baseline for long runs.
+
+**Determinism.** All optimizations preserve deterministic behavior. Same seed produces identical results regardless of optimization level. This is verified by regression tests.

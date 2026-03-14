@@ -78,24 +78,37 @@ fn local_tournament_select(
     rng: &mut impl Rng,
 ) -> Option<usize> {
     let radius_sq = radius * radius;
-    let nearby: Vec<usize> = scored
-        .iter()
-        .enumerate()
-        .filter(|(_, &(pop_idx, _))| {
-            let agent = &population[pop_idx];
-            wrap_dist_sq(agent.x, agent.y, center_x, center_y, grid_size) <= radius_sq
-        })
-        .map(|(i, _)| i)
-        .collect();
 
-    if nearby.len() < 2 {
+    // Reservoir sampling: select `tournament_size` random items from nearby agents
+    // in a single pass with no allocation. Fixed RNG consumption count = scored.len().
+    let mut reservoir = [0usize; 8]; // tournament_size is always 3, but allow up to 8
+    let ts = tournament_size.min(reservoir.len());
+    let mut nearby_count = 0usize;
+
+    for (i, &(pop_idx, _)) in scored.iter().enumerate() {
+        let agent = &population[pop_idx];
+        if wrap_dist_sq(agent.x, agent.y, center_x, center_y, grid_size) > radius_sq {
+            continue;
+        }
+        if nearby_count < ts {
+            reservoir[nearby_count] = i;
+        } else {
+            let j = rng.gen_range(0..=nearby_count);
+            if j < ts {
+                reservoir[j] = i;
+            }
+        }
+        nearby_count += 1;
+    }
+
+    if nearby_count < 2 {
         return None;
     }
 
-    let mut best_idx = nearby[rng.gen_range(0..nearby.len())];
+    let used = ts.min(nearby_count);
+    let mut best_idx = reservoir[0];
     let mut best_fit = scored[best_idx].1;
-    for _ in 1..tournament_size {
-        let idx = nearby[rng.gen_range(0..nearby.len())];
+    for &idx in &reservoir[1..used] {
         if scored[idx].1 > best_fit {
             best_idx = idx;
             best_fit = scored[idx].1;
