@@ -2,7 +2,7 @@ use rand::seq::SliceRandom;
 use rand::Rng;
 use rayon::prelude::*;
 
-use crate::brain::{Brain, ForwardResult, INPUTS, MEMORY_SIZE};
+use crate::brain::{Brain, CompactBrain, ForwardResult, INPUTS, MEMORY_SIZE};
 use crate::evolution::Agent;
 use crate::signal::{self, Signal, SignalGrid, NUM_SYMBOLS};
 
@@ -68,6 +68,20 @@ pub(crate) fn wrap_dist_sq(ax: i32, ay: i32, bx: i32, by: i32, grid_size: i32) -
     let dx = wrap_delta(ax, bx, grid_size) as f32;
     let dy = wrap_delta(ay, by, grid_size) as f32;
     dx * dx + dy * dy
+}
+
+/// Conditional wrap: replaces `rem_euclid` for coordinates offset by small deltas.
+/// Compiles to CMOV (~2 cycles) vs `rem_euclid`'s division (~20-40 cycles).
+#[allow(clippy::inline_always)]
+#[inline(always)]
+pub(crate) fn wrap_coord(v: i32, size: i32) -> i32 {
+    if v < 0 {
+        v + size
+    } else if v >= size {
+        v - size
+    } else {
+        v
+    }
 }
 
 /// Wrap-aware signed delta for f32 coordinates on a toroidal grid.
@@ -149,8 +163,8 @@ impl CellGrid {
                         if dx.abs().max(dy.abs()) != r {
                             continue;
                         }
-                        let cx = (x + dx).rem_euclid(gs);
-                        let cy = (y + dy).rem_euclid(gs);
+                        let cx = wrap_coord(x + dx, gs);
+                        let cy = wrap_coord(y + dy, gs);
                         let ci = self.cell_idx(cx, cy);
                         for &idx in &self.cells[ci] {
                             if idx == skip_idx {
@@ -264,8 +278,8 @@ impl PreyGrid {
                         if dx.abs().max(dy.abs()) != r {
                             continue;
                         }
-                        let cx = (x + dx).rem_euclid(gs);
-                        let cy = (y + dy).rem_euclid(gs);
+                        let cx = wrap_coord(x + dx, gs);
+                        let cy = wrap_coord(y + dy, gs);
                         let ci = self.cell_idx(cx, cy);
                         for &idx in self.cell_data(ci) {
                             if idx == skip_idx {
@@ -294,7 +308,6 @@ pub struct Prey {
     pub y: i32,
     pub energy: f32,
     pub alive: bool,
-    pub brain: Brain,
     pub ticks_alive: u32,
     pub food_eaten: u32,
     pub memory: [f32; MEMORY_SIZE],
@@ -338,6 +351,8 @@ pub struct SignalEvent {
 
 pub struct World {
     pub prey: Vec<Prey>,
+    pub brains: Vec<Brain>,
+    compact_brains: Vec<CompactBrain>,
     pub zones: Vec<KillZone>,
     pub food: Vec<Food>,
     pub signals: Vec<Signal>,
@@ -405,6 +420,9 @@ impl World {
         zone_drain_rate: f32,
         signal_ticks: u32,
     ) -> Self {
+        let brains: Vec<Brain> = agents.iter().map(|a| a.brain.clone()).collect();
+        let compact_brains: Vec<CompactBrain> =
+            brains.iter().map(CompactBrain::from_brain).collect();
         let prey: Vec<Prey> = agents
             .iter()
             .map(|agent| Prey {
@@ -412,7 +430,6 @@ impl World {
                 y: agent.y,
                 energy: 1.0,
                 alive: true,
-                brain: agent.brain.clone(),
                 ticks_alive: 0,
                 food_eaten: 0,
                 memory: std::array::from_fn(|_| rng.gen_range(-0.1..0.1)),
@@ -451,6 +468,8 @@ impl World {
         let prey_count = prey.len();
         Self {
             prey,
+            brains,
+            compact_brains,
             zones,
             food,
             signals: Vec::new(),
@@ -505,6 +524,19 @@ impl World {
         best
     }
 
+    /// Fast in-zone check using squared distances (no sqrt).
+    fn is_in_zone(&self, x: i32, y: i32) -> bool {
+        let gs = self.grid_size as f32;
+        for zone in &self.zones {
+            let dx = wrap_delta_f32(x as f32, zone.x, gs);
+            let dy = wrap_delta_f32(y as f32, zone.y, gs);
+            if dx * dx + dy * dy <= zone.radius * zone.radius {
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn any_alive(&self) -> bool {
         self.prey.iter().any(|p| p.alive)
     }
@@ -546,8 +578,7 @@ impl World {
             if !self.prey[i].alive {
                 continue;
             }
-            let total_hidden =
-                self.prey[i].brain.base_hidden_size + self.prey[i].brain.signal_hidden_size;
+            let total_hidden = self.brains[i].base_hidden_size + self.brains[i].signal_hidden_size;
             let drain = self.base_drain + total_hidden as f32 * self.neuron_cost;
             self.prey[i].energy -= drain;
             if self.prey[i].energy <= 0.0 {
@@ -564,9 +595,18 @@ impl World {
         alive
             .par_iter()
             .map(|&i| {
-                let zone_dist = self.nearest_zone_edge_dist(self.prey[i].x, self.prey[i].y);
+                let zone_dist = if self.collect_metrics {
+                    self.nearest_zone_edge_dist(self.prey[i].x, self.prey[i].y)
+                } else {
+                    // Non-metrics gens: only need in_zone bool, skip sqrt
+                    if self.is_in_zone(self.prey[i].x, self.prey[i].y) {
+                        -1.0
+                    } else {
+                        1.0
+                    }
+                };
                 let inputs = self.build_inputs_fast(i);
-                let result = self.prey[i].brain.forward(&inputs);
+                let result = self.compact_brains[i].forward(&inputs);
                 // Action argmax (moved from sequential phase)
                 let mut action = 0;
                 let mut best_val = result.actions[0];
@@ -743,10 +783,10 @@ impl World {
         zone_dist: f32,
     ) {
         match action {
-            0 => self.prey[prey_idx].y = (self.prey[prey_idx].y - 1).rem_euclid(self.grid_size),
-            1 => self.prey[prey_idx].y = (self.prey[prey_idx].y + 1).rem_euclid(self.grid_size),
-            2 => self.prey[prey_idx].x = (self.prey[prey_idx].x + 1).rem_euclid(self.grid_size),
-            3 => self.prey[prey_idx].x = (self.prey[prey_idx].x - 1).rem_euclid(self.grid_size),
+            0 => self.prey[prey_idx].y = wrap_coord(self.prey[prey_idx].y - 1, self.grid_size),
+            1 => self.prey[prey_idx].y = wrap_coord(self.prey[prey_idx].y + 1, self.grid_size),
+            2 => self.prey[prey_idx].x = wrap_coord(self.prey[prey_idx].x + 1, self.grid_size),
+            3 => self.prey[prey_idx].x = wrap_coord(self.prey[prey_idx].x - 1, self.grid_size),
             4 => {
                 let px = self.prey[prey_idx].x;
                 let py = self.prey[prey_idx].y;
@@ -756,8 +796,8 @@ impl World {
                         let mut has_partner = false;
                         'search: for dy in -2..=2_i32 {
                             for dx in -2..=2_i32 {
-                                let cx = (px + dx).rem_euclid(self.grid_size);
-                                let cy = (py + dy).rem_euclid(self.grid_size);
+                                let cx = wrap_coord(px + dx, self.grid_size);
+                                let cy = wrap_coord(py + dy, self.grid_size);
                                 let ci = self.prey_grid.cell_idx(cx, cy);
                                 for &idx in self.prey_grid.cell_data(ci) {
                                     if idx as usize != prey_idx {
@@ -844,22 +884,43 @@ impl World {
     /// Zone damage is separate from energy - food cannot offset it. Death at `zone_damage` >= 1.0.
     /// Dying prey emit only their brain's last chosen signal (via `apply_outputs` before this runs).
     fn zone_drain(&mut self) {
-        let gs = self.grid_size as f32;
+        let gs = self.grid_size;
+        let gsf = gs as f32;
+        let drain_rate = self.zone_drain_rate;
 
-        for p in &mut self.prey {
-            if !p.alive {
-                continue;
-            }
-            for zone in &self.zones {
-                let dx = wrap_delta_f32(p.x as f32, zone.x, gs);
-                let dy = wrap_delta_f32(p.y as f32, zone.y, gs);
-                let dist_sq = dx * dx + dy * dy;
-                if dist_sq <= zone.radius * zone.radius {
-                    let gradient = 1.0 - dist_sq.sqrt() / zone.radius;
-                    p.zone_damage += self.zone_drain_rate * gradient;
+        for zone in &self.zones {
+            let r_ceil = zone.radius.ceil() as i32;
+            let r_sq = zone.radius * zone.radius;
+            let zx = zone.x.round() as i32;
+            let zy = zone.y.round() as i32;
+            for dy in -r_ceil..=r_ceil {
+                for dx in -r_ceil..=r_ceil {
+                    let cx = wrap_coord(zx + dx, gs);
+                    let cy = wrap_coord(zy + dy, gs);
+                    let ci = (cy * gs + cx) as usize;
+                    let (start, len) = self.prey_grid.offsets[ci];
+                    let s = start as usize;
+                    let end = s + len as usize;
+                    for k in s..end {
+                        let pidx = self.prey_grid.data[k] as usize;
+                        let p = &self.prey[pidx];
+                        if !p.alive {
+                            continue;
+                        }
+                        let ddx = wrap_delta_f32(p.x as f32, zone.x, gsf);
+                        let ddy = wrap_delta_f32(p.y as f32, zone.y, gsf);
+                        let dist_sq = ddx * ddx + ddy * ddy;
+                        if dist_sq <= r_sq {
+                            let gradient = 1.0 - dist_sq.sqrt() / zone.radius;
+                            self.prey[pidx].zone_damage += drain_rate * gradient;
+                        }
+                    }
                 }
             }
-            if p.zone_damage >= 1.0 {
+        }
+
+        for p in &mut self.prey {
+            if p.alive && p.zone_damage >= 1.0 {
                 p.alive = false;
                 self.zone_deaths += 1;
             }
@@ -883,8 +944,8 @@ impl World {
                         if dx.abs().max(dy.abs()) != r {
                             continue; // Only the new ring
                         }
-                        let cx = (x + dx).rem_euclid(self.grid_size);
-                        let cy = (y + dy).rem_euclid(self.grid_size);
+                        let cx = wrap_coord(x + dx, self.grid_size);
+                        let cy = wrap_coord(y + dy, self.grid_size);
                         let ci = self.food_grid.cell_idx(cx, cy);
                         for &idx in &self.food_grid.cells[ci] {
                             let f = &self.food[idx as usize];
@@ -934,7 +995,6 @@ mod tests {
             y,
             energy: 1.0,
             alive: true,
-            brain: Brain::zero(),
             ticks_alive: 0,
             food_eaten: 0,
             memory: [0.0; MEMORY_SIZE],
@@ -953,8 +1013,13 @@ mod tests {
             .map(|&(x, y)| test_prey(x, y))
             .collect();
         let prey_count = prey.len();
-        World {
+        let brains: Vec<Brain> = (0..prey_count).map(|_| Brain::zero()).collect();
+        let compact_brains: Vec<CompactBrain> =
+            brains.iter().map(CompactBrain::from_brain).collect();
+        let mut w = World {
             prey,
+            brains,
+            compact_brains,
             zones: vec![KillZone {
                 x: zone_center.0,
                 y: zone_center.1,
@@ -991,7 +1056,9 @@ mod tests {
             zone_drain_rate: TEST_ZONE_DRAIN_RATE,
             signal_ticks: 4,
             zone_deaths: 0,
-        }
+        };
+        w.rebuild_prey_grid();
+        w
     }
 
     // --- Toroidal wrapping ---
@@ -1556,10 +1623,10 @@ mod tests {
             y: 10,
             is_patch: false,
         });
-        world.prey[0].brain.base_hidden_size = DEFAULT_BASE_HIDDEN;
-        world.prey[0].brain.signal_hidden_size = crate::brain::DEFAULT_SIGNAL_HIDDEN;
-        world.prey[1].brain.base_hidden_size = crate::brain::MAX_BASE_HIDDEN;
-        world.prey[1].brain.signal_hidden_size = crate::brain::MAX_SIGNAL_HIDDEN;
+        world.brains[0].base_hidden_size = DEFAULT_BASE_HIDDEN;
+        world.brains[0].signal_hidden_size = crate::brain::DEFAULT_SIGNAL_HIDDEN;
+        world.brains[1].base_hidden_size = crate::brain::MAX_BASE_HIDDEN;
+        world.brains[1].signal_hidden_size = crate::brain::MAX_SIGNAL_HIDDEN;
 
         let mut rng = ChaCha8Rng::seed_from_u64(0);
         world.step(&mut rng);
@@ -1582,10 +1649,10 @@ mod tests {
             y: 10,
             is_patch: false,
         });
-        world.prey[0].brain.base_hidden_size = DEFAULT_BASE_HIDDEN;
-        world.prey[0].brain.signal_hidden_size = crate::brain::DEFAULT_SIGNAL_HIDDEN;
-        world.prey[1].brain.base_hidden_size = crate::brain::MIN_BASE_HIDDEN;
-        world.prey[1].brain.signal_hidden_size = crate::brain::MIN_SIGNAL_HIDDEN;
+        world.brains[0].base_hidden_size = DEFAULT_BASE_HIDDEN;
+        world.brains[0].signal_hidden_size = crate::brain::DEFAULT_SIGNAL_HIDDEN;
+        world.brains[1].base_hidden_size = crate::brain::MIN_BASE_HIDDEN;
+        world.brains[1].signal_hidden_size = crate::brain::MIN_SIGNAL_HIDDEN;
 
         let mut rng = ChaCha8Rng::seed_from_u64(0);
         world.step(&mut rng);
@@ -1730,6 +1797,22 @@ mod tests {
                 m.abs() <= 0.1,
                 "Memory init should be in [-0.1, 0.1], got {m}"
             );
+        }
+    }
+
+    #[test]
+    fn is_in_zone_matches_nearest_zone_edge_dist() {
+        let world = minimal_world(&[(5, 5), (15, 15), (10, 10)], (10.0, 10.0));
+        for y in 0..TEST_GRID {
+            for x in 0..TEST_GRID {
+                let dist = world.nearest_zone_edge_dist(x, y);
+                let fast = world.is_in_zone(x, y);
+                assert_eq!(
+                    dist <= 0.0,
+                    fast,
+                    "Mismatch at ({x},{y}): dist={dist}, is_in_zone={fast}"
+                );
+            }
         }
     }
 }

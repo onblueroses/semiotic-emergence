@@ -86,7 +86,7 @@ impl Brain {
     /// Split forward pass: inputs -> base hidden (tanh) -> {movement (raw), signal hidden (tanh) -> signal (raw), memory (tanh)}.
     /// Loop order is flipped vs naive (outer=source, inner=dest) so weight access is
     /// contiguous in memory, enabling LLVM auto-vectorization (AVX2 on x86).
-    #[allow(clippy::needless_range_loop)]
+    #[allow(clippy::needless_range_loop, dead_code)]
     pub fn forward(&self, inputs: &[f32; INPUTS]) -> ForwardResult {
         let w = &self.weights;
         let bh = self.base_hidden_size;
@@ -150,6 +150,189 @@ impl Brain {
             let w_start = SEG_BASE_MEM + h * MEMORY_OUTPUTS;
             for o in 0..MEMORY_OUTPUTS {
                 memory_write[o] += hidden_val * w[w_start + o];
+            }
+        }
+        for o in 0..MEMORY_OUTPUTS {
+            memory_write[o] = fast_tanh(memory_write[o]);
+        }
+
+        ForwardResult {
+            actions,
+            signals,
+            memory_write,
+        }
+    }
+}
+
+/// Dense weight packing for forward pass. Only active weights (determined by
+/// `base_hidden_size` and `signal_hidden_size`) are stored contiguously.
+/// Built once per generation from Brain; Brain retains full genome for evolution.
+pub struct CompactBrain {
+    /// All active weights packed contiguously.
+    // Layout: base_bias(bh), input_base(INPUTS*bh), base_move(bh*5), move_bias(5),
+    //  base_sighid(bh*sh), sighid_bias(sh), sighid_sigout(sh*6), sigout_bias(6),
+    //  base_mem(bh*8), mem_bias(8)
+    w: Vec<f32>,
+    bh: usize,
+    sh: usize,
+    // Offsets into w for each segment
+    o_base_bias: usize,
+    o_input_base: usize,
+    o_base_move: usize,
+    o_move_bias: usize,
+    o_base_sighid: usize,
+    o_sighid_bias: usize,
+    o_sighid_sigout: usize,
+    o_sigout_bias: usize,
+    o_base_mem: usize,
+    o_mem_bias: usize,
+}
+
+impl CompactBrain {
+    pub fn from_brain(brain: &Brain) -> Self {
+        let bh = brain.base_hidden_size;
+        let sh = brain.signal_hidden_size;
+        let total = bh
+            + INPUTS * bh
+            + bh * MOVEMENT_OUTPUTS
+            + MOVEMENT_OUTPUTS
+            + bh * sh
+            + sh
+            + sh * SIGNAL_OUTPUTS
+            + SIGNAL_OUTPUTS
+            + bh * MEMORY_OUTPUTS
+            + MEMORY_OUTPUTS;
+        let mut w = Vec::with_capacity(total);
+        let g = &brain.weights;
+
+        // base_bias
+        let o_base_bias = 0;
+        w.extend_from_slice(&g[SEG_BASE_BIAS..SEG_BASE_BIAS + bh]);
+        // input_base: pack rows of bh from rows of MAX_BASE_HIDDEN
+        let o_input_base = w.len();
+        for i in 0..INPUTS {
+            let src = SEG_INPUT_BASE + i * MAX_BASE_HIDDEN;
+            w.extend_from_slice(&g[src..src + bh]);
+        }
+        // base_move: pack rows of MOVEMENT_OUTPUTS from rows strided by MOVEMENT_OUTPUTS (already dense per row)
+        let o_base_move = w.len();
+        for h in 0..bh {
+            let src = SEG_BASE_MOVE + h * MOVEMENT_OUTPUTS;
+            w.extend_from_slice(&g[src..src + MOVEMENT_OUTPUTS]);
+        }
+        // move_bias
+        let o_move_bias = w.len();
+        w.extend_from_slice(&g[SEG_MOVE_BIAS..SEG_MOVE_BIAS + MOVEMENT_OUTPUTS]);
+        // base_sighid: rows of sh from rows of MAX_SIGNAL_HIDDEN
+        let o_base_sighid = w.len();
+        for b in 0..bh {
+            let src = SEG_BASE_SIGHID + b * MAX_SIGNAL_HIDDEN;
+            w.extend_from_slice(&g[src..src + sh]);
+        }
+        // sighid_bias
+        let o_sighid_bias = w.len();
+        w.extend_from_slice(&g[SEG_SIGHID_BIAS..SEG_SIGHID_BIAS + sh]);
+        // sighid_sigout: rows of SIGNAL_OUTPUTS from rows strided by SIGNAL_OUTPUTS (dense)
+        let o_sighid_sigout = w.len();
+        for h in 0..sh {
+            let src = SEG_SIGHID_SIGOUT + h * SIGNAL_OUTPUTS;
+            w.extend_from_slice(&g[src..src + SIGNAL_OUTPUTS]);
+        }
+        // sigout_bias
+        let o_sigout_bias = w.len();
+        w.extend_from_slice(&g[SEG_SIGOUT_BIAS..SEG_SIGOUT_BIAS + SIGNAL_OUTPUTS]);
+        // base_mem: rows of MEMORY_OUTPUTS from rows strided by MEMORY_OUTPUTS (dense)
+        let o_base_mem = w.len();
+        for h in 0..bh {
+            let src = SEG_BASE_MEM + h * MEMORY_OUTPUTS;
+            w.extend_from_slice(&g[src..src + MEMORY_OUTPUTS]);
+        }
+        // mem_bias
+        let o_mem_bias = w.len();
+        w.extend_from_slice(&g[SEG_MEM_BIAS..SEG_MEM_BIAS + MEMORY_OUTPUTS]);
+
+        debug_assert_eq!(w.len(), total);
+        Self {
+            w,
+            bh,
+            sh,
+            o_base_bias,
+            o_input_base,
+            o_base_move,
+            o_move_bias,
+            o_base_sighid,
+            o_sighid_bias,
+            o_sighid_sigout,
+            o_sigout_bias,
+            o_base_mem,
+            o_mem_bias,
+        }
+    }
+
+    #[allow(clippy::needless_range_loop)]
+    pub fn forward(&self, inputs: &[f32; INPUTS]) -> ForwardResult {
+        let w = &self.w;
+        let bh = self.bh;
+        let sh = self.sh;
+
+        // 1. Input -> Base hidden (tanh)
+        let mut base_hidden = [0.0_f32; MAX_BASE_HIDDEN];
+        base_hidden[..bh].copy_from_slice(&w[self.o_base_bias..self.o_base_bias + bh]);
+        for i in 0..INPUTS {
+            let inp_val = inputs[i];
+            let row = self.o_input_base + i * bh;
+            for h in 0..bh {
+                base_hidden[h] += inp_val * w[row + h];
+            }
+        }
+        for h in 0..bh {
+            base_hidden[h] = fast_tanh(base_hidden[h]);
+        }
+
+        // 2. Base hidden -> Movement outputs (raw)
+        let mut actions = [0.0_f32; MOVEMENT_OUTPUTS];
+        actions.copy_from_slice(&w[self.o_move_bias..self.o_move_bias + MOVEMENT_OUTPUTS]);
+        for h in 0..bh {
+            let hidden_val = base_hidden[h];
+            let row = self.o_base_move + h * MOVEMENT_OUTPUTS;
+            for o in 0..MOVEMENT_OUTPUTS {
+                actions[o] += hidden_val * w[row + o];
+            }
+        }
+
+        // 3. Base hidden -> Signal hidden (tanh)
+        let mut sig_hidden = [0.0_f32; MAX_SIGNAL_HIDDEN];
+        sig_hidden[..sh].copy_from_slice(&w[self.o_sighid_bias..self.o_sighid_bias + sh]);
+        for b in 0..bh {
+            let hidden_val = base_hidden[b];
+            let row = self.o_base_sighid + b * sh;
+            for h in 0..sh {
+                sig_hidden[h] += hidden_val * w[row + h];
+            }
+        }
+        for h in 0..sh {
+            sig_hidden[h] = fast_tanh(sig_hidden[h]);
+        }
+
+        // 4. Signal hidden -> Signal outputs (raw)
+        let mut signals = [0.0_f32; SIGNAL_OUTPUTS];
+        signals.copy_from_slice(&w[self.o_sigout_bias..self.o_sigout_bias + SIGNAL_OUTPUTS]);
+        for h in 0..sh {
+            let hidden_val = sig_hidden[h];
+            let row = self.o_sighid_sigout + h * SIGNAL_OUTPUTS;
+            for o in 0..SIGNAL_OUTPUTS {
+                signals[o] += hidden_val * w[row + o];
+            }
+        }
+
+        // 5. Base hidden -> Memory outputs (tanh)
+        let mut memory_write = [0.0_f32; MEMORY_OUTPUTS];
+        memory_write.copy_from_slice(&w[self.o_mem_bias..self.o_mem_bias + MEMORY_OUTPUTS]);
+        for h in 0..bh {
+            let hidden_val = base_hidden[h];
+            let row = self.o_base_mem + h * MEMORY_OUTPUTS;
+            for o in 0..MEMORY_OUTPUTS {
+                memory_write[o] += hidden_val * w[row + o];
             }
         }
         for o in 0..MEMORY_OUTPUTS {
@@ -369,6 +552,39 @@ mod tests {
                 (fast_tanh(x) + fast_tanh(-x)).abs() < 1e-6,
                 "fast_tanh not odd at {x}"
             );
+        }
+    }
+
+    #[test]
+    fn compact_brain_matches_brain() {
+        let mut rng = rand::thread_rng();
+        for _ in 0..100 {
+            let mut brain = Brain::random(&mut rng);
+            brain.base_hidden_size = rng.gen_range(MIN_BASE_HIDDEN..=MAX_BASE_HIDDEN);
+            brain.signal_hidden_size = rng.gen_range(MIN_SIGNAL_HIDDEN..=MAX_SIGNAL_HIDDEN);
+            let inputs: [f32; INPUTS] = std::array::from_fn(|_| rng.gen_range(-1.0..1.0));
+            let expected = brain.forward(&inputs);
+            let compact = CompactBrain::from_brain(&brain);
+            let actual = compact.forward(&inputs);
+            for (i, (&e, &a)) in expected.actions.iter().zip(&actual.actions).enumerate() {
+                assert!(
+                    (e - a).abs() < 1e-5,
+                    "action[{i}] mismatch: {e} vs {a} (bh={}, sh={})",
+                    brain.base_hidden_size,
+                    brain.signal_hidden_size
+                );
+            }
+            for (i, (&e, &a)) in expected.signals.iter().zip(&actual.signals).enumerate() {
+                assert!((e - a).abs() < 1e-5, "signal[{i}] mismatch: {e} vs {a}");
+            }
+            for (i, (&e, &a)) in expected
+                .memory_write
+                .iter()
+                .zip(&actual.memory_write)
+                .enumerate()
+            {
+                assert!((e - a).abs() < 1e-5, "memory[{i}] mismatch: {e} vs {a}");
+            }
         }
     }
 }

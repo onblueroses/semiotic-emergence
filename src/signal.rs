@@ -1,4 +1,5 @@
 use crate::brain::{softmax, SIGNAL_OUTPUTS};
+use crate::world::wrap_coord;
 #[cfg(test)]
 use crate::world::wrap_delta;
 
@@ -200,8 +201,8 @@ pub fn receive_detailed_grid(
                 if ring > 0 && dcx.abs().max(dcy.abs()) != ring {
                     continue;
                 }
-                let ncx = (cx + dcx).rem_euclid(cpa) as usize;
-                let ncy = (cy + dcy).rem_euclid(cpa) as usize;
+                let ncx = wrap_coord(cx + dcx, cpa) as usize;
+                let ncy = wrap_coord(cy + dcy, cpa) as usize;
                 let ci = ncy * cpa as usize + ncx;
                 let (start, len) = grid.offsets[ci];
                 let s = start as usize;
