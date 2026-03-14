@@ -84,7 +84,7 @@ Lower gain at higher thread counts is expected (sequential phase dominates more 
 
 | Component | % runtime | Location | Complexity |
 |-----------|-----------|----------|------------|
-| `receive_detailed_grid` | 41% | signal.rs:122-175 | O(prey * nearby_signals) |
+| `receive_detailed_grid` | 41% | signal.rs:157-271 | O(prey * nearby_signals) |
 | `CellGrid::nearest` | 6.7% | world.rs:126-179 | O(ring_area), early exit |
 | `tanh` | 6.4% | brain.rs:79-132 | ~30 calls/prey/tick |
 | Metrics | ~7% | metrics.rs | Once per metrics-interval |
