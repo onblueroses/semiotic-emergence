@@ -307,7 +307,7 @@ fn evaluate_generation(
     let fitness: Vec<f32> = world
         .prey
         .iter()
-        .map(|p| p.ticks_alive as f32 + p.food_eaten as f32 * 10.0)
+        .map(|p| p.ticks_alive as f32 * (1.0 + p.food_eaten as f32 * 0.1))
         .collect();
 
     let signal_rate_per_prey: Vec<f32> = {
@@ -612,6 +612,13 @@ fn run_seed(
 
         let mut scored: Vec<(usize, f32)> =
             fitness.iter().enumerate().map(|(i, &f)| (i, f)).collect();
+
+        // Rank-based selection: replace raw fitness with rank (1..N).
+        // Eliminates fitness ceiling when many agents survive max ticks.
+        scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        for (rank, entry) in scored.iter_mut().enumerate() {
+            entry.1 = rank as f32;
+        }
 
         if is_metrics_gen {
             // Use original fitness (without kin bonus) for metrics to avoid confounding
