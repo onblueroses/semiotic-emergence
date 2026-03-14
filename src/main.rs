@@ -574,10 +574,11 @@ fn run_seed(
                     }
                 }
             }
+            let mut seen_sibling = vec![false; population.len()];
+            let mut seen_cousin = vec![false; population.len()];
             for i in 0..population.len() {
                 let mut kin_sum = 0.0_f32;
-                // Track siblings to avoid double-counting as cousins
-                let mut seen_sibling = vec![false; population.len()];
+                seen_sibling.fill(false);
                 // Siblings: agents sharing a parent (r=0.5)
                 for &p in &population[i].parent_indices {
                     if let Some(p) = p {
@@ -592,7 +593,7 @@ fn run_seed(
                     }
                 }
                 // Cousins: agents sharing a grandparent but not already siblings (r=0.25)
-                let mut seen_cousin = vec![false; population.len()];
+                seen_cousin.fill(false);
                 for &g in &population[i].grandparent_indices {
                     if let Some(g) = g {
                         if let Some(cousins) = grandparent_to_agents.get(&g) {

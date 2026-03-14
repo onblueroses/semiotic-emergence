@@ -97,12 +97,6 @@ impl CellGrid {
         }
     }
 
-    fn clear(&mut self) {
-        for cell in &mut self.cells {
-            cell.clear();
-        }
-    }
-
     fn cell_idx(&self, x: i32, y: i32) -> usize {
         (y * self.grid_size + x) as usize
     }
@@ -159,6 +153,121 @@ impl CellGrid {
                         let cy = (y + dy).rem_euclid(gs);
                         let ci = self.cell_idx(cx, cy);
                         for &idx in &self.cells[ci] {
+                            if idx == skip_idx {
+                                continue;
+                            }
+                            let edx = wrap_delta(x, cx, gs) as f32;
+                            let edy = wrap_delta(y, cy, gs) as f32;
+                            let d_sq = edx * edx + edy * edy;
+                            match best {
+                                None => best = Some((idx, d_sq)),
+                                Some((_, bd)) if d_sq < bd => best = Some((idx, d_sq)),
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        best
+    }
+}
+
+/// Flat spatial index for prey, rebuilt each tick via prefix-sum.
+/// Contiguous data array eliminates per-cell heap allocations and pointer chasing.
+struct PreyGrid {
+    data: Vec<u16>,
+    /// Per-cell (start, len) into the data array.
+    offsets: Vec<(u32, u16)>,
+    grid_size: i32,
+}
+
+impl PreyGrid {
+    fn new(grid_size: i32) -> Self {
+        let n = (grid_size * grid_size) as usize;
+        Self {
+            data: Vec::new(),
+            offsets: vec![(0, 0); n],
+            grid_size,
+        }
+    }
+
+    fn rebuild(&mut self, prey: &[Prey]) {
+        let total_cells = self.offsets.len();
+        for o in &mut self.offsets {
+            *o = (0, 0);
+        }
+        let mut count = 0u32;
+        for p in prey {
+            if p.alive {
+                let ci = (p.y * self.grid_size + p.x) as usize;
+                self.offsets[ci].1 += 1;
+                count += 1;
+            }
+        }
+        let n = count as usize;
+        self.data.clear();
+        self.data.resize(n, 0);
+        let mut running = 0u32;
+        for o in &mut self.offsets {
+            o.0 = running;
+            running += u32::from(o.1);
+        }
+        for (i, p) in prey.iter().enumerate() {
+            if p.alive {
+                let ci = (p.y * self.grid_size + p.x) as usize;
+                let pos = self.offsets[ci].0 as usize;
+                self.data[pos] = i as u16;
+                self.offsets[ci].0 += 1;
+            }
+        }
+        for ci in 0..total_cells {
+            self.offsets[ci].0 -= u32::from(self.offsets[ci].1);
+        }
+    }
+
+    fn cell_idx(&self, x: i32, y: i32) -> usize {
+        (y * self.grid_size + x) as usize
+    }
+
+    fn cell_data(&self, ci: usize) -> &[u16] {
+        let (start, len) = self.offsets[ci];
+        &self.data[start as usize..(start as usize + len as usize)]
+    }
+
+    #[allow(clippy::similar_names)]
+    fn nearest(&self, x: i32, y: i32, max_radius: i32, skip_idx: u16) -> Option<(u16, f32)> {
+        let gs = self.grid_size;
+        let mut best: Option<(u16, f32)> = None;
+
+        for r in 0..=max_radius {
+            if best.is_some() && r > 0 {
+                let min_possible = (r * r) as f32;
+                if let Some((_, bd)) = best {
+                    if min_possible >= bd {
+                        break;
+                    }
+                }
+            }
+
+            if r == 0 {
+                let ci = self.cell_idx(x, y);
+                for &idx in self.cell_data(ci) {
+                    if idx == skip_idx {
+                        continue;
+                    }
+                    return Some((idx, 0.0));
+                }
+            } else {
+                for dy in -r..=r {
+                    for dx in -r..=r {
+                        if dx.abs().max(dy.abs()) != r {
+                            continue;
+                        }
+                        let cx = (x + dx).rem_euclid(gs);
+                        let cy = (y + dy).rem_euclid(gs);
+                        let ci = self.cell_idx(cx, cy);
+                        for &idx in self.cell_data(ci) {
                             if idx == skip_idx {
                                 continue;
                             }
@@ -255,7 +364,7 @@ pub struct World {
     /// Count of prey that died from zone damage this evaluation.
     pub zone_deaths: u32,
     // Spatial indices (rebuilt each tick for prey/signals, maintained incrementally for food)
-    prey_grid: CellGrid,
+    prey_grid: PreyGrid,
     food_grid: CellGrid,
     signal_grid: SignalGrid,
     // Pre-allocated per-tick buffers (reused across ticks to avoid allocation)
@@ -361,7 +470,7 @@ impl World {
             no_signals,
             collect_metrics,
             zone_deaths: 0,
-            prey_grid: CellGrid::new(grid_size),
+            prey_grid: PreyGrid::new(grid_size),
             food_grid,
             signal_grid: SignalGrid::new(grid_size, signal_range),
             shuffled_indices: (0..prey_count).collect(),
@@ -413,21 +522,6 @@ impl World {
         // Rebuild spatial grids
         self.signal_grid.rebuild(&self.signals, self.tick);
         self.rebuild_prey_grid();
-
-        // Track minimum zone-edge distance to alive prey this tick (observer metric)
-        if self.collect_metrics {
-            let mut min_zone_dist = f32::MAX;
-            for p in &self.prey {
-                if !p.alive {
-                    continue;
-                }
-                let d = self.nearest_zone_edge_dist(p.x, p.y);
-                if d < min_zone_dist {
-                    min_zone_dist = d;
-                }
-            }
-            self.min_zone_dist_per_tick.push(min_zone_dist);
-        }
 
         // Shuffle prey processing order to prevent index bias
         self.shuffled_indices.clear();
@@ -488,6 +582,15 @@ impl World {
             })
             .collect_into_vec(&mut computed);
         self.alive_scratch = alive;
+
+        // Track minimum zone-edge distance (observer metric, from parallel phase)
+        if self.collect_metrics {
+            let min_zone_dist = computed
+                .iter()
+                .map(|&(_, _, _, zone_dist, _, _)| zone_dist)
+                .fold(f32::MAX, f32::min);
+            self.min_zone_dist_per_tick.push(min_zone_dist);
+        }
 
         // Sequential apply: mutations to world state
         for &(i, ref inputs, ref result, zone_dist, action, emit) in &computed {
@@ -623,12 +726,7 @@ impl World {
     /// Rebuild prey spatial grid from current positions. Used by tests that
     /// call `move_zones()` directly without going through `step()`.
     fn rebuild_prey_grid(&mut self) {
-        self.prey_grid.clear();
-        for (i, p) in self.prey.iter().enumerate() {
-            if p.alive {
-                self.prey_grid.insert(p.x, p.y, i as u16);
-            }
-        }
+        self.prey_grid.rebuild(&self.prey);
     }
 
     #[cfg(test)]
@@ -661,7 +759,7 @@ impl World {
                                 let cx = (px + dx).rem_euclid(self.grid_size);
                                 let cy = (py + dy).rem_euclid(self.grid_size);
                                 let ci = self.prey_grid.cell_idx(cx, cy);
-                                for &idx in &self.prey_grid.cells[ci] {
+                                for &idx in self.prey_grid.cell_data(ci) {
                                     if idx as usize != prey_idx {
                                         has_partner = true;
                                         break 'search;
@@ -755,9 +853,9 @@ impl World {
             for zone in &self.zones {
                 let dx = wrap_delta_f32(p.x as f32, zone.x, gs);
                 let dy = wrap_delta_f32(p.y as f32, zone.y, gs);
-                let dist = (dx * dx + dy * dy).sqrt();
-                if dist <= zone.radius {
-                    let gradient = 1.0 - dist / zone.radius;
+                let dist_sq = dx * dx + dy * dy;
+                if dist_sq <= zone.radius * zone.radius {
+                    let gradient = 1.0 - dist_sq.sqrt() / zone.radius;
                     p.zone_damage += self.zone_drain_rate * gradient;
                 }
             }
@@ -876,7 +974,7 @@ mod tests {
             min_zone_dist_per_tick: Vec::new(),
             no_signals: true,
             collect_metrics: true,
-            prey_grid: CellGrid::new(TEST_GRID),
+            prey_grid: PreyGrid::new(TEST_GRID),
             food_grid: CellGrid::new(TEST_GRID),
             signal_grid: SignalGrid::new(TEST_GRID, TEST_SIGNAL_RANGE),
             shuffled_indices: (0..prey_count).collect(),
