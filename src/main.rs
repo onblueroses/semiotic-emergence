@@ -17,8 +17,19 @@ use evolution::Agent;
 use signal::NUM_SYMBOLS;
 use world::{World, INPUT_NAMES};
 
+use serde::{Deserialize, Serialize};
+
 const FLUCT_WINDOW: usize = 10;
 const MIN_RECEIVER_SAMPLES: u32 = 10;
+
+#[derive(Serialize, Deserialize)]
+struct Checkpoint {
+    generation: usize,
+    population: Vec<Agent>,
+    rng: ChaCha8Rng,
+    prev_norm_matrix: Option<[[f32; 4]; NUM_SYMBOLS]>,
+    traj_jsd_history: Vec<f32>,
+}
 
 struct SimParams {
     pop_size: usize,
@@ -121,6 +132,25 @@ fn parse_flag<T: std::str::FromStr>(args: &[String], flag: &str) -> Option<T> {
         .position(|a| a == flag)
         .and_then(|i| args.get(i + 1))
         .and_then(|s| s.parse().ok())
+}
+
+fn save_checkpoint(checkpoint: &Checkpoint) -> Result<(), Box<dyn std::error::Error>> {
+    let path = format!("checkpoint_gen{}.bin", checkpoint.generation);
+    let encoded = bincode::serialize(checkpoint)?;
+    println!("Checkpoint saved: {path} ({} bytes)", encoded.len());
+    std::fs::write(&path, encoded)?;
+    Ok(())
+}
+
+fn load_checkpoint(path: &str) -> Result<Checkpoint, Box<dyn std::error::Error>> {
+    let data = std::fs::read(path)?;
+    let checkpoint: Checkpoint = bincode::deserialize(&data)?;
+    println!(
+        "Resuming from {path} (generation {}, {} agents)",
+        checkpoint.generation,
+        checkpoint.population.len()
+    );
+    Ok(checkpoint)
 }
 
 struct RunResult {
@@ -497,55 +527,78 @@ fn run_seed(
     generations: usize,
     params: &SimParams,
     write_csv: bool,
+    checkpoint_interval: Option<usize>,
+    resume_path: Option<&str>,
 ) -> Result<RunResult, Box<dyn std::error::Error>> {
-    let mut rng = ChaCha8Rng::seed_from_u64(seed);
-    let mut population: Vec<Agent> = (0..params.pop_size)
-        .map(|_| Agent {
-            brain: Brain::random(&mut rng),
-            x: rng.gen_range(0..params.grid_size),
-            y: rng.gen_range(0..params.grid_size),
-            parent_indices: [None, None],
-            grandparent_indices: [None; 4],
-        })
-        .collect();
+    let (mut rng, mut population, start_gen, mut prev_norm_matrix, mut traj_jsd_history) =
+        if let Some(path) = resume_path {
+            let cp = load_checkpoint(path)?;
+            (
+                cp.rng,
+                cp.population,
+                cp.generation,
+                cp.prev_norm_matrix,
+                cp.traj_jsd_history,
+            )
+        } else {
+            let mut rng = ChaCha8Rng::seed_from_u64(seed);
+            let population: Vec<Agent> = (0..params.pop_size)
+                .map(|_| Agent {
+                    brain: Brain::random(&mut rng),
+                    x: rng.gen_range(0..params.grid_size),
+                    y: rng.gen_range(0..params.grid_size),
+                    parent_indices: [None, None],
+                    grandparent_indices: [None; 4],
+                })
+                .collect();
+            (rng, population, 0, None, Vec::new())
+        };
 
-    let mut csv = write_csv
-        .then(|| File::create("output.csv").map(BufWriter::new))
-        .transpose()?;
-    let mut traj_csv = write_csv
-        .then(|| File::create("trajectory.csv").map(BufWriter::new))
-        .transpose()?;
-    let mut input_mi_csv = write_csv
-        .then(|| File::create("input_mi.csv").map(BufWriter::new))
-        .transpose()?;
+    let resuming = resume_path.is_some();
+    let open_csv = |name: &str| -> Result<Option<BufWriter<File>>, Box<dyn std::error::Error>> {
+        if !write_csv {
+            return Ok(None);
+        }
+        if resuming {
+            let f = OpenOptions::new().append(true).open(name)?;
+            Ok(Some(BufWriter::new(f)))
+        } else {
+            Ok(Some(BufWriter::new(File::create(name)?)))
+        }
+    };
+    let mut csv = open_csv("output.csv")?;
+    let mut traj_csv = open_csv("trajectory.csv")?;
+    let mut input_mi_csv = open_csv("input_mi.csv")?;
 
-    if let Some(ref mut f) = csv {
-        writeln!(f, "generation,avg_fitness,max_fitness,signals_emitted,iconicity,mutual_info,jsd_no_pred,jsd_pred,silence_corr,sender_fit_corr,traj_fluct_ratio,receiver_fit_corr,response_fit_corr,silence_onset_jsd,silence_move_delta,avg_base_hidden,min_base_hidden,max_base_hidden,avg_signal_hidden,min_signal_hidden,max_signal_hidden,zone_deaths,signal_entropy,freeze_zone_deaths")?;
-    }
-    if let Some(ref mut f) = traj_csv {
-        write!(f, "generation")?;
-        for s in 0..NUM_SYMBOLS {
-            for d in 0..4 {
-                write!(f, ",s{s}d{d}")?;
+    if !resuming {
+        if let Some(ref mut f) = csv {
+            writeln!(f, "generation,avg_fitness,max_fitness,signals_emitted,iconicity,mutual_info,jsd_no_pred,jsd_pred,silence_corr,sender_fit_corr,traj_fluct_ratio,receiver_fit_corr,response_fit_corr,silence_onset_jsd,silence_move_delta,avg_base_hidden,min_base_hidden,max_base_hidden,avg_signal_hidden,min_signal_hidden,max_signal_hidden,zone_deaths,signal_entropy,freeze_zone_deaths")?;
+        }
+        if let Some(ref mut f) = traj_csv {
+            write!(f, "generation")?;
+            for s in 0..NUM_SYMBOLS {
+                for d in 0..4 {
+                    write!(f, ",s{s}d{d}")?;
+                }
             }
-        }
-        for s in 0..NUM_SYMBOLS {
-            write!(f, ",jsd_sym{s}")?;
-        }
-        write!(f, ",trajectory_jsd")?;
-        for i in 0..NUM_SYMBOLS {
-            for j in (i + 1)..NUM_SYMBOLS {
-                write!(f, ",contrast_{i}{j}")?;
+            for s in 0..NUM_SYMBOLS {
+                write!(f, ",jsd_sym{s}")?;
             }
+            write!(f, ",trajectory_jsd")?;
+            for i in 0..NUM_SYMBOLS {
+                for j in (i + 1)..NUM_SYMBOLS {
+                    write!(f, ",contrast_{i}{j}")?;
+                }
+            }
+            writeln!(f)?;
         }
-        writeln!(f)?;
-    }
-    if let Some(ref mut f) = input_mi_csv {
-        write!(f, "generation")?;
-        for name in &INPUT_NAMES {
-            write!(f, ",mi_{name}")?;
+        if let Some(ref mut f) = input_mi_csv {
+            write!(f, "generation")?;
+            for name in &INPUT_NAMES {
+                write!(f, ",mi_{name}")?;
+            }
+            writeln!(f)?;
         }
-        writeln!(f)?;
     }
 
     let mut last_result = RunResult {
@@ -560,10 +613,7 @@ fn run_seed(
         freeze_zone_deaths: 0,
         generations_completed: 0,
     };
-    let mut prev_norm_matrix: Option<[[f32; 4]; NUM_SYMBOLS]> = None;
-    let mut traj_jsd_history: Vec<f32> = Vec::new();
-
-    for gen in 0..generations {
+    for gen in start_gen..generations {
         let is_metrics_gen = gen % params.metrics_interval == 0 || gen == generations - 1;
         let ev = evaluate_generation(&population, &mut rng, params, is_metrics_gen);
 
@@ -722,6 +772,18 @@ fn run_seed(
             params.fallback_radius,
             &mut rng,
         );
+
+        if let Some(interval) = checkpoint_interval {
+            if (gen + 1) % interval == 0 {
+                save_checkpoint(&Checkpoint {
+                    generation: gen + 1,
+                    population: population.clone(),
+                    rng: rng.clone(),
+                    prev_norm_matrix,
+                    traj_jsd_history: traj_jsd_history.clone(),
+                })?;
+            }
+        }
     }
 
     // Flush buffered writers
@@ -774,7 +836,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut results: Vec<RunResult> = Vec::new();
         for seed in 0..n as u64 {
             println!("--- seed {seed} ---");
-            results.push(run_seed(seed, generations, &params, false)?);
+            results.push(run_seed(seed, generations, &params, false, None, None)?);
         }
 
         let norm_matrices: Vec<Option<[[f32; 4]; NUM_SYMBOLS]>> = results
@@ -901,7 +963,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if params.no_signals {
             println!("Counterfactual mode: signals disabled");
         }
-        let result = run_seed(seed, generations, &params, true)?;
+        let checkpoint_interval: Option<usize> = parse_flag(&args, "--checkpoint-interval");
+        let resume_path: Option<String> = parse_flag(&args, "--resume");
+        let result = run_seed(
+            seed,
+            generations,
+            &params,
+            true,
+            checkpoint_interval,
+            resume_path.as_deref(),
+        )?;
 
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -936,4 +1007,152 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::SeedableRng;
+
+    fn test_params() -> SimParams {
+        SimParams::from_cli(&[
+            String::new(),
+            String::from("--pop"),
+            String::from("20"),
+            String::from("--grid"),
+            String::from("20"),
+            String::from("--ticks"),
+            String::from("50"),
+            String::from("--pred"),
+            String::from("1"),
+            String::from("--freeze-zones"),
+            String::from("0"),
+            String::from("--food"),
+            String::from("10"),
+        ])
+    }
+
+    fn init_population(params: &SimParams, rng: &mut ChaCha8Rng) -> Vec<Agent> {
+        (0..params.pop_size)
+            .map(|_| Agent {
+                brain: Brain::random(rng),
+                x: rng.gen_range(0..params.grid_size),
+                y: rng.gen_range(0..params.grid_size),
+                parent_indices: [None, None],
+                grandparent_indices: [None; 4],
+            })
+            .collect()
+    }
+
+    fn run_gens(pop: &mut Vec<Agent>, rng: &mut ChaCha8Rng, params: &SimParams, n: usize) {
+        for _ in 0..n {
+            let ev = evaluate_generation(pop, rng, params, false);
+            let mut scored: Vec<(usize, f32)> = ev
+                .fitness
+                .iter()
+                .enumerate()
+                .map(|(i, &f)| (i, f))
+                .collect();
+            *pop = evolution::evolve_spatial(
+                pop,
+                &mut scored,
+                params.elite_count,
+                params.tournament_size,
+                params.mutation_sigma,
+                params.grid_size,
+                params.reproduction_radius,
+                params.fallback_radius,
+                rng,
+            );
+        }
+    }
+
+    #[test]
+    fn checkpoint_roundtrip() {
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let population: Vec<Agent> = (0..10)
+            .map(|_| Agent {
+                brain: Brain::random(&mut rng),
+                x: rng.gen_range(0..56),
+                y: rng.gen_range(0..56),
+                parent_indices: [Some(0), Some(1)],
+                grandparent_indices: [Some(10), Some(11), None, None],
+            })
+            .collect();
+
+        let prev_matrix = Some([[1.0_f32, 2.0, 3.0, 4.0]; NUM_SYMBOLS]);
+        let traj_history = vec![0.1, 0.2, 0.3];
+
+        let checkpoint = Checkpoint {
+            generation: 42,
+            population: population.clone(),
+            rng: rng.clone(),
+            prev_norm_matrix: prev_matrix,
+            traj_jsd_history: traj_history.clone(),
+        };
+
+        let encoded = bincode::serialize(&checkpoint).unwrap();
+        let decoded: Checkpoint = bincode::deserialize(&encoded).unwrap();
+
+        assert_eq!(decoded.generation, 42);
+        assert_eq!(decoded.population.len(), 10);
+        assert_eq!(
+            decoded.population[0].brain.weights,
+            population[0].brain.weights
+        );
+        assert_eq!(
+            decoded.population[0].brain.base_hidden_size,
+            population[0].brain.base_hidden_size
+        );
+        assert_eq!(decoded.population[0].x, population[0].x);
+        assert_eq!(
+            decoded.population[0].parent_indices,
+            population[0].parent_indices
+        );
+        assert_eq!(decoded.prev_norm_matrix, prev_matrix);
+        assert_eq!(decoded.traj_jsd_history, traj_history);
+
+        // RNG produces same next value
+        let mut rng_orig = rng;
+        let mut rng_loaded = decoded.rng;
+        assert_eq!(rng_orig.gen::<u64>(), rng_loaded.gen::<u64>());
+    }
+
+    #[test]
+    fn checkpoint_rng_continuity() {
+        let params = test_params();
+
+        // Run 10 gens straight
+        let mut rng_straight = ChaCha8Rng::seed_from_u64(99);
+        let mut pop_straight = init_population(&params, &mut rng_straight);
+        run_gens(&mut pop_straight, &mut rng_straight, &params, 10);
+
+        // Run 5 gens, checkpoint, then 5 more from checkpoint
+        let mut rng_split = ChaCha8Rng::seed_from_u64(99);
+        let mut pop_split = init_population(&params, &mut rng_split);
+        run_gens(&mut pop_split, &mut rng_split, &params, 5);
+
+        // Roundtrip through serialization
+        let cp = Checkpoint {
+            generation: 5,
+            population: pop_split,
+            rng: rng_split,
+            prev_norm_matrix: None,
+            traj_jsd_history: Vec::new(),
+        };
+        let encoded = bincode::serialize(&cp).unwrap();
+        let decoded: Checkpoint = bincode::deserialize(&encoded).unwrap();
+        let mut rng_resumed = decoded.rng;
+        let mut pop_resumed = decoded.population;
+        run_gens(&mut pop_resumed, &mut rng_resumed, &params, 5);
+
+        // Final populations should be identical
+        assert_eq!(pop_straight.len(), pop_resumed.len());
+        for (a, b) in pop_straight.iter().zip(&pop_resumed) {
+            assert_eq!(a.brain.weights, b.brain.weights);
+            assert_eq!(a.x, b.x);
+            assert_eq!(a.y, b.y);
+        }
+        assert_eq!(rng_straight.gen::<u64>(), rng_resumed.gen::<u64>());
+    }
 }
