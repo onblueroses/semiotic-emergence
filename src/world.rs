@@ -6,6 +6,10 @@ use crate::brain::{Brain, CompactBrain, ForwardResult, INPUTS, MEMORY_SIZE};
 use crate::evolution::Agent;
 use crate::signal::{self, Signal, SignalGrid, NUM_SYMBOLS};
 
+// Freeze zone damage multipliers: moving inside a freeze zone is 30x worse than staying still
+const FREEZE_MOVE_PENALTY: f32 = 3.0;
+const FREEZE_STILL_FACTOR: f32 = 0.1;
+
 // Input layout offsets derived from constants
 const SIGNAL_INPUT_START: usize = 9; // after pred(3) + food(3) + ally(3)
 const MEMORY_INPUT_START: usize = SIGNAL_INPUT_START + NUM_SYMBOLS * 3;
@@ -15,7 +19,7 @@ const _: () = assert!(ENERGY_INPUT_IDX + 1 == INPUTS, "input layout size mismatc
 pub const INPUT_NAMES: [&str; INPUTS] = [
     "zone_damage",
     "energy_delta",
-    "dead_spare",
+    "freeze_pressure",
     "food_dx",
     "food_dy",
     "food_dist",
@@ -325,6 +329,14 @@ pub struct Prey {
     pub zone_damage: f32,
     /// Energy at the start of the previous tick. Used to compute `energy_delta` input.
     pub prev_energy: f32,
+    /// Whether this prey moved (action 0-3) on the current tick. Used by freeze zone drain.
+    pub moved_this_tick: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ZoneType {
+    Flee,
+    Freeze,
 }
 
 #[derive(Clone, Debug)]
@@ -333,6 +345,7 @@ pub struct KillZone {
     pub y: f32,
     pub radius: f32,
     pub speed: f32,
+    pub zone_type: ZoneType,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -378,6 +391,8 @@ pub struct World {
     pub collect_metrics: bool,
     /// Count of prey that died from zone damage this evaluation.
     pub zone_deaths: u32,
+    /// Count of prey that died while inside at least one freeze zone.
+    pub freeze_zone_deaths: u32,
     // Spatial indices (rebuilt each tick for prey/signals, maintained incrementally for food)
     prey_grid: PreyGrid,
     food_grid: CellGrid,
@@ -419,6 +434,7 @@ impl World {
         patch_ratio: f32,
         zone_drain_rate: f32,
         signal_ticks: u32,
+        num_freeze_zones: usize,
     ) -> Self {
         let brains: Vec<Brain> = agents.iter().map(|a| a.brain.clone()).collect();
         let compact_brains: Vec<CompactBrain> =
@@ -439,18 +455,29 @@ impl World {
                 had_signal_prev_tick: false,
                 zone_damage: 0.0,
                 prev_energy: 1.0,
+                moved_this_tick: false,
             })
             .collect();
 
         let gs = grid_size as f32;
-        let zones = (0..num_zones)
+        let mut zones: Vec<KillZone> = (0..num_zones)
             .map(|_| KillZone {
                 x: rng.gen_range(0.0..gs),
                 y: rng.gen_range(0.0..gs),
                 radius: zone_radius,
                 speed: zone_speed,
+                zone_type: ZoneType::Flee,
             })
             .collect();
+        for _ in 0..num_freeze_zones {
+            zones.push(KillZone {
+                x: rng.gen_range(0.0..gs),
+                y: rng.gen_range(0.0..gs),
+                radius: zone_radius,
+                speed: zone_speed,
+                zone_type: ZoneType::Freeze,
+            });
+        }
 
         let food: Vec<Food> = (0..food_count)
             .map(|_| Food {
@@ -489,6 +516,7 @@ impl World {
             no_signals,
             collect_metrics,
             zone_deaths: 0,
+            freeze_zone_deaths: 0,
             prey_grid: PreyGrid::new(grid_size),
             food_grid,
             signal_grid: SignalGrid::new(grid_size, signal_range),
@@ -519,6 +547,27 @@ impl World {
             let edge_dist = center_dist - zone.radius;
             if edge_dist < best {
                 best = edge_dist;
+            }
+        }
+        best
+    }
+
+    /// Current-tick gradient depth in nearest freeze zone. 0.0 if outside all freeze zones.
+    fn freeze_pressure_at(&self, x: i32, y: i32) -> f32 {
+        let gs = self.grid_size as f32;
+        let mut best = 0.0_f32;
+        for zone in &self.zones {
+            if zone.zone_type != ZoneType::Freeze {
+                continue;
+            }
+            let dx = wrap_delta_f32(x as f32, zone.x, gs);
+            let dy = wrap_delta_f32(y as f32, zone.y, gs);
+            let dist = (dx * dx + dy * dy).sqrt();
+            if dist < zone.radius {
+                let gradient = 1.0 - dist / zone.radius;
+                if gradient > best {
+                    best = gradient;
+                }
             }
         }
         best
@@ -706,8 +755,8 @@ impl World {
     }
 
     /// Build input vector using spatial grid for ally/food lookup.
-    /// Layout: [danger(2)+spare(1), food(3), ally(3), signals(18), memory(8), energy(1)] = 36
-    /// Inputs 0-1: `zone_damage`, `energy_delta`. Input 2: spare (zero).
+    /// Layout: [danger(2)+freeze(1), food(3), ally(3), signals(18), memory(8), energy(1)] = 36
+    /// Inputs 0-1: `zone_damage`, `energy_delta`. Input 2: `freeze_pressure`.
     #[allow(clippy::similar_names)]
     fn build_inputs_fast(&self, prey_idx: usize) -> [f32; INPUTS] {
         let p = &self.prey[prey_idx];
@@ -718,7 +767,8 @@ impl World {
         inp[0] = p.zone_damage;
         // 1: energy delta since last tick (disambiguates zone damage from metabolism)
         inp[1] = p.energy - p.prev_energy;
-        // 2: spare slot (always zero)
+        // 2: freeze zone pressure (gradient depth in nearest freeze zone, 0.0 if outside)
+        inp[2] = self.freeze_pressure_at(p.x, p.y);
 
         // 3-5: Nearest food (dx, dy, distance)
         if let Some((fi, food_dist_sq)) =
@@ -782,6 +832,7 @@ impl World {
         inputs: &[f32; INPUTS],
         zone_dist: f32,
     ) {
+        self.prey[prey_idx].moved_this_tick = action < 4;
         match action {
             0 => self.prey[prey_idx].y = wrap_coord(self.prey[prey_idx].y - 1, self.grid_size),
             1 => self.prey[prey_idx].y = wrap_coord(self.prey[prey_idx].y + 1, self.grid_size),
@@ -912,17 +963,42 @@ impl World {
                         let dist_sq = ddx * ddx + ddy * ddy;
                         if dist_sq <= r_sq {
                             let gradient = 1.0 - dist_sq.sqrt() / zone.radius;
-                            self.prey[pidx].zone_damage += drain_rate * gradient;
+                            let effective_drain = match zone.zone_type {
+                                ZoneType::Flee => drain_rate * gradient,
+                                ZoneType::Freeze => {
+                                    let factor = if self.prey[pidx].moved_this_tick {
+                                        FREEZE_MOVE_PENALTY
+                                    } else {
+                                        FREEZE_STILL_FACTOR
+                                    };
+                                    drain_rate * gradient * factor
+                                }
+                            };
+                            self.prey[pidx].zone_damage += effective_drain;
                         }
                     }
                 }
             }
         }
 
-        for p in &mut self.prey {
-            if p.alive && p.zone_damage >= 1.0 {
-                p.alive = false;
+        for pidx in 0..self.prey.len() {
+            if self.prey[pidx].alive && self.prey[pidx].zone_damage >= 1.0 {
+                self.prey[pidx].alive = false;
                 self.zone_deaths += 1;
+                // Attribute to freeze if inside any freeze zone
+                let px = self.prey[pidx].x as f32;
+                let py = self.prey[pidx].y as f32;
+                let gs = self.grid_size as f32;
+                for zone in &self.zones {
+                    if zone.zone_type == ZoneType::Freeze {
+                        let dx = wrap_delta_f32(px, zone.x, gs);
+                        let dy = wrap_delta_f32(py, zone.y, gs);
+                        if dx * dx + dy * dy < zone.radius * zone.radius {
+                            self.freeze_zone_deaths += 1;
+                            break;
+                        }
+                    }
+                }
             }
         }
     }
@@ -1004,6 +1080,7 @@ mod tests {
             had_signal_prev_tick: false,
             zone_damage: 0.0,
             prev_energy: 1.0,
+            moved_this_tick: false,
         }
     }
 
@@ -1025,6 +1102,7 @@ mod tests {
                 y: zone_center.1,
                 radius: TEST_ZONE_RADIUS,
                 speed: TEST_ZONE_SPEED,
+                zone_type: ZoneType::Flee,
             }],
             food: Vec::new(),
             signals: Vec::new(),
@@ -1056,6 +1134,7 @@ mod tests {
             zone_drain_rate: TEST_ZONE_DRAIN_RATE,
             signal_ticks: 4,
             zone_deaths: 0,
+            freeze_zone_deaths: 0,
         };
         w.rebuild_prey_grid();
         w
@@ -1196,6 +1275,7 @@ mod tests {
             y: 5.0,
             radius: TEST_ZONE_RADIUS,
             speed: TEST_ZONE_SPEED,
+            zone_type: ZoneType::Flee,
         });
 
         world.zone_drain();
@@ -1300,6 +1380,126 @@ mod tests {
         );
     }
 
+    // --- Freeze zone tests ---
+
+    #[test]
+    fn freeze_zone_drains_more_when_moving() {
+        let mut world = minimal_world(&[(5, 5)], (5.0, 5.0));
+        world.zones[0].zone_type = ZoneType::Freeze;
+        world.prey[0].moved_this_tick = true;
+
+        world.zone_drain();
+
+        // At center: gradient=1.0, drain = rate * 1.0 * FREEZE_MOVE_PENALTY
+        let expected = TEST_ZONE_DRAIN_RATE * FREEZE_MOVE_PENALTY;
+        assert!(
+            (world.prey[0].zone_damage - expected).abs() < 1e-6,
+            "Moving in freeze zone: expected {expected}, got {}",
+            world.prey[0].zone_damage
+        );
+    }
+
+    #[test]
+    fn freeze_zone_drains_less_when_still() {
+        let mut world = minimal_world(&[(5, 5)], (5.0, 5.0));
+        world.zones[0].zone_type = ZoneType::Freeze;
+        world.prey[0].moved_this_tick = false;
+
+        world.zone_drain();
+
+        // At center: gradient=1.0, drain = rate * 1.0 * FREEZE_STILL_FACTOR
+        let expected = TEST_ZONE_DRAIN_RATE * FREEZE_STILL_FACTOR;
+        assert!(
+            (world.prey[0].zone_damage - expected).abs() < 1e-6,
+            "Still in freeze zone: expected {expected}, got {}",
+            world.prey[0].zone_damage
+        );
+    }
+
+    #[test]
+    fn flee_zone_drains_same_regardless_of_movement() {
+        let mut world_moved = minimal_world(&[(5, 5)], (5.0, 5.0));
+        world_moved.prey[0].moved_this_tick = true;
+        world_moved.zone_drain();
+
+        let mut world_still = minimal_world(&[(5, 5)], (5.0, 5.0));
+        world_still.prey[0].moved_this_tick = false;
+        world_still.zone_drain();
+
+        assert!(
+            (world_moved.prey[0].zone_damage - world_still.prey[0].zone_damage).abs() < 1e-6,
+            "Flee zone damage should not depend on movement"
+        );
+    }
+
+    #[test]
+    fn freeze_and_flee_zone_damage_stacks() {
+        let mut world = minimal_world(&[(5, 5)], (5.0, 5.0));
+        // First zone is flee (default from minimal_world), add a freeze zone at same position
+        world.zones.push(KillZone {
+            x: 5.0,
+            y: 5.0,
+            radius: TEST_ZONE_RADIUS,
+            speed: TEST_ZONE_SPEED,
+            zone_type: ZoneType::Freeze,
+        });
+        world.prey[0].moved_this_tick = true;
+
+        world.zone_drain();
+
+        // Flee: rate * 1.0, Freeze (moving): rate * 1.0 * FREEZE_MOVE_PENALTY
+        let expected = TEST_ZONE_DRAIN_RATE + TEST_ZONE_DRAIN_RATE * FREEZE_MOVE_PENALTY;
+        assert!(
+            (world.prey[0].zone_damage - expected).abs() < 1e-6,
+            "Damage should stack: expected {expected}, got {}",
+            world.prey[0].zone_damage
+        );
+    }
+
+    #[test]
+    fn input_freeze_pressure_inside_freeze_zone() {
+        let mut world = minimal_world(&[(5, 5)], (5.0, 5.0));
+        world.zones[0].zone_type = ZoneType::Freeze;
+
+        let inputs = world.build_inputs(0);
+
+        // At center of freeze zone: gradient = 1.0
+        assert!(
+            (inputs[2] - 1.0).abs() < 0.01,
+            "Input 2 should be ~1.0 at freeze zone center, got {}",
+            inputs[2]
+        );
+    }
+
+    #[test]
+    fn input_freeze_pressure_outside_all_zones() {
+        let mut world = minimal_world(&[(0, 0)], (15.0, 15.0));
+        world.zones[0].zone_type = ZoneType::Freeze;
+        world.zones[0].radius = 2.0;
+
+        let inputs = world.build_inputs(0);
+
+        assert!(
+            inputs[2].abs() < 1e-6,
+            "Input 2 should be 0.0 when outside freeze zone, got {}",
+            inputs[2]
+        );
+    }
+
+    #[test]
+    fn input_freeze_pressure_inside_flee_zone_only() {
+        // Prey inside a flee zone but no freeze zones exist -> input 2 = 0
+        let world = minimal_world(&[(5, 5)], (5.0, 5.0));
+
+        let inputs = world.build_inputs(0);
+
+        assert!(
+            inputs[2].abs() < 1e-6,
+            "Input 2 should be 0.0 when only flee zones exist, got {}",
+            inputs[2]
+        );
+    }
+
     // --- new_with_positions ---
 
     #[test]
@@ -1346,6 +1546,7 @@ mod tests {
             TEST_PATCH_RATIO,
             TEST_ZONE_DRAIN_RATE,
             4,
+            0,
         );
 
         assert_eq!(world.prey[0].x, 3);
@@ -1528,14 +1729,17 @@ mod tests {
     }
 
     #[test]
-    fn input_spare_slot_always_zero() {
+    fn input_freeze_pressure_zero_without_freeze_zones() {
         let mut world = minimal_world(&[(5, 5)], (5.0, 5.0));
         world.prey[0].zone_damage = 0.5;
         world.prey[0].energy = 0.7;
 
         let inputs = world.build_inputs(0);
 
-        assert!((inputs[2]).abs() < 1e-6, "Input 2 (spare) should be zero");
+        assert!(
+            (inputs[2]).abs() < 1e-6,
+            "Input 2 (freeze_pressure) should be zero when no freeze zones exist"
+        );
     }
 
     // --- Per-prey receiver tracking ---
@@ -1790,6 +1994,7 @@ mod tests {
             TEST_PATCH_RATIO,
             TEST_ZONE_DRAIN_RATE,
             4,
+            0,
         );
 
         for &m in &world.prey[0].memory {
