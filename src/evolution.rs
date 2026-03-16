@@ -8,7 +8,7 @@ use crate::brain::{
 };
 use crate::world::wrap_dist_sq;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Agent {
     pub brain: Brain,
     pub x: i32,

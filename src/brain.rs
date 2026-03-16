@@ -57,8 +57,32 @@ pub struct ForwardResult {
     pub memory_write: [f32; MEMORY_OUTPUTS],
 }
 
-#[derive(Clone, Debug)]
+mod weights_serde {
+    use super::MAX_GENOME_LEN;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(
+        weights: &[f32; MAX_GENOME_LEN],
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
+        weights.as_slice().serialize(s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<[f32; MAX_GENOME_LEN], D::Error> {
+        let v: Vec<f32> = Vec::deserialize(d)?;
+        v.try_into().map_err(|v: Vec<f32>| {
+            serde::de::Error::custom(format!(
+                "expected {} weights, got {}",
+                MAX_GENOME_LEN,
+                v.len()
+            ))
+        })
+    }
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Brain {
+    #[serde(with = "weights_serde")]
     pub weights: [f32; MAX_GENOME_LEN],
     pub base_hidden_size: usize,
     pub signal_hidden_size: usize,
