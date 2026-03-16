@@ -45,6 +45,7 @@ struct SimParams {
     metrics_interval: usize,
     fast_fail_tick: u32,
     signal_ticks: u32,
+    num_freeze_zones: usize,
 }
 
 impl SimParams {
@@ -64,6 +65,7 @@ impl SimParams {
         let signal_cost = parse_flag(args, "--signal-cost").unwrap_or(0.002);
         let fast_fail_tick: u32 = parse_flag(args, "--fast-fail").unwrap_or(0);
         let signal_ticks: u32 = parse_flag(args, "--signal-ticks").unwrap_or(4);
+        let num_freeze_zones: usize = parse_flag(args, "--freeze-zones").unwrap_or(2);
 
         let zone_coverage: Option<f32> = parse_flag(args, "--zone-coverage");
         let num_zones = if let Some(coverage) = zone_coverage {
@@ -109,6 +111,7 @@ impl SimParams {
             metrics_interval: metrics_interval.max(1),
             fast_fail_tick,
             signal_ticks,
+            num_freeze_zones,
         }
     }
 }
@@ -129,6 +132,7 @@ struct RunResult {
     receiver_fit_corr: f32,
     response_fit_corr: f32,
     zone_deaths: u32,
+    freeze_zone_deaths: u32,
     generations_completed: usize,
 }
 
@@ -159,6 +163,7 @@ struct GenMetrics {
     min_signal_hidden: usize,
     max_signal_hidden: usize,
     zone_deaths: u32,
+    freeze_zone_deaths: u32,
     signal_entropy: f32,
 }
 
@@ -166,7 +171,7 @@ impl GenMetrics {
     fn write_csv(&self, f: &mut impl Write, gen: usize) -> Result<(), Box<dyn std::error::Error>> {
         writeln!(
             f,
-            "{gen},{:.1},{:.1},{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.1},{},{},{:.1},{},{},{},{:.4}",
+            "{gen},{:.1},{:.1},{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.1},{},{},{:.1},{},{},{},{:.4},{}",
             self.avg_fitness,
             self.max_fitness,
             self.total_signals,
@@ -188,7 +193,8 @@ impl GenMetrics {
             self.min_signal_hidden,
             self.max_signal_hidden,
             self.zone_deaths,
-            self.signal_entropy
+            self.signal_entropy,
+            self.freeze_zone_deaths
         )?;
         Ok(())
     }
@@ -236,12 +242,12 @@ impl GenMetrics {
             .collect::<Vec<_>>()
             .join(",");
         println!(
-            "gen {gen:>4} | avg {:>7.1} | max {:>7.1} | signals {} | icon {:.3} | MI {:.3} | ent {:.3} | jsd {:.3}/{:.3} | sym [{sym_str}] | sil {:.3} | zd {} | base {:.1} [{}-{}] | sig {:.1} [{}-{}]",
+            "gen {gen:>4} | avg {:>7.1} | max {:>7.1} | signals {} | icon {:.3} | MI {:.3} | ent {:.3} | jsd {:.3}/{:.3} | sym [{sym_str}] | sil {:.3} | zd {}/{} | base {:.1} [{}-{}] | sig {:.1} [{}-{}]",
             self.avg_fitness, self.max_fitness, self.total_signals,
             self.iconicity, self.mutual_info, self.signal_entropy,
             self.jsd_no_pred, self.jsd_pred,
             self.silence_corr,
-            self.zone_deaths,
+            self.zone_deaths, self.freeze_zone_deaths,
             self.avg_base_hidden, self.min_base_hidden, self.max_base_hidden,
             self.avg_signal_hidden, self.min_signal_hidden, self.max_signal_hidden
         );
@@ -263,6 +269,7 @@ struct EvalResult {
     actions_without_signal: Vec<[[u32; 5]; 2]>,
     silence_onset_actions: Vec<[[u32; 5]; 2]>,
     zone_deaths: u32,
+    freeze_zone_deaths: u32,
 }
 
 fn evaluate_generation(
@@ -288,6 +295,7 @@ fn evaluate_generation(
         params.patch_ratio,
         params.zone_drain_rate,
         params.signal_ticks,
+        params.num_freeze_zones,
     );
 
     for _ in 0..params.ticks_per_eval {
@@ -354,6 +362,7 @@ fn evaluate_generation(
         actions_without_signal,
         silence_onset_actions,
         zone_deaths: world.zone_deaths,
+        freeze_zone_deaths: world.freeze_zone_deaths,
     }
 }
 
@@ -477,6 +486,7 @@ fn compute_gen_metrics(
         min_signal_hidden,
         max_signal_hidden,
         zone_deaths: ev.zone_deaths,
+        freeze_zone_deaths: ev.freeze_zone_deaths,
         signal_entropy,
     }
 }
@@ -510,7 +520,7 @@ fn run_seed(
         .transpose()?;
 
     if let Some(ref mut f) = csv {
-        writeln!(f, "generation,avg_fitness,max_fitness,signals_emitted,iconicity,mutual_info,jsd_no_pred,jsd_pred,silence_corr,sender_fit_corr,traj_fluct_ratio,receiver_fit_corr,response_fit_corr,silence_onset_jsd,silence_move_delta,avg_base_hidden,min_base_hidden,max_base_hidden,avg_signal_hidden,min_signal_hidden,max_signal_hidden,zone_deaths,signal_entropy")?;
+        writeln!(f, "generation,avg_fitness,max_fitness,signals_emitted,iconicity,mutual_info,jsd_no_pred,jsd_pred,silence_corr,sender_fit_corr,traj_fluct_ratio,receiver_fit_corr,response_fit_corr,silence_onset_jsd,silence_move_delta,avg_base_hidden,min_base_hidden,max_base_hidden,avg_signal_hidden,min_signal_hidden,max_signal_hidden,zone_deaths,signal_entropy,freeze_zone_deaths")?;
     }
     if let Some(ref mut f) = traj_csv {
         write!(f, "generation")?;
@@ -547,6 +557,7 @@ fn run_seed(
         receiver_fit_corr: 0.0,
         response_fit_corr: 0.0,
         zone_deaths: 0,
+        freeze_zone_deaths: 0,
         generations_completed: 0,
     };
     let mut prev_norm_matrix: Option<[[f32; 4]; NUM_SYMBOLS]> = None;
@@ -638,6 +649,7 @@ fn run_seed(
                 actions_without_signal: ev.actions_without_signal,
                 silence_onset_actions: ev.silence_onset_actions,
                 zone_deaths: ev.zone_deaths,
+                freeze_zone_deaths: ev.freeze_zone_deaths,
             };
 
             let gm = compute_gen_metrics(
@@ -670,6 +682,7 @@ fn run_seed(
                 receiver_fit_corr: gm.receiver_fit_corr,
                 response_fit_corr: gm.response_fit_corr,
                 zone_deaths: gm.zone_deaths,
+                freeze_zone_deaths: gm.freeze_zone_deaths,
                 generations_completed: gen + 1,
             };
         } else if write_csv && gen.is_multiple_of(10) {
@@ -742,10 +755,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or(200);
 
         println!(
-            "Config: pop={} grid={} zones={} radius={:.1} speed={:.1} drain={:.3} food={} ticks={} patches={:.0}% kin_bonus={:.2} sig_cost={:.4} sig_range={:.1}",
+            "Config: pop={} grid={} zones={} freeze_zones={} radius={:.1} speed={:.1} drain={:.3} food={} ticks={} patches={:.0}% kin_bonus={:.2} sig_cost={:.4} sig_range={:.1}",
             params.pop_size,
             params.grid_size,
             params.num_zones,
+            params.num_freeze_zones,
             params.zone_radius,
             params.zone_speed,
             params.zone_drain_rate,
@@ -828,10 +842,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or(200);
 
         println!(
-            "Config: pop={} grid={} zones={} radius={:.1} speed={:.1} drain={:.3} food={} ticks={} patches={:.0}% kin_bonus={:.2} sig_cost={:.4} sig_range={:.1}",
+            "Config: pop={} grid={} zones={} freeze_zones={} radius={:.1} speed={:.1} drain={:.3} food={} ticks={} patches={:.0}% kin_bonus={:.2} sig_cost={:.4} sig_range={:.1}",
             params.pop_size,
             params.grid_size,
             params.num_zones,
+            params.num_freeze_zones,
             params.zone_radius,
             params.zone_speed,
             params.zone_drain_rate,
@@ -874,7 +889,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 params.pop_size,
                 alive_count as f32 / params.pop_size as f32 * 100.0
             );
-            println!("  Zone deaths: {}", ev.zone_deaths);
+            println!(
+                "  Zone deaths: {} (freeze: {})",
+                ev.zone_deaths, ev.freeze_zone_deaths
+            );
             println!("  Signals emitted: {}", ev.total_signals);
             println!("  MI(signal;zone): {mi:.4}");
             return Ok(());
@@ -894,7 +912,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .open("runs.tsv")?;
         writeln!(
             log,
-            "{timestamp}\tunknown\t{seed}\t{gens}\t{pop}\t{grid}\t{zones}\t{radius:.1}\t{speed:.1}\t{food}\t{ticks}\t{patches:.2}\t{kin}\t{ff}\t{avg:.1}\t{max:.1}\t{mi:.4}\t{sfc:.4}\t{rfc:.4}\t{rpfc:.4}\t{zd}",
+            "{timestamp}\tunknown\t{seed}\t{gens}\t{pop}\t{grid}\t{zones}\t{radius:.1}\t{speed:.1}\t{food}\t{ticks}\t{patches:.2}\t{kin}\t{ff}\t{avg:.1}\t{max:.1}\t{mi:.4}\t{sfc:.4}\t{rfc:.4}\t{rpfc:.4}\t{zd}\t{fzd}",
             gens = result.generations_completed,
             pop = params.pop_size,
             grid = params.grid_size,
@@ -913,6 +931,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             rfc = result.receiver_fit_corr,
             rpfc = result.response_fit_corr,
             zd = result.zone_deaths,
+            fzd = result.freeze_zone_deaths,
         )?;
     }
 
