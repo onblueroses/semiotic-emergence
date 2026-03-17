@@ -57,6 +57,10 @@ struct SimParams {
     fast_fail_tick: u32,
     signal_ticks: u32,
     num_freeze_zones: usize,
+    signal_threshold: f32,
+    deme_divisions: usize,
+    migration_rate: f32,
+    group_interval: usize,
 }
 
 impl SimParams {
@@ -77,6 +81,10 @@ impl SimParams {
         let fast_fail_tick: u32 = parse_flag(args, "--fast-fail").unwrap_or(0);
         let signal_ticks: u32 = parse_flag(args, "--signal-ticks").unwrap_or(4);
         let num_freeze_zones: usize = parse_flag(args, "--freeze-zones").unwrap_or(2);
+        let signal_threshold: f32 = parse_flag(args, "--signal-threshold").unwrap_or(1.0 / 6.0);
+        let deme_divisions: usize = parse_flag(args, "--demes").unwrap_or(1);
+        let migration_rate: f32 = parse_flag(args, "--migration-rate").unwrap_or(0.05);
+        let group_interval: usize = parse_flag(args, "--group-interval").unwrap_or(100);
 
         let zone_coverage: Option<f32> = parse_flag(args, "--zone-coverage");
         let num_zones = if let Some(coverage) = zone_coverage {
@@ -123,6 +131,10 @@ impl SimParams {
             fast_fail_tick,
             signal_ticks,
             num_freeze_zones,
+            signal_threshold,
+            deme_divisions,
+            migration_rate,
+            group_interval,
         }
     }
 }
@@ -326,6 +338,7 @@ fn evaluate_generation(
         params.zone_drain_rate,
         params.signal_ticks,
         params.num_freeze_zones,
+        params.signal_threshold,
     );
 
     for _ in 0..params.ticks_per_eval {
@@ -770,8 +783,32 @@ fn run_seed(
             params.grid_size,
             params.reproduction_radius,
             params.fallback_radius,
+            params.deme_divisions,
             &mut rng,
         );
+
+        // Deme-level dynamics (only when demes are active)
+        if params.deme_divisions > 1 {
+            // Group selection every N generations
+            if (gen + 1) % params.group_interval == 0 {
+                evolution::group_selection(
+                    &mut population,
+                    &fitness,
+                    params.grid_size,
+                    params.deme_divisions,
+                    params.mutation_sigma,
+                    &mut rng,
+                );
+            }
+            // Migration every generation
+            evolution::migrate(
+                &mut population,
+                params.grid_size,
+                params.deme_divisions,
+                params.migration_rate,
+                &mut rng,
+            );
+        }
 
         if let Some(interval) = checkpoint_interval {
             if (gen + 1) % interval == 0 {
@@ -1062,6 +1099,7 @@ mod tests {
                 params.grid_size,
                 params.reproduction_radius,
                 params.fallback_radius,
+                params.deme_divisions,
                 rng,
             );
         }

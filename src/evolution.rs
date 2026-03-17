@@ -17,6 +17,52 @@ pub struct Agent {
     pub grandparent_indices: [Option<usize>; 4],
 }
 
+/// Spatial deme defined by rectangular bounds on the toroidal grid.
+#[derive(Clone, Debug)]
+pub struct Deme {
+    pub x_min: i32,
+    pub x_max: i32,
+    pub y_min: i32,
+    pub y_max: i32,
+}
+
+/// Divide the grid into `divisions x divisions` rectangular demes.
+#[allow(clippy::cast_possible_wrap)]
+pub fn compute_demes(grid_size: i32, divisions: usize) -> Vec<Deme> {
+    let d = divisions as i32;
+    let cell_w = grid_size / d;
+    let mut demes = Vec::with_capacity(divisions * divisions);
+    for dy in 0..d {
+        for dx in 0..d {
+            demes.push(Deme {
+                x_min: dx * cell_w,
+                x_max: if dx == d - 1 {
+                    grid_size
+                } else {
+                    (dx + 1) * cell_w
+                },
+                y_min: dy * cell_w,
+                y_max: if dy == d - 1 {
+                    grid_size
+                } else {
+                    (dy + 1) * cell_w
+                },
+            });
+        }
+    }
+    demes
+}
+
+/// Return the deme index for a given position.
+#[allow(clippy::cast_possible_wrap)]
+pub fn assign_deme(x: i32, y: i32, grid_size: i32, divisions: usize) -> usize {
+    let d = divisions as i32;
+    let cell_w = grid_size / d;
+    let dx = (x / cell_w).min(d - 1);
+    let dy = (y / cell_w).min(d - 1);
+    (dy * d + dx) as usize
+}
+
 const OFFSPRING_JITTER: i32 = 1;
 const HIDDEN_SIZE_MUTATION_RATE: f32 = 0.05;
 /// Mutate weights up to `hidden_size` + `MUTATION_HEADROOM` neurons.
@@ -286,6 +332,7 @@ pub fn evolve_spatial(
     grid_size: i32,
     reproduction_radius: f32,
     fallback_radius: f32,
+    deme_divisions: usize,
     rng: &mut impl Rng,
 ) -> Vec<Agent> {
     scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -299,14 +346,40 @@ pub fn evolve_spatial(
         next_gen.push(population[pop_idx].clone());
     }
 
+    // Pre-compute per-deme scored lists when demes are active
+    let deme_scored: Vec<Vec<(usize, f32)>> = if deme_divisions > 1 {
+        let num_demes = deme_divisions * deme_divisions;
+        let mut by_deme: Vec<Vec<(usize, f32)>> = vec![Vec::new(); num_demes];
+        for &(pop_idx, fit) in scored {
+            let d = assign_deme(
+                population[pop_idx].x,
+                population[pop_idx].y,
+                grid_size,
+                deme_divisions,
+            );
+            by_deme[d].push((pop_idx, fit));
+        }
+        by_deme
+    } else {
+        Vec::new()
+    };
+
     // Fill remaining slots at dead agents' positions
     for &(pop_idx, _) in scored.iter().skip(elite_count) {
         let sx = population[pop_idx].x;
         let sy = population[pop_idx].y;
 
+        // Use deme-filtered scored list when demes are active
+        let effective_scored = if deme_divisions > 1 {
+            let d = assign_deme(sx, sy, grid_size, deme_divisions);
+            &deme_scored[d]
+        } else {
+            scored
+        };
+
         let pa = select_parent(
             population,
-            scored,
+            effective_scored,
             sx,
             sy,
             tournament_size,
@@ -317,7 +390,7 @@ pub fn evolve_spatial(
         );
         let pb = select_parent(
             population,
-            scored,
+            effective_scored,
             sx,
             sy,
             tournament_size,
@@ -348,6 +421,172 @@ pub fn evolve_spatial(
     }
 
     next_gen
+}
+
+/// Group selection: bottom 1/3 demes by avg fitness lose their lowest 20% agents,
+/// replaced by offspring from top 1/3 demes.
+pub fn group_selection(
+    population: &mut [Agent],
+    fitness: &[f32],
+    grid_size: i32,
+    deme_divisions: usize,
+    sigma: f32,
+    rng: &mut impl Rng,
+) {
+    let demes = compute_demes(grid_size, deme_divisions);
+    let num_demes = demes.len();
+
+    // Compute per-deme average fitness
+    let mut deme_sums = vec![0.0_f32; num_demes];
+    let mut deme_counts = vec![0usize; num_demes];
+    for (i, agent) in population.iter().enumerate() {
+        let d = assign_deme(agent.x, agent.y, grid_size, deme_divisions);
+        deme_sums[d] += fitness[i];
+        deme_counts[d] += 1;
+    }
+    let mut deme_avg: Vec<(usize, f32)> = (0..num_demes)
+        .map(|d| {
+            let avg = if deme_counts[d] > 0 {
+                deme_sums[d] / deme_counts[d] as f32
+            } else {
+                0.0
+            };
+            (d, avg)
+        })
+        .collect();
+    deme_avg.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let bottom_count = (num_demes / 3).max(1);
+    let top_count = (num_demes / 3).max(1);
+    let bottom_demes: Vec<usize> = deme_avg[..bottom_count].iter().map(|&(d, _)| d).collect();
+    let top_demes: Vec<usize> = deme_avg[num_demes - top_count..]
+        .iter()
+        .map(|&(d, _)| d)
+        .collect();
+
+    // Collect top-deme agents as donor pool
+    let donors: Vec<usize> = population
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| top_demes.contains(&assign_deme(a.x, a.y, grid_size, deme_divisions)))
+        .map(|(i, _)| i)
+        .collect();
+
+    if donors.is_empty() {
+        return;
+    }
+
+    // For each bottom deme, replace lowest 20% with offspring from donors
+    for &bottom_d in &bottom_demes {
+        let mut members: Vec<(usize, f32)> = population
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| assign_deme(a.x, a.y, grid_size, deme_divisions) == bottom_d)
+            .map(|(i, _)| (i, fitness[i]))
+            .collect();
+        members.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let replace_count = (members.len() / 5).max(1);
+        for &(victim_idx, _) in members.iter().take(replace_count) {
+            let da = donors[rng.gen_range(0..donors.len())];
+            let db = donors[rng.gen_range(0..donors.len())];
+            let mut child = crossover(&population[da].brain, &population[db].brain, rng);
+            mutate(&mut child, sigma, rng);
+            mutate_hidden_size(&mut child, rng);
+            // Place at victim's position
+            population[victim_idx].brain = child;
+            population[victim_idx].parent_indices = [Some(da), Some(db)];
+            population[victim_idx].grandparent_indices = [
+                population[da].parent_indices[0],
+                population[da].parent_indices[1],
+                population[db].parent_indices[0],
+                population[db].parent_indices[1],
+            ];
+        }
+    }
+}
+
+/// Swap `migration_rate` fraction of agents between adjacent demes.
+pub fn migrate(
+    population: &mut [Agent],
+    grid_size: i32,
+    deme_divisions: usize,
+    migration_rate: f32,
+    rng: &mut impl Rng,
+) {
+    let demes = compute_demes(grid_size, deme_divisions);
+    let num_demes = demes.len();
+    let d = deme_divisions;
+
+    // Build per-deme member lists
+    let mut members: Vec<Vec<usize>> = vec![Vec::new(); num_demes];
+    for (i, agent) in population.iter().enumerate() {
+        let di = assign_deme(agent.x, agent.y, grid_size, deme_divisions);
+        members[di].push(i);
+    }
+
+    // Swap between horizontally and vertically adjacent demes
+    for dy in 0..d {
+        for dx in 0..d {
+            let di = dy * d + dx;
+            // Right neighbor (with wrap)
+            let right = dy * d + (dx + 1) % d;
+            if right != di {
+                swap_agents(
+                    population,
+                    &members[di],
+                    &members[right],
+                    &demes[right],
+                    migration_rate,
+                    rng,
+                );
+            }
+            // Down neighbor (with wrap)
+            let down = ((dy + 1) % d) * d + dx;
+            if down != di {
+                swap_agents(
+                    population,
+                    &members[di],
+                    &members[down],
+                    &demes[down],
+                    migration_rate,
+                    rng,
+                );
+            }
+        }
+    }
+}
+
+fn swap_agents(
+    population: &mut [Agent],
+    from_members: &[usize],
+    to_members: &[usize],
+    to_deme: &Deme,
+    migration_rate: f32,
+    rng: &mut impl Rng,
+) {
+    let swap_count =
+        ((from_members.len().min(to_members.len()) as f32 * migration_rate) as usize).max(0);
+    for _ in 0..swap_count {
+        if from_members.is_empty() || to_members.is_empty() {
+            break;
+        }
+        let fi = from_members[rng.gen_range(0..from_members.len())];
+        let ti = to_members[rng.gen_range(0..to_members.len())];
+        // Swap brains (positions stay - agents adopt new neighborhood)
+        let tmp_brain = population[fi].brain.clone();
+        let tmp_parent = population[fi].parent_indices;
+        let tmp_grand = population[fi].grandparent_indices;
+        population[fi].brain = population[ti].brain.clone();
+        population[fi].parent_indices = population[ti].parent_indices;
+        population[fi].grandparent_indices = population[ti].grandparent_indices;
+        population[ti].brain = tmp_brain;
+        population[ti].parent_indices = tmp_parent;
+        population[ti].grandparent_indices = tmp_grand;
+        // Move migrant to random position in target deme
+        population[ti].x = rng.gen_range(to_deme.x_min..to_deme.x_max);
+        population[ti].y = rng.gen_range(to_deme.y_min..to_deme.y_max);
+    }
 }
 
 #[cfg(test)]
@@ -467,6 +706,7 @@ mod tests {
             TEST_GRID,
             TEST_REPRO_RADIUS,
             TEST_FALLBACK_RADIUS,
+            1,
             &mut rng,
         );
         assert_eq!(next.len(), 20);
@@ -507,6 +747,7 @@ mod tests {
             TEST_GRID,
             TEST_REPRO_RADIUS,
             TEST_FALLBACK_RADIUS,
+            1,
             &mut rng,
         );
 
@@ -547,6 +788,7 @@ mod tests {
             TEST_GRID,
             TEST_REPRO_RADIUS,
             TEST_FALLBACK_RADIUS,
+            1,
             &mut rng,
         );
 
@@ -642,6 +884,7 @@ mod tests {
             TEST_GRID,
             TEST_REPRO_RADIUS,
             TEST_FALLBACK_RADIUS,
+            1,
             &mut rng,
         );
 
@@ -890,5 +1133,129 @@ mod tests {
             (std_dev - sigma).abs() < 0.02,
             "CLT gaussian std {std_dev} should be near {sigma}"
         );
+    }
+
+    // --- Deme infrastructure ---
+
+    #[test]
+    fn compute_demes_produces_correct_count() {
+        let demes = compute_demes(72, 3);
+        assert_eq!(demes.len(), 9);
+    }
+
+    #[test]
+    fn compute_demes_covers_grid() {
+        let demes = compute_demes(72, 3);
+        // Each deme should be 24 cells wide (72/3)
+        assert_eq!(demes[0].x_min, 0);
+        assert_eq!(demes[0].x_max, 24);
+        assert_eq!(demes[2].x_min, 48);
+        assert_eq!(demes[2].x_max, 72); // last column gets remainder
+    }
+
+    #[test]
+    fn assign_deme_maps_correctly() {
+        // 72x72 grid, 3 divisions -> 24-cell demes
+        assert_eq!(assign_deme(0, 0, 72, 3), 0);
+        assert_eq!(assign_deme(23, 0, 72, 3), 0);
+        assert_eq!(assign_deme(24, 0, 72, 3), 1);
+        assert_eq!(assign_deme(0, 24, 72, 3), 3);
+        assert_eq!(assign_deme(71, 71, 72, 3), 8);
+    }
+
+    #[test]
+    fn evolve_spatial_demes1_unchanged() {
+        // With deme_divisions=1, behavior should be identical
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha8Rng;
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let coords: Vec<(i32, i32)> = (0..20)
+            .map(|_| (rng.gen_range(0..TEST_GRID), rng.gen_range(0..TEST_GRID)))
+            .collect();
+        let population: Vec<Agent> = coords
+            .into_iter()
+            .map(|(x, y)| test_agent(&mut rng, x, y))
+            .collect();
+        let mut scored: Vec<(usize, f32)> = (0..20).map(|i| (i, i as f32)).collect();
+        let next = evolve_spatial(
+            &population,
+            &mut scored,
+            4,
+            3,
+            0.1,
+            TEST_GRID,
+            TEST_REPRO_RADIUS,
+            TEST_FALLBACK_RADIUS,
+            1,
+            &mut rng,
+        );
+        assert_eq!(next.len(), 20);
+    }
+
+    #[test]
+    fn evolve_spatial_with_demes_preserves_population() {
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha8Rng;
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        // Use a grid divisible by 2
+        let grid = 20;
+        let coords: Vec<(i32, i32)> = (0..20)
+            .map(|_| (rng.gen_range(0..grid), rng.gen_range(0..grid)))
+            .collect();
+        let population: Vec<Agent> = coords
+            .into_iter()
+            .map(|(x, y)| test_agent(&mut rng, x, y))
+            .collect();
+        let mut scored: Vec<(usize, f32)> = (0..20).map(|i| (i, i as f32)).collect();
+        let next = evolve_spatial(
+            &population,
+            &mut scored,
+            4,
+            3,
+            0.1,
+            grid,
+            TEST_REPRO_RADIUS,
+            TEST_FALLBACK_RADIUS,
+            2, // 2x2 = 4 demes
+            &mut rng,
+        );
+        assert_eq!(next.len(), 20);
+    }
+
+    #[test]
+    fn group_selection_preserves_population_size() {
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha8Rng;
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let grid = 24; // divisible by 3
+        let n = 27; // 3 per deme (3x3=9 demes)
+        let coords: Vec<(i32, i32)> = (0..n)
+            .map(|_| (rng.gen_range(0..grid), rng.gen_range(0..grid)))
+            .collect();
+        let mut population: Vec<Agent> = coords
+            .into_iter()
+            .map(|(x, y)| test_agent(&mut rng, x, y))
+            .collect();
+        let fitness: Vec<f32> = (0..n).map(|i| i as f32).collect();
+        group_selection(&mut population, &fitness, grid, 3, 0.1, &mut rng);
+        assert_eq!(population.len(), n);
+    }
+
+    #[test]
+    fn migrate_preserves_population_size() {
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha8Rng;
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let grid = 20;
+        let n = 20;
+        let coords: Vec<(i32, i32)> = (0..n)
+            .map(|_| (rng.gen_range(0..grid), rng.gen_range(0..grid)))
+            .collect();
+        let mut population: Vec<Agent> = coords
+            .into_iter()
+            .map(|(x, y)| test_agent(&mut rng, x, y))
+            .collect();
+        migrate(&mut population, grid, 2, 0.1, &mut rng);
+        assert_eq!(population.len(), n);
     }
 }
