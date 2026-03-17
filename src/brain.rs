@@ -1,6 +1,6 @@
 use rand::Rng;
 
-pub const INPUTS: usize = 36;
+pub const INPUTS: usize = 39;
 
 pub const MAX_BASE_HIDDEN: usize = 64;
 pub const MIN_BASE_HIDDEN: usize = 4;
@@ -391,9 +391,9 @@ mod tests {
 
     #[test]
     fn genome_length() {
-        // 36*64 + 64 + 64*5 + 5 + 64*32 + 32 + 32*6 + 6 + 64*8 + 8
-        // = 2304 + 64 + 320 + 5 + 2048 + 32 + 192 + 6 + 512 + 8 = 5491
-        assert_eq!(MAX_GENOME_LEN, 5491);
+        // 39*64 + 64 + 64*5 + 5 + 64*32 + 32 + 32*6 + 6 + 64*8 + 8
+        // = 2496 + 64 + 320 + 5 + 2048 + 32 + 192 + 6 + 512 + 8 = 5683
+        assert_eq!(MAX_GENOME_LEN, 5683);
     }
 
     #[test]

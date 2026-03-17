@@ -312,13 +312,12 @@ pub fn receive_detailed(
 
 /// Decide whether to emit a signal based on softmax of NN signal outputs.
 /// Returns `Some(symbol)` if max softmax probability > `1/NUM_SYMBOLS`, None otherwise.
-pub fn maybe_emit(signal_outputs: &[f32; SIGNAL_OUTPUTS]) -> Option<u8> {
+pub fn maybe_emit(signal_outputs: &[f32; SIGNAL_OUTPUTS], threshold: f32) -> Option<u8> {
     let probs = softmax(signal_outputs);
     let (max_idx, &max_prob) = probs
         .iter()
         .enumerate()
         .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))?;
-    let threshold = 1.0 / NUM_SYMBOLS as f32;
     if max_prob > threshold {
         Some(max_idx as u8)
     } else {
@@ -391,21 +390,29 @@ mod tests {
     fn emit_uniform_returns_none() {
         // Equal logits -> softmax = 1/6 each -> max == threshold -> no emission
         let outputs = [0.0_f32; SIGNAL_OUTPUTS];
-        assert!(maybe_emit(&outputs).is_none());
+        assert!(maybe_emit(&outputs, 1.0 / NUM_SYMBOLS as f32).is_none());
     }
 
     #[test]
     fn emit_concentrated_returns_symbol() {
         let mut outputs = [0.0_f32; SIGNAL_OUTPUTS];
         outputs[3] = 5.0; // symbol 3 dominant
-        assert_eq!(maybe_emit(&outputs), Some(3));
+        assert_eq!(maybe_emit(&outputs, 1.0 / NUM_SYMBOLS as f32), Some(3));
     }
 
     #[test]
     fn emit_slight_difference_returns_some() {
         let mut outputs = [0.0_f32; SIGNAL_OUTPUTS];
         outputs[1] = 0.01; // barely above others
-        assert_eq!(maybe_emit(&outputs), Some(1));
+        assert_eq!(maybe_emit(&outputs, 1.0 / NUM_SYMBOLS as f32), Some(1));
+    }
+
+    #[test]
+    fn high_threshold_suppresses_emission() {
+        let mut outputs = [0.0_f32; SIGNAL_OUTPUTS];
+        outputs[1] = 0.01; // barely above others, would emit at default 1/6
+                           // At threshold 0.5, softmax(0.01 vs 5 zeros) ~ 0.169, below 0.5
+        assert!(maybe_emit(&outputs, 0.5).is_none());
     }
 
     #[test]

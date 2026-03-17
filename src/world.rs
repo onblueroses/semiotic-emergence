@@ -10,11 +10,18 @@ use crate::signal::{self, Signal, SignalGrid, NUM_SYMBOLS};
 const FREEZE_MOVE_PENALTY: f32 = 3.0;
 const FREEZE_STILL_FACTOR: f32 = 0.1;
 
+// Death echoes persist for this many ticks (~6% of a 500-tick generation)
+const ECHO_DURATION: u32 = 30;
+
 // Input layout offsets derived from constants
 const SIGNAL_INPUT_START: usize = 9; // after pred(3) + food(3) + ally(3)
 const MEMORY_INPUT_START: usize = SIGNAL_INPUT_START + NUM_SYMBOLS * 3;
 const ENERGY_INPUT_IDX: usize = MEMORY_INPUT_START + MEMORY_SIZE;
-const _: () = assert!(ENERGY_INPUT_IDX + 1 == INPUTS, "input layout size mismatch");
+const DEATH_INPUT_START: usize = ENERGY_INPUT_IDX + 1;
+const _: () = assert!(
+    DEATH_INPUT_START + 3 == INPUTS,
+    "input layout size mismatch"
+);
 
 pub const INPUT_NAMES: [&str; INPUTS] = [
     "zone_damage",
@@ -53,6 +60,9 @@ pub const INPUT_NAMES: [&str; INPUTS] = [
     "mem6",
     "mem7",
     "energy",
+    "death_nearby",
+    "death_dx",
+    "death_dy",
 ];
 
 /// Wrap-aware signed delta: shortest path on a toroidal grid.
@@ -393,6 +403,8 @@ pub struct World {
     pub zone_deaths: u32,
     /// Count of prey that died while inside at least one freeze zone.
     pub freeze_zone_deaths: u32,
+    /// Recent zone deaths for death witness inputs: (x, y, tick).
+    pub recent_zone_deaths: Vec<(i32, i32, u32)>,
     // Spatial indices (rebuilt each tick for prey/signals, maintained incrementally for food)
     prey_grid: PreyGrid,
     food_grid: CellGrid,
@@ -413,6 +425,7 @@ pub struct World {
     pub patch_ratio: f32,
     pub zone_drain_rate: f32,
     pub signal_ticks: u32,
+    pub signal_threshold: f32,
 }
 
 impl World {
@@ -435,6 +448,7 @@ impl World {
         zone_drain_rate: f32,
         signal_ticks: u32,
         num_freeze_zones: usize,
+        signal_threshold: f32,
     ) -> Self {
         let brains: Vec<Brain> = agents.iter().map(|a| a.brain.clone()).collect();
         let compact_brains: Vec<CompactBrain> =
@@ -517,6 +531,7 @@ impl World {
             collect_metrics,
             zone_deaths: 0,
             freeze_zone_deaths: 0,
+            recent_zone_deaths: Vec::new(),
             prey_grid: PreyGrid::new(grid_size),
             food_grid,
             signal_grid: SignalGrid::new(grid_size, signal_range),
@@ -533,6 +548,7 @@ impl World {
             patch_ratio,
             zone_drain_rate,
             signal_ticks,
+            signal_threshold,
         }
     }
 
@@ -593,6 +609,11 @@ impl World {
     #[allow(clippy::too_many_lines)]
     pub fn step(&mut self, rng: &mut impl Rng) {
         self.tick += 1;
+
+        // Prune expired death echoes
+        let tick = self.tick;
+        self.recent_zone_deaths
+            .retain(|&(_, _, t)| tick.saturating_sub(t) <= ECHO_DURATION);
 
         let signals_before = self.signals_emitted;
 
@@ -666,7 +687,7 @@ impl World {
                     }
                 }
                 // Emit decision: pure softmax + threshold (moved from sequential phase)
-                let emit = signal::maybe_emit(&result.signals);
+                let emit = signal::maybe_emit(&result.signals, self.signal_threshold);
                 (i, inputs, result, zone_dist, action, emit)
             })
             .collect_into_vec(&mut computed);
@@ -809,6 +830,33 @@ impl World {
 
         // Own energy
         inp[ENERGY_INPUT_IDX] = p.energy.clamp(0.0, 1.0);
+
+        // Death witness: nearest recent zone death within signal_range
+        let sig_range_sq = self.signal_range * self.signal_range;
+        let mut best_intensity = 0.0_f32;
+        let mut best_dx = 0.0_f32;
+        let mut best_dy = 0.0_f32;
+        for &(dx, dy, death_tick) in &self.recent_zone_deaths {
+            let ddx = wrap_delta(p.x, dx, self.grid_size) as f32;
+            let ddy = wrap_delta(p.y, dy, self.grid_size) as f32;
+            let dist_sq = ddx * ddx + ddy * ddy;
+            if dist_sq > sig_range_sq {
+                continue;
+            }
+            let dist = dist_sq.sqrt();
+            let spatial_decay = 1.0 - dist / self.signal_range;
+            let age = self.tick.saturating_sub(death_tick) as f32;
+            let temporal_decay = 1.0 - age / ECHO_DURATION as f32;
+            let intensity = spatial_decay * temporal_decay;
+            if intensity > best_intensity {
+                best_intensity = intensity;
+                best_dx = ddx / gs;
+                best_dy = ddy / gs;
+            }
+        }
+        inp[DEATH_INPUT_START] = best_intensity;
+        inp[DEATH_INPUT_START + 1] = best_dx;
+        inp[DEATH_INPUT_START + 2] = best_dy;
 
         inp
     }
@@ -983,8 +1031,11 @@ impl World {
 
         for pidx in 0..self.prey.len() {
             if self.prey[pidx].alive && self.prey[pidx].zone_damage >= 1.0 {
+                let death_x = self.prey[pidx].x;
+                let death_y = self.prey[pidx].y;
                 self.prey[pidx].alive = false;
                 self.zone_deaths += 1;
+                self.recent_zone_deaths.push((death_x, death_y, self.tick));
                 // Attribute to freeze if inside any freeze zone
                 let px = self.prey[pidx].x as f32;
                 let py = self.prey[pidx].y as f32;
@@ -1133,8 +1184,10 @@ mod tests {
             patch_ratio: TEST_PATCH_RATIO,
             zone_drain_rate: TEST_ZONE_DRAIN_RATE,
             signal_ticks: 4,
+            signal_threshold: 1.0 / 6.0,
             zone_deaths: 0,
             freeze_zone_deaths: 0,
+            recent_zone_deaths: Vec::new(),
         };
         w.rebuild_prey_grid();
         w
@@ -1547,6 +1600,7 @@ mod tests {
             TEST_ZONE_DRAIN_RATE,
             4,
             0,
+            1.0 / 6.0,
         );
 
         assert_eq!(world.prey[0].x, 3);
@@ -1995,6 +2049,7 @@ mod tests {
             TEST_ZONE_DRAIN_RATE,
             4,
             0,
+            1.0 / 6.0,
         );
 
         for &m in &world.prey[0].memory {
@@ -2019,5 +2074,71 @@ mod tests {
                 );
             }
         }
+    }
+
+    // --- Death echo tracking ---
+
+    #[test]
+    fn zone_drain_records_death_echo() {
+        // Place prey at zone center so it dies quickly
+        let mut world = minimal_world(&[(10, 10)], (10.0, 10.0));
+        world.zone_drain_rate = 1.5; // kills in one tick
+        world.tick = 5;
+        world.zone_drain();
+        assert!(!world.prey[0].alive);
+        assert_eq!(world.recent_zone_deaths.len(), 1);
+        assert_eq!(world.recent_zone_deaths[0], (10, 10, 5));
+    }
+
+    #[test]
+    fn death_echo_pruned_after_duration() {
+        let mut world = minimal_world(&[(5, 5)], (0.0, 0.0));
+        // Manually insert an old death echo
+        world.recent_zone_deaths.push((10, 10, 1));
+        world.tick = ECHO_DURATION + 2; // past expiry
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        world.step(&mut rng);
+        assert!(world.recent_zone_deaths.is_empty());
+    }
+
+    #[test]
+    fn death_witness_nonzero_for_nearby_death() {
+        let mut world = minimal_world(&[(12, 10)], (0.0, 0.0));
+        world.tick = 10;
+        // Death at (10, 10), 2 cells from prey at (12, 10)
+        world.recent_zone_deaths.push((10, 10, 10));
+        world.rebuild_prey_grid();
+        let inputs = world.build_inputs(0);
+        // death_nearby should be positive (within signal_range=8)
+        assert!(
+            inputs[DEATH_INPUT_START] > 0.0,
+            "death_nearby should be positive"
+        );
+        // dx should be negative (death is to the left)
+        assert!(
+            inputs[DEATH_INPUT_START + 1] < 0.0,
+            "death_dx should be negative"
+        );
+        // dy should be ~0 (same row)
+        assert!(
+            inputs[DEATH_INPUT_START + 2].abs() < 0.01,
+            "death_dy should be ~0"
+        );
+    }
+
+    #[test]
+    fn death_witness_zero_for_distant_death() {
+        let mut world = minimal_world(&[(0, 0)], (0.0, 0.0));
+        world.tick = 10;
+        // Death at (15, 15) - farther than signal_range (8.0) from (0, 0) on 20x20 grid
+        // Distance = sqrt(25+25) = 7.07 on wrap... actually let's use (0, 10) which is 10 cells away
+        world.recent_zone_deaths.push((0, 10, 10));
+        world.rebuild_prey_grid();
+        let inputs = world.build_inputs(0);
+        // 10 cells > signal_range of 8, so should be zero
+        assert!(
+            inputs[DEATH_INPUT_START].abs() < f32::EPSILON,
+            "death_nearby should be zero for out-of-range death"
+        );
     }
 }
