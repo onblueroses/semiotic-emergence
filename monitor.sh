@@ -23,7 +23,8 @@ sample() {
         return
     fi
     local last_line
-    last_line=$(tail -1 "$CSV" 2>/dev/null) || return
+    # Use second-to-last line to avoid partial writes (sim doesn't flush atomically)
+    last_line=$(tail -2 "$CSV" 2>/dev/null | head -1) || return
     # Skip if header or empty
     case "$last_line" in generation*|"") return ;; esac
 
