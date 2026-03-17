@@ -35,12 +35,25 @@ show_run() {
     local flags=$(grep "^extra_flags:" "$meta_file" | cut -d' ' -f2-)
     local commit=$(grep "^git_commit:" "$meta_file" | cut -d' ' -f2-)
 
-    printf "%-30s  %-8s  seed=%-6s  gen=%-8s  commit=%s\n" "$name" "$status" "$seed" "$gen" "$commit"
+    local throughput_file="$dir/throughput.tsv"
+    local speed=""
+    if [ -f "$throughput_file" ] && [ "$(wc -l < "$throughput_file")" -gt 1 ]; then
+        speed=$(tail -1 "$throughput_file" | cut -f4)
+        speed=" ${speed} gen/min"
+    fi
 
-    if [ "$2" = "verbose" ] && [ -f "$log_file" ]; then
-        echo "  Latest:"
-        tail -1 "$log_file" 2>/dev/null | sed 's/^/    /'
-        echo ""
+    printf "%-30s  %-8s  seed=%-6s  gen=%-8s%s  commit=%s\n" "$name" "$status" "$seed" "$gen" "$speed" "$commit"
+
+    if [ "$2" = "verbose" ]; then
+        if [ -f "$throughput_file" ] && [ "$(wc -l < "$throughput_file")" -gt 1 ]; then
+            echo "  Throughput:"
+            column -t -s$'\t' "$throughput_file" | tail -5 | sed 's/^/    /'
+            echo ""
+        elif [ -f "$log_file" ]; then
+            echo "  Latest:"
+            tail -1 "$log_file" 2>/dev/null | sed 's/^/    /'
+            echo ""
+        fi
     fi
 }
 

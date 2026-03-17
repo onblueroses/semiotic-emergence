@@ -9,11 +9,13 @@
 #   - run.log (stdout/stderr)
 #   - meta.txt (git commit, binary hash, full command, timestamp)
 #   - pid.txt (process ID for monitoring)
+#   - throughput.tsv (hourly throughput + metrics snapshots from monitor.sh)
 
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 BINARY="$REPO_DIR/target/release/semiotic-emergence"
+MONITOR="$REPO_DIR/monitor.sh"
 RUNS_DIR="$REPO_DIR/runs"
 
 # --- Validate args ---
@@ -82,8 +84,20 @@ echo "$PID" > pid.txt
 sleep 2
 if kill -0 "$PID" 2>/dev/null; then
     echo "PID:    $PID (running)"
+
+    # Start throughput monitor as companion process
+    START_EPOCH=$(date +%s)
+    if [ -x "$MONITOR" ]; then
+        nohup "$MONITOR" "$RUN_DIR" "$PID" "$START_EPOCH" \
+            > /dev/null 2>&1 </dev/null &
+        MONITOR_PID=$!
+        echo "$MONITOR_PID" > monitor_pid.txt
+        echo "Monitor: $MONITOR_PID (throughput sampling every hour)"
+    fi
+
     echo ""
-    echo "Monitor: tail -f $RUN_DIR/run.log"
+    echo "Logs:    tail -f $RUN_DIR/run.log"
+    echo "Speed:   cat $RUN_DIR/throughput.tsv"
     echo "Status:  ./status.sh"
     echo "Stop:    kill $PID"
 else
