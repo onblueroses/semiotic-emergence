@@ -40,15 +40,15 @@ Mutual information alone cannot distinguish between these. The receiver-side ins
 
 ## The observer's Umwelt
 
-We inhabit a fundamentally different semiotic space than the prey. We see the entire grid, all positions, all statistics. We compute cross-generational trends. The prey see 36 floating-point numbers.
+We inhabit a fundamentally different semiotic space than the prey. We see the entire grid, all positions, all statistics. We compute cross-generational trends. The prey see 39 floating-point numbers.
 
-When we say "symbol 0 means danger-nearby," we are translating from their Umwelt into ours. But what does symbol 0 mean in their Umwelt? Not "danger nearby" - they don't have that concept. It means: a specific activation pattern in a 5491-weight split-head network produced this output given these inputs. That is what it "means" inside the network.
+When we say "symbol 0 means danger-nearby," we are translating from their Umwelt into ours. But what does symbol 0 mean in their Umwelt? Not "danger nearby" - they don't have that concept. It means: a specific activation pattern in a 5683-weight split-head network produced this output given these inputs. That is what it "means" inside the network.
 
 Any claim about what signals mean is a translation, and translation always loses something. We project our categories (zone, distance, danger) onto their signal-context relationships. The actual semiotic structure of the prey's world might be organized along entirely different dimensions.
 
 This is why unsupervised analysis matters. Instead of asking "do signals encode zone distance?" (our question, our categories), ask "what structure exists in the relationship between signals, contexts, and responses?" and let the patterns reveal whatever categories the prey have actually evolved.
 
-The neural network's 36 inputs include 3 dead inputs (zones are invisible), food direction and distance, ally direction and distance, 18 signal channels (6 symbols x strength/direction), 8 recurrent memory cells, and energy level. Signal outputs pass through a dedicated signal hidden layer, giving evolution capacity for independent signal control. Our mutual information metric only checks correlation with one dimension (zone distance - an observer metric, not a prey input). The prey might be signaling about energy level, food proximity, ally density, memory state, the incoming signals themselves, or some nonlinear combination that doesn't decompose into any single variable. Input MI - I(Symbol; X_i) for each of the 36 input dimensions - partially addresses this by letting the data reveal which dimensions signals actually correlate with. But it still decomposes into single variables; nonlinear combinations remain in the dark.
+The neural network's 39 inputs include 3 body-state inputs (zone damage accumulation, energy delta, freeze pressure - the prey feel pain but can't see its source), food direction and distance, ally direction and distance, 18 signal channels (6 symbols x strength/direction), 8 recurrent memory cells, energy level, and 3 death witness inputs (intensity, direction to nearest recent zone death). Signal outputs pass through a dedicated signal hidden layer, giving evolution capacity for independent signal control. Our mutual information metric only checks correlation with one dimension (zone distance - an observer metric, not a prey input). The prey might be signaling about energy level, food proximity, ally density, memory state, the incoming signals themselves, death witness information, or some nonlinear combination that doesn't decompose into any single variable. Input MI - I(Symbol; X_i) for each of the 39 input dimensions - partially addresses this by letting the data reveal which dimensions signals actually correlate with. But it still decomposes into single variables; nonlinear combinations remain in the dark.
 
 The invisibility of kill zones deepens the observer's Umwelt problem. We measure MI against zone distance because *we* can see the zones. The prey cannot. If signals correlate with zone distance, that correlation must be mediated through observable channels - energy loss, received signals from other prey, or memory of recent energy trajectories. This indirection makes any observed MI more meaningful: it can't be a trivial spandrel of shared sensory input.
 
@@ -70,7 +70,7 @@ Whether silence or alarm calling stabilizes as the dominant strategy over long e
 
 ## The semiotic landscape
 
-The genome defines a point in high-dimensional weight space (5491 dimensions in the current architecture). Different regions produce agents with different semiotic configurations. This is not a metaphor - the weight space is literally a latent space, and its topology determines what meaning-making systems are possible.
+The genome defines a point in high-dimensional weight space (5683 dimensions in the current architecture). Different regions produce agents with different semiotic configurations. This is not a metaphor - the weight space is literally a latent space, and its topology determines what meaning-making systems are possible.
 
 **Basins.** Regions where populations converge on stable signal-meaning mappings. Different basins represent different possible communication systems.
 
@@ -82,7 +82,7 @@ The genome defines a point in high-dimensional weight space (5491 dimensions in 
 
 Running multiple populations from different seeds samples this landscape. Convergence tells us what's constrained by the world. Divergence tells us what's invented by the population.
 
-**The semiotic landscape is now 5491-dimensional** (up from 158 in early runs). The split-head architecture adds two independent hidden size genes that control the effective dimensionality: a population with base_hidden=4 and signal_hidden=6 uses a different region of weight space than one with base_hidden=12 and signal_hidden=2, even if total capacity is similar. Brain compression (evolution shrinking hidden layers to save metabolic cost) is itself a semiotic phenomenon - the population is discovering which dimensions of the landscape matter.
+**The semiotic landscape is now 5683-dimensional** (up from 158 in early runs). The split-head architecture adds two independent hidden size genes that control the effective dimensionality: a population with base_hidden=4 and signal_hidden=6 uses a different region of weight space than one with base_hidden=12 and signal_hidden=2, even if total capacity is similar. Brain compression (evolution shrinking hidden layers to save metabolic cost) is itself a semiotic phenomenon - the population is discovering which dimensions of the landscape matter.
 
 ## The bootstrap as phase transition
 
@@ -91,6 +91,8 @@ The bootstrap problem - no sender without receiver, no receiver without sender -
 Below some critical level of genetic similarity, spatial proximity, or selection pressure, signal-response correlations are random fluctuations that don't persist. Above it, they lock in and become self-reinforcing. Spatial reproduction is the mechanism for local correlation: offspring inherit positions near their parents, creating natural kin clusters where genetically similar individuals share overlapping signal ranges. No artificial grouping is needed - the spatial structure itself generates the conditions for complementary sender-receiver weights to co-occur.
 
 If this is right, the emergence of meaning should show phase transition signatures: increasing fluctuations before the transition, a sharp change at the critical point, and hysteresis (once established, the system persists even if conditions partially revert).
+
+Deme-based group selection provides a second mechanism for crossing the phase boundary. When the grid is divided into demes (rectangular subpopulations), evolution operates at two levels: individual fitness within demes, and deme-level selection between demes. Demes where communication emerges outcompete silent demes, providing group-level reinforcement that individual selection alone cannot. Migration between adjacent demes prevents complete isolation while preserving deme identity. This multi-level selection is the theoretical mechanism most likely to overcome the bootstrap problem - it rewards the sender-receiver pair rather than punishing the altruistic sender.
 
 ## What makes a meaning-making system survive
 
@@ -102,7 +104,7 @@ Some populations might evolve communication that persists for hundreds of genera
 
 **Symmetry.** Systems where the sender benefits as much as the receiver are stickier than altruistic systems. Selfish communication is more durable than generous communication.
 
-**Population structure.** Meaning-making maintained by spatial kin clusters may be more fragile than population-wide convention, because local clusters are vulnerable to demographic fluctuation and zone pressure. But spatial reproduction continuously regenerates kin proximity, which may provide more durable support than artificial grouping.
+**Population structure.** Meaning-making maintained by spatial kin clusters may be more fragile than population-wide convention, because local clusters are vulnerable to demographic fluctuation and zone pressure. But spatial reproduction continuously regenerates kin proximity, which may provide more durable support than artificial grouping. Deme structure adds a second layer: communication systems that help entire demes survive get reinforced through group selection, even if individual signalers pay a cost.
 
 ## Dark semiotics
 
@@ -124,7 +126,7 @@ The original five measurements have grown into a fuller observatory as the proje
 
 ### What are signals encoding?
 
-**Mutual information.** I(Signal; ZoneDistance) - the foundational sender-side metric. But it uses observer-imposed bins, measuring correlation with *our* categories. **Input MI** addresses this by computing I(Symbol; X_i) for all 36 input dimensions without imposing categories - letting the data reveal what signals actually encode. **Signal entropy** (Shannon entropy of symbol frequencies) captures pre-semiotic organization that MI misses: a population converging on specific symbols even before those symbols carry measurable information. **Iconicity** measures whether signal rate rises or falls inside zones - alarm calling vs silence.
+**Mutual information.** I(Signal; ZoneDistance) - the foundational sender-side metric. But it uses observer-imposed bins, measuring correlation with *our* categories. **Input MI** addresses this by computing I(Symbol; X_i) for all 39 input dimensions without imposing categories - letting the data reveal what signals actually encode. **Signal entropy** (Shannon entropy of symbol frequencies) captures pre-semiotic organization that MI misses: a population converging on specific symbols even before those symbols carry measurable information. **Iconicity** measures whether signal rate rises or falls inside zones - alarm calling vs silence.
 
 ### How do receivers respond?
 

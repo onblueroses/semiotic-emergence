@@ -6,7 +6,22 @@
 
 **Binary:** `RUSTFLAGS="-C target-cpu=znver3" cargo build --release`. Fat LTO, codegen-units=1, panic=abort.
 
-### v5 (current) - pop=1000, grid=72
+### v7 (current) - pop=1000, grid=72, demes=3
+
+**Config:** 1000 prey, 72x72 grid, 18% zone coverage (flee + freeze), 100 food, 500 ticks/gen, `--metrics-interval 10`, `--demes 3`, `--signal-threshold 0.3`.
+
+**Speed (2026-03-17, commit 5cf1d66):**
+
+| Run | Threads | Gen/min | Notes |
+|-----|---------|---------|-------|
+| v7-signals-42 | 9 | ~210 | Full signals + demes + death witness |
+| v7-mute-42 | 3 | ~230 | --no-signals counterfactual |
+
+Deme logic (assign_deme, group_selection every 100 gens, migrate every gen) adds negligible overhead - gated behind `if deme_divisions > 1`. Death witness input computation (linear scan of recent_zone_deaths, typically <50 entries) is similarly lightweight.
+
+v7 vs v5 at same thread count: roughly comparable. The 39-input brain (vs 36) and death echo tracking add minimal cost. The throughput difference between signal and mute runs (~10%) reflects signal propagation overhead, consistent with v3 measurements (~35% of wall time in receive_detailed).
+
+### v5 - pop=1000, grid=72
 
 **Config:** 1000 prey, 72x72 grid, ~10 zones (30% coverage), 100 food, 500 ticks/gen, `--metrics-interval 10`.
 
@@ -110,7 +125,7 @@ Six optimizations targeting per-tick overhead:
 | Change | Mechanism |
 |--------|-----------|
 | Slim Prey struct | Removed Brain from Prey (~22KB -> ~120 bytes). Brains stored in separate `Vec<Brain>`. Per-prey loops now fit in L2 cache. |
-| CompactBrain dense forward | Packs only active weights contiguously (~700 vs 5491). Dense indexing gives 100% cache utilization vs ~19% for sparse genome layout. |
+| CompactBrain dense forward | Packs only active weights contiguously (~700 vs 5683). Dense indexing gives 100% cache utilization vs ~12% for sparse genome layout. |
 | sqrt skip on non-metrics gens | `is_in_zone()` uses dist_sq comparison (no sqrt). Full `nearest_zone_edge_dist` only on metrics generations. |
 | Conditional wrap (rem_euclid elimination) | `wrap_coord()` replaces `rem_euclid()` in all ring loops, movement, and cooperative food checks. Compiles to CMOV (~2 cycles) vs division (~20-40 cycles). |
 | Spatial zone_drain | Iterates zones, queries prey_grid cells within bounding box. ~150 checks vs ~3000 (3 zones x 1000 prey). |
@@ -149,7 +164,7 @@ Signal reception uses `SignalGrid` spatial index for O(nearby) lookup instead of
 
 1. ~~**Signal spatial grid.**~~ Implemented as `SignalGrid` with SoA layout, prefix-sum offsets, ring search with per-symbol early exit.
 2. ~~**Slim Prey struct.**~~ Brain moved to `World.brains` vec. Prey is ~120 bytes, fits in L2.
-3. ~~**CompactBrain dense forward.**~~ Packs active weights contiguously (~700 vs 5491). 100% cache utilization.
+3. ~~**CompactBrain dense forward.**~~ Packs active weights contiguously (~700 vs 5683). 100% cache utilization.
 4. ~~**sqrt skip on non-metrics gens.**~~ `is_in_zone()` uses dist_sq, no sqrt. Full distance only on metrics gens.
 5. ~~**rem_euclid -> conditional wrap.**~~ `wrap_coord()` in all ring loops, movement, food checks. CMOV vs division.
 6. ~~**Spatial zone_drain.**~~ Queries prey_grid cells within zone bounding box. ~150 checks vs ~3000.
