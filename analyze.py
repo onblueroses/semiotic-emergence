@@ -32,6 +32,7 @@ CURRENT_COLUMNS = frozenset({
     "silence_move_delta", "signal_entropy",
     "avg_base_hidden", "min_base_hidden", "max_base_hidden",
     "avg_signal_hidden", "min_signal_hidden", "max_signal_hidden",
+    "zone_deaths", "freeze_zone_deaths",
 })
 
 LEGACY_22_COLUMNS = frozenset({
@@ -57,7 +58,7 @@ COLUMN_RENAMES = {
     "signal_count": "signals_emitted",
 }
 
-KEY_METRICS = ["avg_fitness", "avg_base_hidden", "avg_signal_hidden", "mutual_info", "jsd_pred", "silence_corr"]
+KEY_METRICS = ["avg_fitness", "avg_base_hidden", "avg_signal_hidden", "mutual_info", "jsd_pred", "silence_corr", "signal_entropy"]
 
 COMPARISON_ROWS = [
     ("Generations",       None,                   None,        ","),
@@ -484,8 +485,8 @@ def print_summary(run: Run, stats: dict):
               f"[{s.get('min_signal_hidden', {}).get('final', 0):.0f}-{s.get('max_signal_hidden', {}).get('final', 0):.0f}]"
               f"  (peak {ash.get('peak', 0):.1f} at gen {ash.get('peak_gen', 0):,})")
         total = ab.get("final", 0) + ash.get("final", 0)
-        drain = 0.0008 + total * 0.00001
-        print(f"    Total neurons:  {total:.1f}  drain={drain:.5f}/tick  ({drain * 500:.2f} over 500 ticks)")
+        drain = 0.0008  # base metabolic drain only; neuron_cost is 0.0 (brain size is free)
+        print(f"    Total neurons:  {total:.1f}  base drain={drain:.5f}/tick  ({drain * 500:.2f} over 500 ticks)")
 
     mi = s.get("mutual_info", {})
     print("\n  MUTUAL INFORMATION")
@@ -795,8 +796,8 @@ def plot_run(run: Run, rolling: dict, cps: dict, output_dir: Path, traj: Traject
     # Panel 2: Signal metrics
     ax2 = axes[0, 1]
     ax2.set_title("Signal Metrics")
-    colors = {"mutual_info": "#FF9800", "jsd_pred": "#9C27B0", "silence_corr": "#F44336"}
-    for m in ["mutual_info", "jsd_pred", "silence_corr"]:
+    colors = {"mutual_info": "#FF9800", "jsd_pred": "#9C27B0", "silence_corr": "#F44336", "signal_entropy": "#009688"}
+    for m in ["mutual_info", "jsd_pred", "silence_corr", "signal_entropy"]:
         arr = run.get(m)
         if arr is None:
             continue
@@ -871,8 +872,8 @@ def plot_counterfactual(standard: Run, control: Run, result: dict, output_dir: P
 
 def plot_comparison(runs: list[Run], output_dir: Path):
     plt = _import_plt()
-    metrics = [("avg_fitness", "Fitness"), ("avg_base_hidden", "Base Hidden"),
-               ("avg_signal_hidden", "Signal Hidden"), ("mutual_info", "Mutual Info")]
+    metrics = [("avg_fitness", "Fitness"), ("mutual_info", "Mutual Info"),
+               ("signal_entropy", "Signal Entropy"), ("jsd_pred", "Receiver JSD (in-zone)")]
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     fig.suptitle("Run Comparison", fontsize=14)
 
