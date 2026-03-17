@@ -10,6 +10,9 @@ Experimental history of semiotic-emergence. Each era documents what we tested, w
 - [Era 3: Architecture v2](#era-3-architecture-v2) - Split-head brain, 6 symbols, memory, patches, kin
 - [Era 4: Kill Zones](#era-4-kill-zones) - Invisible danger, zone damage, food encoding
 - [Era 5: Counterfactual Testing](#era-5-counterfactual-testing) - Do signals have adaptive value?
+- [Era 6: Heterogeneous Kill Zones](#era-6-heterogeneous-kill-zones) - Freeze + flee zones
+- [Era 7: Information Asymmetry + Group Selection](#era-7-information-asymmetry--group-selection) - Death echoes, demes, threshold
+- [Cross-Era Analysis](#cross-era-analysis-the-metric-problem) - The metric problem
 - [Standing Conclusions](#standing-conclusions)
 
 ---
@@ -31,6 +34,10 @@ Every significant run, its parameters, and headline result.
 | cf-s100 | 5 | 100 | 96,570 | drain 0.10 (accidental), signals on | Signals net negative (-25.5% vs mute) |
 | cf-s101 | 5 | 101 | 95,270 | same | Reproduces cf-s100 within 1.7% fitness |
 | mute-s100 | 5 | 100 | 148,970 | drain 0.10, --no-signals | 20-25% fitter than baselines |
+| v6-s300 | 6 | 300 | 98,590 | drain 0.02, freeze zones, signals on | Food encoding MI 0.137 (input_mi), zone MI ~0 |
+| v6-mute-s300 | 6 | 300 | 133,160 | drain 0.02, freeze zones, --no-signals | ~8% fitter than signal run |
+| v7-sig-42 | 7 | 42 | 94,820 | pop=1000, drain 0.05, demes, death echoes, threshold 0.3 | Signals -12.8%, memory encoding, zone MI ~0 |
+| v7-mute-42 | 7 | 42 | 100,520 | same, --no-signals | baseline |
 
 Detailed per-run analysis: `findings/` directory. Data files: `analysis/` directory.
 
@@ -404,6 +411,145 @@ Experimental design: `findings/2026-03-12-overnight-experiment.md`
 
 ---
 
+## Era 6: Heterogeneous Kill Zones
+
+*Question: Do different zone types (requiring opposite responses) create richer communication?*
+
+### The design
+
+Added freeze zones alongside existing flee zones. Flee zones: move away is optimal (gradient damage). Freeze zones: stay still is optimal (3x damage for moving, 0.1x for staying). New brain input 2 (freeze_pressure) gives gradient depth in nearest freeze zone.
+
+Parameters: pop=384, grid=56, 3 flee zones + 2 freeze zones, drain=0.02, signal_cost=0.002, kin_bonus=0.10, neuron_cost=0.0. Seed 300.
+
+### Findings
+
+**1. Food encoding persisted but zone MI collapsed.** Input MI analysis reveals v6 had the STRONGEST food encoding of any run: mi_food_dx = 0.137 (vs Era 4's 0.098). But headline MI (I(Signal; ZoneDistance)) stayed near zero (0.001-0.006). The metric was measuring signal-zone correlation while signals were encoding food location.
+
+**2. Signals still net negative (-8%).** v6-mute-s300 sustained avg fitness ~1350 vs v6-signal-s300 at ~1250. The 2x2 matrix is now complete for 0.02 drain:
+
+|  | 0.02 drain | 0.05 drain | 0.10 drain |
+|--|-----------|-----------|-----------|
+| signals | -8% (v6) | -12.8% (v7) | -25.5% (Era 5) |
+| mute | baseline (v6-mute) | baseline (v7-mute) | baseline (mute-s100) |
+
+Signals are net negative at every drain rate tested.
+
+**3. Signal_hidden stable at 24.** Unlike v7's boom-bust, v6 maintained high signal processing capacity. The signal pathway was being used - but for food encoding, not zone encoding.
+
+**4. Freeze zones added a free information channel.** Input 2 (freeze_pressure) gives prey 0.0-1.0 gradient depth inside freeze zones. This tells them they're in a freeze zone and how deep - information that would otherwise require signals from outside. Adding this input reduced signal value.
+
+**5. Heterogeneous threats made zone signaling harder, not easier.** With two zone types requiring opposite responses (flee vs freeze), a generic "danger nearby" signal becomes useless. The population would need to evolve two distinct danger conventions simultaneously - one per zone type. This never happened.
+
+### Cross-era input MI comparison
+
+What signals actually encoded in each era (final generations, top inputs):
+
+| Era | #1 encoding | MI value | #2 encoding | MI value |
+|-----|-------------|----------|-------------|----------|
+| Era 4 (seed42) | signal relay (sig3_str) | 0.100 | food_dy | 0.098 |
+| v6 (seed300) | **food_dx** | **0.137** | signal relay (sig1_str) | 0.043 |
+| v7 (seed42) | memory (mem3) | 0.090 | zone_damage | 0.066 |
+
+The trajectory across eras: Era 4 encoded food + relay. v6 amplified food encoding to its highest ever. v7 lost food encoding entirely, replaced by self-referential memory encoding - "signals about internal state about nothing."
+
+### What went wrong
+
+The headline MI metric (I(Signal; ZoneDistance)) was blind to food encoding. For three eras we optimized toward zone-based communication while the system was already achieving food-based communication that the metric didn't capture. This led to adding features (death echoes, demes, threshold tuning) that addressed a non-existent problem while degrading what was actually working.
+
+---
+
+## Era 7: Information Asymmetry + Group Selection
+
+*Question: Do death witness inputs, demes, and configurable signal threshold improve communication?*
+
+### The design
+
+Three code changes plus seven parameter changes from v6:
+
+**Code features:**
+- Death witness inputs (brain inputs 36-38): intensity + direction to nearest recent zone death within signal_range. Creates 3-tier information chain (witnesses > signal receivers > uninformed).
+- Deme-based group selection: 3x3 grid of 9 demes. Migration rate 0.05/gen. Group selection every 100 gens (bottom 1/3 demes lose lowest 20%, replaced by top 1/3 donors).
+- Configurable signal threshold: 0.3 (was hardcoded 1/6). Silence as default state.
+
+**Parameter changes:** pop 384->1000, grid 56->72, drain 0.02->0.05, signal_cost 0.002->0.0002, kin_bonus 0.10->0.25, signal_range default->16, demes 1->3.
+
+### Findings
+
+**1. Signals net negative (-12.8%).** Counterfactual signal value integral: -5,902,274. Sustained fitness: signals 635.9, mute 710.
+
+**2. MI identical to v6.** Sustained MI 0.0017 (v7) vs 0.003-0.006 (v6). The three new features and seven parameter changes produced zero improvement.
+
+**3. Food encoding lost.** mi_food_dx dropped from 0.137 (v6) to 0.028 (v7). Replaced by memory encoding (mi_mem3 = 0.090) and zone_damage (0.066). Signals became self-referential.
+
+**4. Signal_hidden boom-bust.** Peaked at 31 (gen 34k), crashed to 17 by end. Evolution grew signal capacity, found no fitness gradient, let it drift. Negative correlation with fitness (r=-0.307).
+
+**5. Death echoes reduced signal value.** Inputs 36-38 gave prey directional danger information for free, making signals redundant for zone avoidance. Each feature added to "help" communication provided an alternative information channel that competed with signals.
+
+**6. Demes too coarse.** Group selection every 100 gens cannot rescue signaling conventions that drift every generation. Migration rate 0.05 means demes barely differentiate before mixing.
+
+**7. Higher threshold reduced signal diversity.** Signal entropy 1.17-1.27 (v7) vs 1.64 (v6). The "silence as default" idea reduced the signal landscape evolution could explore, correlating with lower MI.
+
+**8. response_fit_corr = 0.000.** Still. Always. 0% of metric windows active across 94,820 generations.
+
+### Full analysis output
+
+```
+Sustained avg fitness:  635.9  (signals) vs ~710 (mute)
+MI sustained:           0.0017
+Signal hidden:          17.3 [11-23] (peak 31.0 at gen 33,970)
+Base hidden:            8.5 [6-12]
+JSD (pred/no_pred):     0.265 / 0.244
+Silence corr:           -0.020
+Sender-fitness:         0.000
+Response-fitness:       0.000
+Signal entropy:         ~1.1
+```
+
+### The pattern across all eras
+
+Every era adds features to "help" signals emerge. Every era produces the same result: MI near zero, response_fit_corr at zero, mute populations do as well or better. The one genuine positive result - Era 4's food encoding at 0.02 drain - happened with the simplest feature set and was degraded by subsequent additions.
+
+| Era | Features added | Effect on signals |
+|-----|---------------|-------------------|
+| 4 | Kill zones (invisible), free brains | Food encoding emerged (MI 0.10) |
+| 6 | Freeze zones, freeze_pressure input | Food encoding persisted (input MI 0.137) but zone MI collapsed |
+| 7 | Death echoes, demes, threshold | Food encoding lost, replaced by memory encoding |
+
+Each addition provided alternative information channels that competed with signals, reducing their value.
+
+---
+
+## Cross-Era Analysis: The Metric Problem
+
+### Discovery: MI was measuring the wrong thing
+
+The headline metric I(Signal; ZoneDistance) measures whether signals encode zone proximity. It does not measure whether signals encode food location, ally position, or any other world-state information.
+
+v6 achieved input MI of 0.137 on food_dx - the strongest structured encoding in the project's history - while headline MI showed ~0. We spent two eras (v6, v7) trying to "fix" communication that was already working, because the metric was blind to it.
+
+### The information channel competition
+
+Every brain input that provides world-state information without signals reduces signal value:
+
+| Input | What it tells prey | Added in | Effect |
+|-------|-------------------|----------|--------|
+| zone_damage (0) | "I'm hurting" | Era 4 | Necessary - drives zone avoidance |
+| energy_delta (1) | "I'm gaining/losing energy" | Era 4 | Disambiguates zone from metabolism |
+| freeze_pressure (2) | "I'm in a freeze zone, this deep" | v6 | Reduces signal value for freeze zones |
+| death_nearby (36) | "Something died nearby, intensity" | v7 | Free directional danger info |
+| death_dx/dy (37-38) | "Death was in this direction" | v7 | Makes signals redundant for zone avoidance |
+
+Inputs 0-1 are justified: prey need body-state awareness. Inputs 2, 36-38 give away information that would otherwise require signals - they actively compete with the communication channel.
+
+### Implications for next runs
+
+1. **Add food_mi metric** - I(Signal; FoodDistance) as headline metric alongside zone MI
+2. **Remove inputs 2, 36-38** - restore information asymmetry
+3. **Make food harder to find** - amplify the one thing signals successfully encoded
+4. **Stop adding features** - each addition has degraded communication
+
+---
+
 ## Standing Conclusions
 
 What holds true across all runs, what's been disproven, and what remains open.
@@ -427,6 +573,12 @@ What holds true across all runs, what's been disproven, and what remains open.
 | High zone lethality forces communication | 5 | Zones kill too fast for signal-response loops, signals become net cost |
 | Neuron cost drives brain collapse | 4 (initial) | Same collapse at every cost tested (0.0002, 0.00002, 0.00001, 0.0) |
 | Dying sound provides useful danger signal | 4 | Floods grid with noise, suppresses MI to ~0 |
+| Freeze zones create richer communication | 6 | Heterogeneous threats make zone signaling harder (need two conventions simultaneously) |
+| Death echo inputs help communication | 7 | Free directional info competes with signals, reducing signal value |
+| Deme group selection rescues signaling | 7 | Too coarse (every 100 gens) to stabilize conventions that drift every gen |
+| Higher signal threshold improves signal quality | 7 | Reduced signal diversity (entropy 1.17 vs 1.64), correlating with lower MI |
+| 10x cheaper signals enable communication | 7 | Cost was never the bottleneck; signals fail because responses don't improve survival |
+| Medium drain (0.05) is the sweet spot | 7 | Signals -12.8% at 0.05, worse than -8% at 0.02 |
 
 ### What works
 
@@ -443,43 +595,51 @@ What holds true across all runs, what's been disproven, and what remains open.
 
 ### Open questions
 
-1. **Do signals have adaptive value at 0.02 drain?** The 2x2 counterfactual matrix is half-complete. The 0.10-drain result (net negative) doesn't predict the 0.02-drain result where food encoding already works.
+1. **Do signals have adaptive value at 0.02 drain?** ANSWERED: No. v6 counterfactual (seed 300) shows signals -8% at 0.02 drain despite strong food encoding (input MI 0.137). Signals are net negative at every drain rate tested (0.02, 0.05, 0.10).
 
-2. **Can danger signaling coexist with food encoding?** The turbulent semiotic windows (era 4, all seeds) show populations briefly attempting danger signaling before abandoning it. Is this niche exclusion (food encoding occupies the channel) or insufficient selection pressure?
+2. **Can danger signaling coexist with food encoding?** Effectively answered: No. The turbulent semiotic windows (Era 4, all seeds) show populations briefly attempting danger signaling before abandoning it. Freeze zones (v6) made this worse by requiring two distinct response conventions. Food encoding dominates because it has a direct fitness pathway (cooperative patches).
 
-3. **Why is response_fit_corr always zero?** Three possible explanations: (a) the metric threshold is too strict (10+ samples per bucket per prey), (b) receiver behavioral changes are real but orthogonal to fitness, (c) the architecture genuinely cannot close the loop. A counterfactual at 0.02 drain with and without patch food would distinguish (a) from (c).
+3. **Why is response_fit_corr always zero?** Leading hypothesis: receivers change behavior (JSD > 0) but the change is noise - not directed by signal content. Signals encode food location (input MI 0.137 in v6) but receiver behavior doesn't track this encoding. Possible cause: the base_hidden layer mixes signal responses with direct perception responses, preventing clean signal-to-action mapping.
 
-4. **Publication readiness (ALIFE 2026, August, Waterloo).** Need MI > 0.3 sustained across 5+ seeds. Currently have MI 0.10-0.12 across 3 seeds at 0.02 drain. The food-encoding result is publishable as-is if framed correctly (emergent coordination rather than referential communication).
+4. **Can stripping redundant inputs restore signal value?** Removing freeze_pressure (input 2) and death echoes (inputs 36-38) restores the information asymmetry that made Era 4's food encoding work. Untested.
+
+5. **Does making food harder to find amplify signal value?** Reducing vision, increasing patch ratio, reducing food count should make food-location signals more fitness-relevant. Untested.
+
+6. **Publication readiness (ALIFE 2026, August, Waterloo).** The food-encoding result (input MI 0.137, independently across 3+ seeds) is publishable if framed as emergent coordination. The persistent negative counterfactual is itself a significant finding about the conditions under which communication fails to provide adaptive value.
 
 ### Evidence hierarchy status
 
 | Level | Claim | Status |
 |-------|-------|--------|
-| 1 | Signals have adaptive value | NO at 0.10 drain. Untested at 0.02 drain (where food encoding exists) |
-| 2 | Receivers change behavior | Weak yes (JSD nonzero, but in-zone ratio degraded from 6x to 1.14x at high lethality) |
-| 3 | Different symbols carry different info | Yes at 0.02 drain (3-4 active symbols with food encoding). No at 0.10 drain (monopoly) |
-| 4 | Responses are appropriate | Never observed (response_fit_corr = 0) |
+| 1 | Signals have adaptive value | **NO** at all drain rates tested (0.02: -8%, 0.05: -12.8%, 0.10: -25.5%) |
+| 2 | Receivers change behavior | Weak yes (JSD 0.15-0.27 consistently nonzero) |
+| 3 | Different symbols carry different info | Yes at 0.02 drain (3-4 active symbols, food encoding). Degraded in v7 |
+| 4 | Responses are appropriate | Never observed (response_fit_corr = 0 across 8 eras, 15+ runs) |
 | 5 | Genuine reference | Not testable without levels 1-4 |
 
 ### Parameter history
 
 Tracks every significant parameter change and why.
 
-| Parameter | Era 1 | Era 2 (phase 1) | Era 2 (phase 2) | Era 2 (phase 4) | Era 3 | Era 4 (current) |
-|-----------|-------|-----------------|-----------------|-----------------|-------|-----------------|
-| Population | 48 | 384 | 384 | 384 | 384 | 384 |
-| Grid | 20x20 | 56x56 | 56x56 | 56x56 | 56x56 | 56x56 |
-| Threat | 2 pred (vis) | 16 pred (vis) | 16 pred (vis) | 3 pred (vis) | 3 pred (vis) | 3 zones (invis) |
-| Threat speed | - | 8 | 4 | 4 | round(scale) | 0.5 prob |
-| Hidden layer | 6 fixed | 4-16 evolv | 4-16 evolv | 4-124 evolv | 4-64 base + 2-32 sig | same |
-| Symbols | 3 | 3 | 3 | 3 | 6 | 6 |
-| Signal cost | 0.01 | 0.01 | 0.0 | 0.002 | 0.002 | 0.002 |
-| Neuron cost | 0 (fixed) | 0.0002 | 0.00002 | 0.00002 | 0.00001 | 0.0 |
-| Evasion boost | no | no | yes | no | no | no |
-| Vision | 4.0 | 11.2 | 11.2 | 11.2 | 5.6 | 5.6 |
-| Signal range | 8.0 | 22.4 | 22.4 | 22.4 | 22.4 | 22.4 |
-| Memory | no | no | no | no | 8 cells | 8 cells |
-| Patches | no | no | no | no | 50% | 50% |
-| Kin fitness | no | no | no | no | 0.5/0.25 | 0.5/0.25 |
-| Zone drain | - | - | - | - | - | 0.02 (code: 0.10) |
-| Food | 25 | 200 | 200 | 100 | 100 | 100 |
+| Parameter | Era 1 | Era 2 (ph1) | Era 2 (ph2) | Era 2 (ph4) | Era 3 | Era 4 | v6 | v7 |
+|-----------|-------|-------------|-------------|-------------|-------|-------|----|----|
+| Population | 48 | 384 | 384 | 384 | 384 | 384 | 384 | 1000 |
+| Grid | 20 | 56 | 56 | 56 | 56 | 56 | 56 | 72 |
+| Threat | 2 pred (vis) | 16 pred (vis) | 16 pred (vis) | 3 pred (vis) | 3 pred (vis) | 3 zones | 3 flee + 2 freeze | same |
+| Threat speed | - | 8 | 4 | 4 | round(scale) | 0.5 prob | 0.5 prob | 0.5 prob |
+| Hidden layer | 6 fixed | 4-16 evolv | 4-16 evolv | 4-124 evolv | 4-64b + 2-32s | same | same | same |
+| Symbols | 3 | 3 | 3 | 3 | 6 | 6 | 6 | 6 |
+| Signal cost | 0.01 | 0.01 | 0.0 | 0.002 | 0.002 | 0.002 | 0.002 | 0.0002 |
+| Neuron cost | 0 | 0.0002 | 0.00002 | 0.00002 | 0.00001 | 0.0 | 0.0 | 0.0 |
+| Evasion boost | no | no | yes | no | no | no | no | no |
+| Vision | 4.0 | 11.2 | 11.2 | 11.2 | 5.6 | 5.6 | 5.6 | 5.6 |
+| Signal range | 8.0 | 22.4 | 22.4 | 22.4 | 22.4 | 22.4 | 22.4 | 16 |
+| Memory | no | no | no | no | 8 cells | 8 cells | 8 cells | 8 cells |
+| Patches | no | no | no | no | 50% | 50% | 50% | 50% |
+| Kin fitness | no | no | no | no | 0.5/0.25 | 0.5/0.25 | 0.5/0.25 | 0.25 |
+| Zone drain | - | - | - | - | - | 0.02 | 0.02 | 0.05 |
+| Food | 25 | 200 | 200 | 100 | 100 | 100 | 100 | 100 |
+| Freeze zones | - | - | - | - | - | no | 2 | 2 |
+| Death echoes | - | - | - | - | - | no | no | yes |
+| Demes | - | - | - | - | - | no | no | 3x3 |
+| Sig threshold | - | - | - | - | - | 1/6 | 1/6 | 0.3 |
