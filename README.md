@@ -6,21 +6,25 @@ Evolutionary simulation exploring whether a communication system can emerge from
 
 ## Setup
 
-384 prey on a 56x56 toroidal grid with 3 invisible kill zones and 100 food sources. Each prey has a split-head neural network with two independently evolvable hidden layers: a base layer (4-64 neurons) shared across all outputs, and a dedicated signal layer (2-32 neurons) for communication. The brain takes 36 inputs and produces movement decisions, signal emissions, and memory updates.
+Default: 384 prey on a 56x56 toroidal grid (long runs use 1000 prey on 72x72). 3 flee zones + 2 freeze zones, 100 food sources. Each prey has a split-head neural network with two independently evolvable hidden layers: a base layer (4-64 neurons) shared across all outputs, and a dedicated signal layer (2-32 neurons) for communication. The brain takes 39 inputs and produces movement decisions, signal emissions, and memory updates.
 
-Kill zones are invisible circular regions (radius 8.0) that drift randomly across the grid (speed 0.5). Prey inside a zone lose 0.02 energy per tick - lethal in 50 ticks. Prey cannot see zones directly; they sense danger only through energy loss. Signals from other prey carry directional information (dx/dy), providing the only way to know which direction to flee. This creates structural information asymmetry: communication is the difference between random fleeing (~50% chance of going deeper) and directed escape.
+Kill zones are invisible circular regions that drift randomly across the grid. Flee zones drain energy on a gradient from center to edge - prey must move away to survive. Freeze zones penalize movement (3x damage when moving, 0.1x when still) - prey must stay still. The two incompatible optimal responses prevent a single hardcoded strategy from working everywhere.
+
+Prey cannot see zones directly; they sense danger through body-state inputs: accumulated zone damage (pain), energy delta, and freeze pressure. Death witness inputs (intensity + direction to nearest recent zone death within signal range) create a 3-tier information chain: witnesses who saw a death > signal receivers who heard about it > uninformed prey. Signals carry directional information (dx/dy), providing the only way to know which direction to flee.
 
 Vision range is ~5.6 cells, signal range ~22.4 cells. The 4:1 ratio is the core design choice: signals reach far beyond sight, making social information the primary source of spatial awareness.
 
 Key mechanics:
 
-- **Invisible kill zones** - 3 zones (radius 8.0, speed 0.5) drain 0.02 energy/tick. Prey inputs 0-2 are dead (always zero). Energy input (slot 35) is the only self-signal of danger
+- **Invisible kill zones** - flee zones (drain on gradient) + freeze zones (penalize movement). Prey feel pain but can't see zones
+- **Death witness inputs** - prey near zone deaths get directional info about danger (30-tick echo with spatial+temporal decay)
 - **Split-head architecture** - base hidden layer feeds movement and memory; signal hidden layer gives evolution independent control over communication vs. locomotion
 - **Recurrent memory** - 8 memory cells updated each tick via EMA, fed back as inputs, enabling temporal reasoning
 - **Cooperative food patches** - 50% of food requires 2+ nearby prey to harvest, rewarding spatial coordination
 - **Kin fitness** - siblings (0.5) and cousins (0.25) boost each other's selection score, supporting altruistic signaling
-- **Softmax emission** - signals emitted when one symbol dominates the softmax distribution (above 1/6 uniform baseline)
-- **Signal cost** - 0.002 energy per emission creates selective pressure against noise
+- **Deme-based group selection** - grid divided into N x N demes with within-deme evolution, inter-deme migration, and periodic group selection (bottom demes lose agents to top demes)
+- **Configurable signal threshold** - softmax emission threshold (default 1/6, higher values make silence the default)
+- **Signal cost** - configurable energy per emission creates selective pressure against noise
 - **Lineage tracking** - parent and grandparent indices enable relatedness computation without artificial grouping
 
 ## Run it
@@ -30,15 +34,16 @@ cargo run --release -- [seed] [generations]       # normal run
 cargo run --release -- 42 1000                    # seed 42, 1000 gens
 cargo run --release -- 42 1000 --no-signals       # counterfactual (signals suppressed)
 cargo run --release -- --batch 10 300             # cross-population divergence
+cargo run --release -- 42 100000 --demes 3 --signal-threshold 0.3  # with group selection
 ```
 
-CLI flags: `--pop N`, `--grid N`, `--pred N` (zone count), `--food N`, `--ticks N`, `--zone-radius F`, `--zone-speed F`, `--patch-ratio F`, `--kin-bonus F`.
+CLI flags: `--pop N`, `--grid N`, `--pred N` (flee zones), `--freeze-zones N`, `--food N`, `--ticks N`, `--zone-radius F`, `--zone-speed F`, `--zone-drain F`, `--zone-coverage F`, `--signal-cost F`, `--signal-range F`, `--signal-threshold F`, `--patch-ratio F`, `--kin-bonus F`, `--demes N`, `--migration-rate F`, `--group-interval N`, `--checkpoint-interval N`, `--resume PATH`, `--metrics-interval N`.
 
-Output: `output.csv` (23 columns), `trajectory.csv`, `input_mi.csv`. Batch mode also writes `divergence.csv`.
+Output: `output.csv` (24 columns), `trajectory.csv`, `input_mi.csv`. Batch mode also writes `divergence.csv`.
 
 ## Metrics
 
-Per-generation CSV tracks 23 columns including:
+Per-generation CSV tracks 24 columns including:
 
 - **MI** (mutual information) - does symbol choice correlate with sender context (zone distance)?
 - **JSD** (Jensen-Shannon divergence) - do receivers change behavior depending on which signal they get?
@@ -52,15 +57,15 @@ Full causal chain for genuine communication requires all three simultaneously: s
 
 ## The code
 
-~4000 lines of Rust across six files:
+~6400 lines of Rust across six files:
 
 ```
-src/brain.rs      - Split-head NN (36 inputs, base hidden 4-64, signal hidden 2-32, 5491-weight genome)
-src/evolution.rs  - Spatial evolution, lineage tracking, scoped mutation per hidden layer
-src/world.rs      - Grid, invisible kill zones, food patches, memory, energy economy
-src/signal.rs     - Six symbols, softmax emission, linear decay, one-tick delay
+src/brain.rs      - Split-head NN (39 inputs, base hidden 4-64, signal hidden 2-32, 5683-weight genome)
+src/evolution.rs  - Spatial evolution, deme-based group selection, migration, lineage tracking
+src/world.rs      - Grid, invisible kill zones (flee + freeze), death echoes, food patches, energy economy
+src/signal.rs     - Six symbols, configurable softmax threshold, linear decay, one-tick delay
 src/metrics.rs    - 10 instruments: MI, JSD, silence, trajectory, divergence, fitness coupling
-src/main.rs       - Generation loop, kin fitness, batch mode, counterfactual mode, 23-column CSV
+src/main.rs       - Generation loop, kin fitness, deme dynamics, batch mode, 24-column CSV
 ```
 
 ## Findings so far
@@ -73,4 +78,6 @@ See [FINDINGS.md](FINDINGS.md) for full analysis across runs.
 
 **Architecture v2**: Split-head brain separates signal processing from movement, 6 symbols instead of 3, recurrent memory, cooperative food patches, and kin fitness. Designed to address the coupling problem and convention fragility observed in run 3.
 
-**Kill zones** (current): Visible predators replaced with invisible kill zones. Zones are circular regions (radius 8.0) that drift randomly and drain 0.02 energy/tick - lethal in 50 ticks. Prey cannot see zones; brain inputs 0-2 are dead (always zero). Energy loss is the only self-signal of danger. This makes communication structurally necessary: a prey inside a zone knows only that energy is dropping, not which direction to flee. Signals from nearby prey carry directional information that random movement cannot provide. Early smoke tests show positive iconicity (prey signal more inside zones), receiver JSD 6x higher inside zones than outside, and receiver-fitness correlation of 0.76.
+**Kill zones** (v4): Visible predators replaced with invisible kill zones. Zones are circular regions that drift randomly. Prey cannot see zones; body-state inputs (zone damage, energy delta, freeze pressure) provide indirect sensation. Flee zones drain energy on a gradient; freeze zones penalize movement. The incompatible optimal responses prevent hardcoded strategies.
+
+**v7** (current): Three structural barriers to communication identified from v6 analysis (98k gens, MI~0): no information asymmetry, individual-only selection, trivially easy emission. v7 addresses all three: death witness inputs (prey near zone deaths get directional info about danger), deme-based group selection (multi-level selection rewarding communicating demes), and configurable signal threshold (higher values make silence the default, giving signals dynamic range). 39 brain inputs (up from 36), 5683-weight genome. First runs in progress.
