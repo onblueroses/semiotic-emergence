@@ -372,6 +372,7 @@ pub struct SignalEvent {
     pub emitter_idx: usize,
 }
 
+#[allow(clippy::struct_excessive_bools)]
 pub struct World {
     pub prey: Vec<Prey>,
     pub brains: Vec<Brain>,
@@ -426,10 +427,13 @@ pub struct World {
     pub zone_drain_rate: f32,
     pub signal_ticks: u32,
     pub signal_threshold: f32,
+    pub no_death_echoes: bool,
+    pub no_freeze_pressure: bool,
+    pub food_vision: i32,
 }
 
 impl World {
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
     pub fn new_with_positions(
         agents: &[Agent],
         num_zones: usize,
@@ -449,6 +453,9 @@ impl World {
         signal_ticks: u32,
         num_freeze_zones: usize,
         signal_threshold: f32,
+        no_death_echoes: bool,
+        no_freeze_pressure: bool,
+        food_vision: i32,
     ) -> Self {
         let brains: Vec<Brain> = agents.iter().map(|a| a.brain.clone()).collect();
         let compact_brains: Vec<CompactBrain> =
@@ -549,6 +556,9 @@ impl World {
             zone_drain_rate,
             signal_ticks,
             signal_threshold,
+            no_death_echoes,
+            no_freeze_pressure,
+            food_vision,
         }
     }
 
@@ -793,8 +803,7 @@ impl World {
 
         // 3-5: Nearest food (dx, dy, distance)
         if let Some((fi, food_dist_sq)) =
-            self.food_grid
-                .nearest(p.x, p.y, self.grid_size / 2, u16::MAX)
+            self.food_grid.nearest(p.x, p.y, self.food_vision, u16::MAX)
         {
             let f = &self.food[fi as usize];
             inp[3] = wrap_delta(p.x, f.x, self.grid_size) as f32 / gs;
@@ -857,6 +866,15 @@ impl World {
         inp[DEATH_INPUT_START] = best_intensity;
         inp[DEATH_INPUT_START + 1] = best_dx;
         inp[DEATH_INPUT_START + 2] = best_dy;
+
+        if self.no_freeze_pressure {
+            inp[2] = 0.0;
+        }
+        if self.no_death_echoes {
+            inp[DEATH_INPUT_START] = 0.0;
+            inp[DEATH_INPUT_START + 1] = 0.0;
+            inp[DEATH_INPUT_START + 2] = 0.0;
+        }
 
         inp
     }
@@ -1185,6 +1203,9 @@ mod tests {
             zone_drain_rate: TEST_ZONE_DRAIN_RATE,
             signal_ticks: 4,
             signal_threshold: 1.0 / 6.0,
+            no_death_echoes: false,
+            no_freeze_pressure: false,
+            food_vision: TEST_GRID / 2,
             zone_deaths: 0,
             freeze_zone_deaths: 0,
             recent_zone_deaths: Vec::new(),
@@ -1601,6 +1622,9 @@ mod tests {
             4,
             0,
             1.0 / 6.0,
+            false,
+            false,
+            TEST_GRID / 2,
         );
 
         assert_eq!(world.prey[0].x, 3);
@@ -2050,6 +2074,9 @@ mod tests {
             4,
             0,
             1.0 / 6.0,
+            false,
+            false,
+            TEST_GRID / 2,
         );
 
         for &m in &world.prey[0].memory {
@@ -2139,6 +2166,62 @@ mod tests {
         assert!(
             inputs[DEATH_INPUT_START].abs() < f32::EPSILON,
             "death_nearby should be zero for out-of-range death"
+        );
+    }
+
+    // --- Conditional input zeroing ---
+
+    #[test]
+    fn no_death_echoes_zeros_death_inputs() {
+        let mut world = minimal_world(&[(5, 5)], (10.0, 10.0));
+        world.recent_zone_deaths.push((6, 6, 0));
+        world.tick = 1;
+        world.rebuild_prey_grid();
+
+        // Default: death inputs populated
+        let inputs = world.build_inputs(0);
+        assert!(
+            inputs[DEATH_INPUT_START] > 0.0,
+            "Expected nonzero death_nearby without flag"
+        );
+
+        // With flag: death inputs zeroed
+        world.no_death_echoes = true;
+        let inputs = world.build_inputs(0);
+        assert!(
+            inputs[DEATH_INPUT_START].abs() < f32::EPSILON,
+            "Expected zero death_nearby with no_death_echoes"
+        );
+        assert!(
+            inputs[DEATH_INPUT_START + 1].abs() < f32::EPSILON,
+            "Expected zero death_dx with no_death_echoes"
+        );
+        assert!(
+            inputs[DEATH_INPUT_START + 2].abs() < f32::EPSILON,
+            "Expected zero death_dy with no_death_echoes"
+        );
+    }
+
+    #[test]
+    fn no_freeze_pressure_zeros_freeze_input() {
+        // Place prey inside a freeze zone
+        let mut world = minimal_world(&[(10, 10)], (10.0, 10.0));
+        world.zones[0].zone_type = ZoneType::Freeze;
+        world.rebuild_prey_grid();
+
+        // Default: freeze_pressure > 0 inside freeze zone
+        let inputs = world.build_inputs(0);
+        assert!(
+            inputs[2] > 0.0,
+            "Expected nonzero freeze_pressure at zone center"
+        );
+
+        // With flag: freeze_pressure zeroed
+        world.no_freeze_pressure = true;
+        let inputs = world.build_inputs(0);
+        assert!(
+            inputs[2].abs() < f32::EPSILON,
+            "Expected zero freeze_pressure with no_freeze_pressure"
         );
     }
 }
