@@ -61,6 +61,9 @@ struct SimParams {
     deme_divisions: usize,
     migration_rate: f32,
     group_interval: usize,
+    no_death_echoes: bool,
+    no_freeze_pressure: bool,
+    food_vision: i32,
 }
 
 impl SimParams {
@@ -85,6 +88,9 @@ impl SimParams {
         let deme_divisions: usize = parse_flag(args, "--demes").unwrap_or(1);
         let migration_rate: f32 = parse_flag(args, "--migration-rate").unwrap_or(0.05);
         let group_interval: usize = parse_flag(args, "--group-interval").unwrap_or(100);
+        let no_death_echoes = args.iter().any(|a| a == "--no-death-echoes");
+        let no_freeze_pressure = args.iter().any(|a| a == "--no-freeze-pressure");
+        let vision_raw: Option<f32> = parse_flag(args, "--vision");
 
         let zone_coverage: Option<f32> = parse_flag(args, "--zone-coverage");
         let num_zones = if let Some(coverage) = zone_coverage {
@@ -104,6 +110,7 @@ impl SimParams {
         let fallback_radius = 10.0 * scale;
         let mi_bins = [zone_radius, signal_range, signal_range * 1.375];
         let elite_count = (pop_size / 6).max(2);
+        let food_vision = vision_raw.map_or(grid_size / 2, |v| (v * scale).ceil() as i32);
 
         SimParams {
             pop_size,
@@ -135,6 +142,9 @@ impl SimParams {
             deme_divisions,
             migration_rate,
             group_interval,
+            no_death_echoes,
+            no_freeze_pressure,
+            food_vision,
         }
     }
 }
@@ -207,13 +217,14 @@ struct GenMetrics {
     zone_deaths: u32,
     freeze_zone_deaths: u32,
     signal_entropy: f32,
+    food_mi: f32,
 }
 
 impl GenMetrics {
     fn write_csv(&self, f: &mut impl Write, gen: usize) -> Result<(), Box<dyn std::error::Error>> {
         writeln!(
             f,
-            "{gen},{:.1},{:.1},{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.1},{},{},{:.1},{},{},{},{:.4},{}",
+            "{gen},{:.1},{:.1},{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.1},{},{},{:.1},{},{},{},{:.4},{},{:.4}",
             self.avg_fitness,
             self.max_fitness,
             self.total_signals,
@@ -236,7 +247,8 @@ impl GenMetrics {
             self.max_signal_hidden,
             self.zone_deaths,
             self.signal_entropy,
-            self.freeze_zone_deaths
+            self.freeze_zone_deaths,
+            self.food_mi
         )?;
         Ok(())
     }
@@ -284,9 +296,9 @@ impl GenMetrics {
             .collect::<Vec<_>>()
             .join(",");
         println!(
-            "gen {gen:>4} | avg {:>7.1} | max {:>7.1} | signals {} | icon {:.3} | MI {:.3} | ent {:.3} | jsd {:.3}/{:.3} | sym [{sym_str}] | sil {:.3} | zd {}/{} | base {:.1} [{}-{}] | sig {:.1} [{}-{}]",
+            "gen {gen:>4} | avg {:>7.1} | max {:>7.1} | signals {} | icon {:.3} | MI {:.3} | fMI {:.3} | ent {:.3} | jsd {:.3}/{:.3} | sym [{sym_str}] | sil {:.3} | zd {}/{} | base {:.1} [{}-{}] | sig {:.1} [{}-{}]",
             self.avg_fitness, self.max_fitness, self.total_signals,
-            self.iconicity, self.mutual_info, self.signal_entropy,
+            self.iconicity, self.mutual_info, self.food_mi, self.signal_entropy,
             self.jsd_no_pred, self.jsd_pred,
             self.silence_corr,
             self.zone_deaths, self.freeze_zone_deaths,
@@ -339,6 +351,9 @@ fn evaluate_generation(
         params.signal_ticks,
         params.num_freeze_zones,
         params.signal_threshold,
+        params.no_death_echoes,
+        params.no_freeze_pressure,
+        params.food_vision,
     );
 
     for _ in 0..params.ticks_per_eval {
@@ -426,6 +441,7 @@ fn compute_gen_metrics(
         params.zone_radius,
     );
     let mutual_info = metrics::compute_mutual_info(&ev.signal_events, &params.mi_bins);
+    let food_mi = metrics::compute_food_mi(&ev.signal_events);
     let signal_entropy = metrics::compute_signal_entropy(&ev.signal_events);
     let (jsd_no_pred, jsd_pred) = metrics::compute_receiver_jsd(&ev.receiver_counts);
     let per_sym_jsd = metrics::compute_per_symbol_jsd(&ev.receiver_counts);
@@ -531,6 +547,7 @@ fn compute_gen_metrics(
         zone_deaths: ev.zone_deaths,
         freeze_zone_deaths: ev.freeze_zone_deaths,
         signal_entropy,
+        food_mi,
     }
 }
 
@@ -585,7 +602,7 @@ fn run_seed(
 
     if !resuming {
         if let Some(ref mut f) = csv {
-            writeln!(f, "generation,avg_fitness,max_fitness,signals_emitted,iconicity,mutual_info,jsd_no_pred,jsd_pred,silence_corr,sender_fit_corr,traj_fluct_ratio,receiver_fit_corr,response_fit_corr,silence_onset_jsd,silence_move_delta,avg_base_hidden,min_base_hidden,max_base_hidden,avg_signal_hidden,min_signal_hidden,max_signal_hidden,zone_deaths,signal_entropy,freeze_zone_deaths")?;
+            writeln!(f, "generation,avg_fitness,max_fitness,signals_emitted,iconicity,mutual_info,jsd_no_pred,jsd_pred,silence_corr,sender_fit_corr,traj_fluct_ratio,receiver_fit_corr,response_fit_corr,silence_onset_jsd,silence_move_delta,avg_base_hidden,min_base_hidden,max_base_hidden,avg_signal_hidden,min_signal_hidden,max_signal_hidden,zone_deaths,signal_entropy,freeze_zone_deaths,food_mi")?;
         }
         if let Some(ref mut f) = traj_csv {
             write!(f, "generation")?;

@@ -29,6 +29,34 @@ pub fn compute_mutual_info(signal_events: &[SignalEvent], mi_bins: &[f32; 3]) ->
     mi_from_contingency(&counts)
 }
 
+/// I(Signal; `FoodDistance`) using fixed bins on inputs\[5\] (normalized 0-1).
+/// Bins: [0, 0.25), [0.25, 0.5), [0.5, 0.75), [0.75, 1.0].
+pub fn compute_food_mi(signal_events: &[SignalEvent]) -> f32 {
+    if signal_events.len() < 20 {
+        return 0.0;
+    }
+    let mut counts = [[0u32; 4]; NUM_SYMBOLS];
+    for e in signal_events {
+        let sym = (e.symbol as usize).min(NUM_SYMBOLS - 1);
+        let bin = food_dist_bin(e.inputs[5]);
+        counts[sym][bin] += 1;
+    }
+    mi_from_contingency(&counts)
+}
+
+/// Food distance bin: [0, 0.25), [0.25, 0.5), [0.5, 0.75), [0.75, 1.0].
+fn food_dist_bin(dist: f32) -> usize {
+    if dist < 0.25 {
+        0
+    } else if dist < 0.5 {
+        1
+    } else if dist < 0.75 {
+        2
+    } else {
+        3
+    }
+}
+
 /// Zone distance bin using configurable bin edges.
 /// Bins: [0, bins[0]), [bins[0], bins[1]), [bins[1], bins[2]), [bins[2], +inf).
 fn zone_dist_bin(dist: f32, bins: &[f32; 3]) -> usize {
@@ -728,5 +756,71 @@ mod tests {
         let (jsd_val, move_delta) = compute_silence_onset_metrics(&onset, &present);
         assert!(jsd_val.abs() < 1e-10);
         assert!(move_delta.abs() < 1e-10);
+    }
+
+    #[test]
+    fn food_mi_correlated_symbols() {
+        // Symbol 0 when food is close (low inputs[5]), symbol 1 when far (high inputs[5])
+        let mut events = Vec::new();
+        for i in 0..100 {
+            let food_dist = i as f32 / 100.0; // 0.0 to 0.99
+            let symbol = u8::from(food_dist >= 0.5);
+            let mut inputs = [0.5_f32; INPUTS];
+            inputs[5] = food_dist;
+            events.push(SignalEvent {
+                symbol,
+                zone_dist: 5.0,
+                inputs,
+                emitter_idx: 0,
+            });
+        }
+        let mi = compute_food_mi(&events);
+        assert!(
+            mi > 0.1,
+            "Expected food_mi > 0.1 for correlated signals, got {mi}"
+        );
+    }
+
+    #[test]
+    fn food_mi_uncorrelated_symbols() {
+        // All symbols emit at all food distances equally - no correlation
+        let mut events = Vec::new();
+        for sym in 0..6_u8 {
+            for bin in 0..4_u32 {
+                let food_dist = bin as f32 * 0.25 + 0.1;
+                for _ in 0..5 {
+                    let mut inputs = [0.5_f32; INPUTS];
+                    inputs[5] = food_dist;
+                    events.push(SignalEvent {
+                        symbol: sym,
+                        zone_dist: 5.0,
+                        inputs,
+                        emitter_idx: 0,
+                    });
+                }
+            }
+        }
+        let mi = compute_food_mi(&events);
+        assert!(
+            mi < 0.01,
+            "Expected food_mi ~ 0 for uniform distribution, got {mi}"
+        );
+    }
+
+    #[test]
+    fn food_mi_too_few_events() {
+        let events: Vec<SignalEvent> = (0..10)
+            .map(|i| SignalEvent {
+                symbol: (i % 3) as u8,
+                zone_dist: 5.0,
+                inputs: [0.5_f32; INPUTS],
+                emitter_idx: 0,
+            })
+            .collect();
+        let mi = compute_food_mi(&events);
+        assert!(
+            mi.abs() < 1e-10,
+            "Expected 0.0 for too few events, got {mi}"
+        );
     }
 }
