@@ -742,12 +742,15 @@ fn run_seed(
 
             if let Some(ref mut f) = csv {
                 gm.write_csv(f, gen)?;
+                f.flush()?;
             }
             if let Some(ref mut f) = traj_csv {
                 gm.write_trajectory(f, gen)?;
+                f.flush()?;
             }
             if let Some(ref mut f) = input_mi_csv {
                 gm.write_input_mi(f, gen)?;
+                f.flush()?;
             }
             if write_csv && (gen.is_multiple_of(10) || gen == generations - 1) {
                 gm.print_log(gen);
