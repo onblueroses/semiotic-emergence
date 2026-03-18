@@ -69,6 +69,53 @@ const HIDDEN_SIZE_MUTATION_RATE: f32 = 0.05;
 /// Keeps dormant weights pre-seeded for when `hidden_size` grows.
 const MUTATION_HEADROOM: usize = 4;
 
+/// Spatial index for O(nearby) tournament selection instead of O(N).
+/// Buckets scored-array indices into grid cells for fast radius queries.
+struct SpatialBucket {
+    cells: Vec<Vec<usize>>,
+    cell_size: i32,
+    cells_per_axis: i32,
+    grid_size: i32,
+}
+
+impl SpatialBucket {
+    fn new(population: &[Agent], scored: &[(usize, f32)], grid_size: i32, radius: f32) -> Self {
+        // Cell size = largest divisor of grid_size <= radius, so the search ring stays small
+        let target = radius.floor() as i32;
+        let cell_size = (1..=target)
+            .rev()
+            .find(|&c| grid_size % c == 0)
+            .unwrap_or(1);
+        let cells_per_axis = grid_size / cell_size;
+        let num_cells = (cells_per_axis * cells_per_axis) as usize;
+        let mut cells = vec![Vec::new(); num_cells];
+        for (scored_idx, &(pop_idx, _)) in scored.iter().enumerate() {
+            let cx = population[pop_idx].x.rem_euclid(grid_size) / cell_size;
+            let cy = population[pop_idx].y.rem_euclid(grid_size) / cell_size;
+            let ci = (cy * cells_per_axis + cx) as usize;
+            cells[ci].push(scored_idx);
+        }
+        Self {
+            cells,
+            cell_size,
+            cells_per_axis,
+            grid_size,
+        }
+    }
+
+    #[inline]
+    fn cells_radius(&self, radius: f32) -> i32 {
+        (radius / self.cell_size as f32).ceil() as i32
+    }
+
+    #[inline]
+    fn cell_idx(&self, cx: i32, cy: i32) -> usize {
+        let wx = cx.rem_euclid(self.cells_per_axis);
+        let wy = cy.rem_euclid(self.cells_per_axis);
+        (wy * self.cells_per_axis + wx) as usize
+    }
+}
+
 /// Relatedness between two agents based on shared ancestry.
 /// Returns 0.5 for siblings (share a parent), 0.25 for cousins (share a grandparent).
 #[cfg(test)]
@@ -116,6 +163,7 @@ fn tournament_select(
 fn local_tournament_select(
     population: &[Agent],
     scored: &[(usize, f32)],
+    bucket: &SpatialBucket,
     center_x: i32,
     center_y: i32,
     radius: f32,
@@ -124,27 +172,35 @@ fn local_tournament_select(
     rng: &mut impl Rng,
 ) -> Option<usize> {
     let radius_sq = radius * radius;
+    let cells_r = bucket.cells_radius(radius);
+    let cx = center_x.rem_euclid(bucket.grid_size) / bucket.cell_size;
+    let cy = center_y.rem_euclid(bucket.grid_size) / bucket.cell_size;
 
-    // Reservoir sampling: select `tournament_size` random items from nearby agents
-    // in a single pass with no allocation. Fixed RNG consumption count = scored.len().
-    let mut reservoir = [0usize; 8]; // tournament_size is always 3, but allow up to 8
+    // Reservoir sampling over nearby cells only (O(nearby) instead of O(N))
+    let mut reservoir = [0usize; 8];
     let ts = tournament_size.min(reservoir.len());
     let mut nearby_count = 0usize;
 
-    for (i, &(pop_idx, _)) in scored.iter().enumerate() {
-        let agent = &population[pop_idx];
-        if wrap_dist_sq(agent.x, agent.y, center_x, center_y, grid_size) > radius_sq {
-            continue;
-        }
-        if nearby_count < ts {
-            reservoir[nearby_count] = i;
-        } else {
-            let j = rng.gen_range(0..=nearby_count);
-            if j < ts {
-                reservoir[j] = i;
+    for dy in -cells_r..=cells_r {
+        for dx in -cells_r..=cells_r {
+            let ci = bucket.cell_idx(cx + dx, cy + dy);
+            for &scored_idx in &bucket.cells[ci] {
+                let (pop_idx, _) = scored[scored_idx];
+                let agent = &population[pop_idx];
+                if wrap_dist_sq(agent.x, agent.y, center_x, center_y, grid_size) > radius_sq {
+                    continue;
+                }
+                if nearby_count < ts {
+                    reservoir[nearby_count] = scored_idx;
+                } else {
+                    let j = rng.gen_range(0..=nearby_count);
+                    if j < ts {
+                        reservoir[j] = scored_idx;
+                    }
+                }
+                nearby_count += 1;
             }
         }
-        nearby_count += 1;
     }
 
     if nearby_count < 2 {
@@ -282,6 +338,7 @@ pub fn mutate_hidden_size(brain: &mut Brain, rng: &mut impl Rng) {
 fn select_parent(
     population: &[Agent],
     scored: &[(usize, f32)],
+    bucket: &SpatialBucket,
     sx: i32,
     sy: i32,
     tournament_size: usize,
@@ -293,6 +350,7 @@ fn select_parent(
     if let Some(idx) = local_tournament_select(
         population,
         scored,
+        bucket,
         sx,
         sy,
         reproduction_radius,
@@ -305,6 +363,7 @@ fn select_parent(
     if let Some(idx) = local_tournament_select(
         population,
         scored,
+        bucket,
         sx,
         sy,
         fallback_radius,
@@ -346,7 +405,7 @@ pub fn evolve_spatial(
         next_gen.push(population[pop_idx].clone());
     }
 
-    // Pre-compute per-deme scored lists when demes are active
+    // Pre-compute per-deme scored lists and spatial buckets when demes are active
     let deme_scored: Vec<Vec<(usize, f32)>> = if deme_divisions > 1 {
         let num_demes = deme_divisions * deme_divisions;
         let mut by_deme: Vec<Vec<(usize, f32)>> = vec![Vec::new(); num_demes];
@@ -364,22 +423,34 @@ pub fn evolve_spatial(
         Vec::new()
     };
 
+    // Build spatial buckets for O(nearby) tournament selection
+    let global_bucket = SpatialBucket::new(population, scored, grid_size, reproduction_radius);
+    let deme_buckets: Vec<SpatialBucket> = if deme_divisions > 1 {
+        deme_scored
+            .iter()
+            .map(|ds| SpatialBucket::new(population, ds, grid_size, reproduction_radius))
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     // Fill remaining slots at dead agents' positions
     for &(pop_idx, _) in scored.iter().skip(elite_count) {
         let sx = population[pop_idx].x;
         let sy = population[pop_idx].y;
 
-        // Use deme-filtered scored list when demes are active
-        let effective_scored = if deme_divisions > 1 {
+        // Use deme-filtered scored list and bucket when demes are active
+        let (effective_scored, effective_bucket) = if deme_divisions > 1 {
             let d = assign_deme(sx, sy, grid_size, deme_divisions);
-            &deme_scored[d]
+            (&deme_scored[d] as &[(usize, f32)], &deme_buckets[d])
         } else {
-            scored
+            (scored as &[(usize, f32)], &global_bucket)
         };
 
         let pa = select_parent(
             population,
             effective_scored,
+            effective_bucket,
             sx,
             sy,
             tournament_size,
@@ -391,6 +462,7 @@ pub fn evolve_spatial(
         let pb = select_parent(
             population,
             effective_scored,
+            effective_bucket,
             sx,
             sy,
             tournament_size,
@@ -842,10 +914,20 @@ mod tests {
             },
         ];
         let scored: Vec<(usize, f32)> = vec![(0, 10.0), (1, 5.0), (2, 100.0)];
+        let bucket = SpatialBucket::new(&population, &scored, TEST_GRID, 3.0);
 
         // Center at (0,0), radius 3.0 - should only see agents at (0,0) and (1,0)
-        let result =
-            local_tournament_select(&population, &scored, 0, 0, 3.0, 5, TEST_GRID, &mut rng);
+        let result = local_tournament_select(
+            &population,
+            &scored,
+            &bucket,
+            0,
+            0,
+            3.0,
+            5,
+            TEST_GRID,
+            &mut rng,
+        );
         assert!(result.is_some());
         let selected_idx = result.unwrap();
         let selected = &population[selected_idx];
