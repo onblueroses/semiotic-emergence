@@ -80,8 +80,9 @@ struct SpatialBucket {
 
 impl SpatialBucket {
     fn new(population: &[Agent], scored: &[(usize, f32)], grid_size: i32, radius: f32) -> Self {
-        // Cell size = largest divisor of grid_size <= radius, so the search ring stays small
-        let target = radius.floor() as i32;
+        // Cell size targets radius/3 so the search ring is ~7x7 cells (not the whole grid).
+        // Must evenly divide grid_size.
+        let target = (radius / 3.0).floor().max(1.0) as i32;
         let cell_size = (1..=target)
             .rev()
             .find(|&c| grid_size % c == 0)
