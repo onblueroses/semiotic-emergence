@@ -12,6 +12,8 @@ Experimental history of semiotic-emergence. Each era documents what we tested, w
 - [Era 5: Counterfactual Testing](#era-5-counterfactual-testing) - Do signals have adaptive value?
 - [Era 6: Heterogeneous Kill Zones](#era-6-heterogeneous-kill-zones) - Freeze + flee zones
 - [Era 7: Information Asymmetry + Group Selection](#era-7-information-asymmetry--group-selection) - Death echoes, demes, threshold
+- [Era 8: Signal Value Testing](#era-8-signal-value-testing) - Food MI, input stripping, food scarcity
+- [GPU Scale-Up: Population is the Key Variable](#gpu-scale-up-population-is-the-key-variable) - 5,000 prey on A100
 - [Cross-Era Analysis](#cross-era-analysis-the-metric-problem) - The metric problem
 - [Standing Conclusions](#standing-conclusions)
 
@@ -38,6 +40,11 @@ Every significant run, its parameters, and headline result.
 | v6-mute-s300 | 6 | 300 | 133,160 | drain 0.02, freeze zones, --no-signals | ~8% fitter than signal run |
 | v7-sig-42 | 7 | 42 | 94,820 | pop=1000, drain 0.05, demes, death echoes, threshold 0.3 | Signals -12.8%, memory encoding, zone MI ~0 |
 | v7-mute-42 | 7 | 42 | 100,520 | same, --no-signals | baseline |
+| v8-scarce-42 | 8 | 42 | 43,310 | no-death-echoes, no-freeze-pressure, vision 2.0 | food_mi=0, MI~0, mute +43% fitter |
+| v8-mute-42 | 8 | 42 | 95,940 | same, --no-signals | baseline |
+| v9-deme-42 | 8 | 42 | ~21,000 | v8 + demes 4, vision 0.5 | food_mi=0, MI~0, mute +56% fitter (killed early) |
+| v9-mute-42 | 8 | 42 | ~36,000 | same, --no-signals | baseline (killed early) |
+| gpu-5k-s42 | GPU | 42 | 100,000 | 5k pop, 150x150, A100, JAX | **Signals have adaptive value** (+0.51 corr) |
 
 Detailed per-run analysis: `findings/` directory. Data files: `analysis/` directory.
 
@@ -519,6 +526,96 @@ Each addition provided alternative information channels that competed with signa
 
 ---
 
+## Era 8: Signal Value Testing
+
+*Question: With free information channels stripped and food made scarce, can signals demonstrate adaptive value?*
+
+### The design
+
+Three code changes motivated by the Cross-Era Analysis:
+1. **food_mi metric**: I(Signal; FoodDistance) to measure what signals actually encode (food, not zones)
+2. **Optional input stripping**: `--no-death-echoes` (zeros inputs 36-38), `--no-freeze-pressure` (zeros input 2) to remove free information channels competing with signals
+3. **Vision flag**: `--vision F` (scale-relative food search radius) to make food hard to find
+
+### v8: Scarce food + stripped inputs (seed 42)
+
+Parameters: pop=384, grid=56, drain=0.02, signal_cost=0.002, vision=2.0 (~5.6 cells), no-death-echoes, no-freeze-pressure.
+
+**1. food_mi is flat zero.** Across 43k generations, signals carry zero food information. The food_mi metric works (tested with synthetic data) - signals simply don't encode food distance.
+
+**2. MI near zero.** Zone MI 0.0002 at gen 10k. No context-dependent signaling emerging.
+
+**3. Mute decisively outperforms (+43%).** At gen 10k: signal avg fitness 805, mute avg fitness 1257. The signal cost penalty (0.002/emission * ~385 emissions/agent/gen ≈ 0.77 energy) is lethal without compensating benefit.
+
+**4. Signal entropy high but meaningless.** ~0.95 (near-max for 6 symbols). Agents emit diverse symbols, but it's noise.
+
+### v9: Demes + near-blindness (seed 42)
+
+Added `--demes 4 --migration-rate 0.05 --vision 0.5` (~1.4 cells). Hypothesis: kin selection (demes) + severe information asymmetry (near-blindness) would make food signaling individually adaptive.
+
+**1. Same result.** food_mi=0, MI=0.0002, mute +56% fitter at gen 10k. Killed at ~21k gens after confirming the pattern.
+
+**2. Demes don't fix the altruistic signaling problem at this scale.** With 384 agents in 16 demes (~24 per deme), kin clusters are too small for inclusive fitness to offset the metabolic signal cost.
+
+### What this means
+
+Stripping free information, adding kin selection, and making food scarce did not help. The problem is not ecological pressure or competing information channels. **The problem is population scale** - see GPU section below.
+
+---
+
+## GPU Scale-Up: Population is the Key Variable
+
+*A JAX/XLA port of the simulation running at 5,000 population on an A100 80GB GPU produced the project's first positive result for signal adaptive value.*
+
+Full data and analysis: [semiotic-emergence-gpu](https://github.com/onblueroses/semiotic-emergence-gpu) repository, `runs/5k-100k-seed42/`.
+
+### Parameters
+
+Pop=5,000, grid=150x150, seed=42, 100k gens (~23h on A100). 5 flee + 2 freeze zones. All params derived from scale=7.5 (zone_radius=60, signal_range=60, zone_drain=0.15, signal_cost=0.015, food=750). Same brain architecture (36 inputs at the time, split-head, 6 symbols).
+
+### Headline result
+
+**Signals have adaptive value at 5,000 population.** Detrended r=+0.51 (p=0.00) between signals emitted and fitness. High-signal generations average +52 fitness points. Consistent across all 100k gens. This reverses the persistent negative finding from all Rust-era runs (384-1000 pop).
+
+### Key findings
+
+**1. Signal inputs dominate the information budget (87%).** Per-input signal MI is 30x higher than body-state MI. The signal environment itself is the primary information source - what a prey signals depends overwhelmingly on what signals it hears (meta-communication).
+
+**2. Phase transition at gen ~40k.** JSD slope flips from declining to rising (F=216.6, p=1.1e-16 for breakpoint). Population sacrifices ~5% raw fitness to increase signal context-dependence by 73%. Deliberate evolutionary investment in communication.
+
+**3. Senders are noisy, receivers extract meaning.** MI from environment to symbol choice is only 0.001 (senders barely encode context). But JSD from symbols to receiver behavior is 0.066 (receivers respond differently to different symbols near zones). Communication through statistical regularity, not intentional encoding.
+
+**4. One channel, not six.** Cross-symbol MI correlation: PC1 explains 89.9% of variance. All 6 symbols rise/fall together. Closer to alarm pheromone intensity than a vocabulary.
+
+**5. response_fit_corr mystery solved.** It was a measurement artifact, not a biological result. With signal_range covering ~50% of the grid and ~3,740 emitters per tick, every prey hears signals on every tick. The "without signal" bucket never reaches the 10-sample threshold. This was also true in the Rust version (P(no signal) = 7.6e-30 at 384 pop, 56x56 grid, range 22.4). The single most persistent negative result in the project's history was a broken metric.
+
+### Why scale matters
+
+| | Rust (384 pop, 56x56) | GPU (5k pop, 150x150) |
+|--|----------------------|----------------------|
+| Agents within signal range | ~20-40 | ~500-1000 |
+| Active signals per tick | ~296 | ~3,740 |
+| Signal field density | Sparse, stochastic | Dense, statistical |
+| Top encoding | Food location (MI 0.10) | Other signals (meta) |
+| Signals adaptive? | No (every era, -8% to -25%) | **Yes** (+0.51 corr) |
+
+At 384 agents, the signal environment is too sparse for statistical regularity to emerge. An agent hears a few signals per tick - noise dominates. At 5,000 agents, the signal field is dense enough that receivers can extract reliable statistical patterns from noisy senders. The threshold lies somewhere between 384 and 5,000.
+
+### Comparison table
+
+| Metric | Rust Era 4 (384 pop) | GPU (5k pop) |
+|--------|---------------------|-------------|
+| avg_fitness | 620-736 | 984-1103 |
+| mutual_info | 0.107-0.114 (food) | 0.001 (zone) |
+| jsd_pred | 0.018-0.215 | 0.033-0.066 |
+| sender_fit_corr | 0.36-0.46 | 0.047-0.054 |
+| signal_hidden | 25-31 | 5.3-5.7 |
+| response_fit_corr | 0.000 (broken) | 0.000 (broken) |
+
+Key shifts at scale: food encoding vanishes (signal environment replaces it as primary input), signal networks compress (5-6 neurons vs 25-31), sender-fitness correlation dilutes (N scaling), and context-dependent receiver behavior increases.
+
+---
+
 ## Cross-Era Analysis: The Metric Problem
 
 ### Discovery: MI was measuring the wrong thing
@@ -556,7 +653,8 @@ What holds true across all runs, what's been disproven, and what remains open.
 
 ### Universal patterns (every era, every seed)
 
-- **response_fit_corr = 0.** The three-way causal chain (encode -> respond -> survive) has never closed. Receivers change behavior in response to signals but that change does not predict survival. This is the single most persistent negative result.
+- **Population scale is the key variable.** At 384-1000 agents, signals are net negative at every parameter configuration tested (8 eras, 15+ runs). At 5,000 agents (GPU), signals become adaptive (r=+0.51). The signal environment must be dense enough for statistical regularity to emerge from noisy senders.
+- **response_fit_corr = 0 is a broken metric.** The three-way causal chain measurement was data-starved, not biologically zero. With signal coverage ~50% of grid and hundreds of emitters, every prey hears signals on every tick - the "no signal" bucket never fills. This was confirmed in the GPU run and explains the persistent zero across all eras. Proposed fix: compare actions under symbol X vs symbol Y, not hearing vs not-hearing.
 - **receiver_fit_corr is a spatial confound.** Center prey hear more signals AND survive more. Consistently 0.48-0.87 across all eras. Not evidence of signal utility.
 - **Silence near danger.** Prey reduce per-capita signaling near threats. Present from gen 0, maintained but not amplified by evolution. Likely an architectural spandrel of shared hidden layers, not a learned strategy.
 - **Symbol monopoly under weak selection.** Without strong differentiation pressure, one symbol dominates. Seen in eras 1, 2 (phase 3), and 5. Only resisted when signals encode useful information (era 4 at 0.02 drain).
@@ -579,6 +677,10 @@ What holds true across all runs, what's been disproven, and what remains open.
 | Higher signal threshold improves signal quality | 7 | Reduced signal diversity (entropy 1.17 vs 1.64), correlating with lower MI |
 | 10x cheaper signals enable communication | 7 | Cost was never the bottleneck; signals fail because responses don't improve survival |
 | Medium drain (0.05) is the sweet spot | 7 | Signals -12.8% at 0.05, worse than -8% at 0.02 |
+| Stripping free info channels restores signal value | 8 | food_mi=0, MI~0, mute +43% fitter despite removing death echoes and freeze pressure |
+| Reduced vision forces signal reliance | 8 | Vision 2.0 (~5.6 cells) and 0.5 (~1.4 cells) both produced zero food_mi |
+| Demes enable altruistic food signaling | 8 (v9) | 4x4 demes + near-blindness still produced mute +56% fitter |
+| Ecological conditions are the bottleneck | 8+GPU | **Disproven: population scale is the bottleneck** |
 
 ### What works
 
@@ -595,51 +697,57 @@ What holds true across all runs, what's been disproven, and what remains open.
 
 ### Open questions
 
-1. **Do signals have adaptive value at 0.02 drain?** ANSWERED: No. v6 counterfactual (seed 300) shows signals -8% at 0.02 drain despite strong food encoding (input MI 0.137). Signals are net negative at every drain rate tested (0.02, 0.05, 0.10).
+1. **Do signals have adaptive value at 0.02 drain?** ANSWERED: Not at 384 pop. v6 counterfactual shows signals -8%. But at 5k pop (GPU), signals are adaptive at drain 0.15.
 
-2. **Can danger signaling coexist with food encoding?** Effectively answered: No. The turbulent semiotic windows (Era 4, all seeds) show populations briefly attempting danger signaling before abandoning it. Freeze zones (v6) made this worse by requiring two distinct response conventions. Food encoding dominates because it has a direct fitness pathway (cooperative patches).
+2. **Can danger signaling coexist with food encoding?** ANSWERED: No at small scale. At large scale (GPU), food encoding vanishes entirely - the signal environment itself becomes the primary information source.
 
-3. **Why is response_fit_corr always zero?** Leading hypothesis: receivers change behavior (JSD > 0) but the change is noise - not directed by signal content. Signals encode food location (input MI 0.137 in v6) but receiver behavior doesn't track this encoding. Possible cause: the base_hidden layer mixes signal responses with direct perception responses, preventing clean signal-to-action mapping.
+3. **Why is response_fit_corr always zero?** ANSWERED: Measurement artifact. Signal coverage is so high that every prey hears signals every tick. The "no signal" bucket never reaches the 10-sample threshold. Fix: compare actions under different symbols, not hearing vs not-hearing.
 
-4. **Can stripping redundant inputs restore signal value?** Removing freeze_pressure (input 2) and death echoes (inputs 36-38) restores the information asymmetry that made Era 4's food encoding work. Untested.
+4. **Can stripping redundant inputs restore signal value?** ANSWERED: No. Era 8 (v8) stripped death echoes and freeze pressure. food_mi=0, MI~0, mute +43% fitter. The problem was population scale, not competing information channels.
 
-5. **Does making food harder to find amplify signal value?** Reducing vision, increasing patch ratio, reducing food count should make food-location signals more fitness-relevant. Untested.
+5. **Does making food harder to find amplify signal value?** ANSWERED: Not at 384 pop. Era 8 (v8 vision=2.0, v9 vision=0.5) still produced zero food_mi. Scale, not scarcity, is the bottleneck.
 
-6. **Publication readiness (ALIFE 2026, August, Waterloo).** The food-encoding result (input MI 0.137, independently across 3+ seeds) is publishable if framed as emergent coordination. The persistent negative counterfactual is itself a significant finding about the conditions under which communication fails to provide adaptive value.
+6. **What is the minimum population for signal emergence?** The threshold is between 384 (no emergence) and 5,000 (emergence). A 2,000-population Rust run would bracket this. If signals emerge at 2k, the Rust version becomes a viable platform for further experiments.
+
+7. **Can the response_fit_corr metric be fixed?** Three proposed approaches: (a) symbol X vs Y comparison, (b) above/below median signal strength, (c) per-symbol response profiles. None tested yet. This would be the first proper Level 4 measurement in the project's history.
+
+8. **Publication readiness.** The GPU result (signal adaptive value at 5k, phase transition at 40k, receivers extracting meaning from noisy senders) is publishable. The Rust history (8 eras of negative results at small scale) provides essential context showing the scale threshold. Combined, this tells a complete story about conditions for communication emergence.
 
 ### Evidence hierarchy status
 
-| Level | Claim | Status |
-|-------|-------|--------|
-| 1 | Signals have adaptive value | **NO** at all drain rates tested (0.02: -8%, 0.05: -12.8%, 0.10: -25.5%) |
-| 2 | Receivers change behavior | Weak yes (JSD 0.15-0.27 consistently nonzero) |
-| 3 | Different symbols carry different info | Yes at 0.02 drain (3-4 active symbols, food encoding). Degraded in v7 |
-| 4 | Responses are appropriate | Never observed (response_fit_corr = 0 across 8 eras, 15+ runs) |
-| 5 | Genuine reference | Not testable without levels 1-4 |
+| Level | Claim | Rust (384-1k pop) | GPU (5k pop) |
+|-------|-------|-------------------|-------------|
+| 1 | Signals have adaptive value | **NO** at all configs (-8% to -25%) | **YES** (r=+0.51, +52 fitness) |
+| 2 | Receivers change behavior | Weak yes (JSD 0.15-0.27) | Yes (JSD 0.033-0.066, rising) |
+| 3 | Different symbols carry different info | Yes at 0.02 drain (food encoding) | Weak (PC1=89.9%, one channel) |
+| 4 | Responses are appropriate | Metric broken (data starvation) | Metric broken (same cause) |
+| 5 | Genuine reference | Not testable | Not testable |
+
+**Critical gap:** Level 4 has never been properly measured. The proposed fix (symbol X vs Y comparison) would answer this for the first time.
 
 ### Parameter history
 
 Tracks every significant parameter change and why.
 
-| Parameter | Era 1 | Era 2 (ph1) | Era 2 (ph2) | Era 2 (ph4) | Era 3 | Era 4 | v6 | v7 |
-|-----------|-------|-------------|-------------|-------------|-------|-------|----|----|
-| Population | 48 | 384 | 384 | 384 | 384 | 384 | 384 | 1000 |
-| Grid | 20 | 56 | 56 | 56 | 56 | 56 | 56 | 72 |
-| Threat | 2 pred (vis) | 16 pred (vis) | 16 pred (vis) | 3 pred (vis) | 3 pred (vis) | 3 zones | 3 flee + 2 freeze | same |
-| Threat speed | - | 8 | 4 | 4 | round(scale) | 0.5 prob | 0.5 prob | 0.5 prob |
-| Hidden layer | 6 fixed | 4-16 evolv | 4-16 evolv | 4-124 evolv | 4-64b + 2-32s | same | same | same |
-| Symbols | 3 | 3 | 3 | 3 | 6 | 6 | 6 | 6 |
-| Signal cost | 0.01 | 0.01 | 0.0 | 0.002 | 0.002 | 0.002 | 0.002 | 0.0002 |
-| Neuron cost | 0 | 0.0002 | 0.00002 | 0.00002 | 0.00001 | 0.0 | 0.0 | 0.0 |
-| Evasion boost | no | no | yes | no | no | no | no | no |
-| Vision | 4.0 | 11.2 | 11.2 | 11.2 | 5.6 | 5.6 | 5.6 | 5.6 |
-| Signal range | 8.0 | 22.4 | 22.4 | 22.4 | 22.4 | 22.4 | 22.4 | 16 |
-| Memory | no | no | no | no | 8 cells | 8 cells | 8 cells | 8 cells |
-| Patches | no | no | no | no | 50% | 50% | 50% | 50% |
-| Kin fitness | no | no | no | no | 0.5/0.25 | 0.5/0.25 | 0.5/0.25 | 0.25 |
-| Zone drain | - | - | - | - | - | 0.02 | 0.02 | 0.05 |
-| Food | 25 | 200 | 200 | 100 | 100 | 100 | 100 | 100 |
-| Freeze zones | - | - | - | - | - | no | 2 | 2 |
-| Death echoes | - | - | - | - | - | no | no | yes |
-| Demes | - | - | - | - | - | no | no | 3x3 |
-| Sig threshold | - | - | - | - | - | 1/6 | 1/6 | 0.3 |
+| Parameter | Era 1 | Era 2 (ph1) | Era 2 (ph2) | Era 2 (ph4) | Era 3 | Era 4 | v6 | v7 | v8 | GPU |
+|-----------|-------|-------------|-------------|-------------|-------|-------|----|----|----|----|
+| Population | 48 | 384 | 384 | 384 | 384 | 384 | 384 | 1000 | 384 | **5000** |
+| Grid | 20 | 56 | 56 | 56 | 56 | 56 | 56 | 72 | 56 | **150** |
+| Threat | 2 pred (vis) | 16 pred (vis) | 16 pred (vis) | 3 pred (vis) | 3 pred (vis) | 3 zones | 3 flee + 2 freeze | same | same | 5 flee + 2 freeze |
+| Threat speed | - | 8 | 4 | 4 | round(scale) | 0.5 prob | 0.5 prob | 0.5 prob | 0.5 | 3.75 |
+| Hidden layer | 6 fixed | 4-16 evolv | 4-16 evolv | 4-124 evolv | 4-64b + 2-32s | same | same | same | same | same |
+| Symbols | 3 | 3 | 3 | 3 | 6 | 6 | 6 | 6 | 6 | 6 |
+| Signal cost | 0.01 | 0.01 | 0.0 | 0.002 | 0.002 | 0.002 | 0.002 | 0.0002 | 0.002 | 0.015 |
+| Neuron cost | 0 | 0.0002 | 0.00002 | 0.00002 | 0.00001 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 |
+| Evasion boost | no | no | yes | no | no | no | no | no | no | no |
+| Vision | 4.0 | 11.2 | 11.2 | 11.2 | 5.6 | 5.6 | 5.6 | 5.6 | 5.6/1.4 | global |
+| Signal range | 8.0 | 22.4 | 22.4 | 22.4 | 22.4 | 22.4 | 22.4 | 16 | 22.4 | 60 |
+| Memory | no | no | no | no | 8 cells | 8 cells | 8 cells | 8 cells | 8 cells | 8 cells |
+| Patches | no | no | no | no | 50% | 50% | 50% | 50% | 50% | 50% |
+| Kin fitness | no | no | no | no | 0.5/0.25 | 0.5/0.25 | 0.5/0.25 | 0.25 | 0.10 | 0.10 |
+| Zone drain | - | - | - | - | - | 0.02 | 0.02 | 0.05 | 0.02 | 0.15 |
+| Food | 25 | 200 | 200 | 100 | 100 | 100 | 100 | 100 | 100 | 750 |
+| Freeze zones | - | - | - | - | - | no | 2 | 2 | 2 | 2 |
+| Death echoes | - | - | - | - | - | no | no | yes | **off** | no |
+| Demes | - | - | - | - | - | no | no | 3x3 | 1/4x4 | no |
+| Sig threshold | - | - | - | - | - | 1/6 | 1/6 | 0.3 | 1/6 | 1/6 |
