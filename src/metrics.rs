@@ -399,33 +399,38 @@ pub fn trajectory_jsd(prev: &[[f32; 4]; NUM_SYMBOLS], curr: &[[f32; 4]; NUM_SYMB
     total / NUM_SYMBOLS as f32
 }
 
-/// Per-prey receiver JSD: how much one prey's actions differ with vs without signal.
-/// Pools across both contexts. Returns 0.0 if either bucket has fewer than `min_samples` total.
-pub fn per_prey_receiver_jsd(
-    with: &[[u32; 5]; 2],
-    without: &[[u32; 5]; 2],
-    min_samples: u32,
-) -> f32 {
-    let mut with_pooled = [0u32; 5];
-    let mut without_pooled = [0u32; 5];
-    for ctx in 0..2 {
-        for a in 0..5 {
-            with_pooled[a] += with[ctx][a];
-            without_pooled[a] += without[ctx][a];
+/// Per-prey symbol response JSD: how much one prey's actions differ across dominant symbols.
+/// Returns mean pairwise JSD between qualifying symbol action distributions.
+/// Symbols with fewer than `min_samples` total actions are excluded.
+/// Returns 0.0 if fewer than 2 symbols qualify.
+pub fn per_prey_symbol_jsd(actions_per_symbol: &[[u32; 5]; NUM_SYMBOLS], min_samples: u32) -> f32 {
+    // Collect normalized distributions for symbols with enough data
+    let mut dists: Vec<[f32; 5]> = Vec::new();
+    for sym in actions_per_symbol {
+        let total: u32 = sym.iter().sum();
+        if total >= min_samples {
+            if let Some(d) = normalize_action_dist(sym) {
+                dists.push(d);
+            }
         }
     }
-    let total_with: u32 = with_pooled.iter().sum();
-    let total_without: u32 = without_pooled.iter().sum();
-    if total_with < min_samples || total_without < min_samples {
+    if dists.len() < 2 {
         return 0.0;
     }
-    let Some(p_with) = normalize_action_dist(&with_pooled) else {
-        return 0.0;
-    };
-    let Some(p_without) = normalize_action_dist(&without_pooled) else {
-        return 0.0;
-    };
-    jsd(&p_with, &p_without)
+    // Mean pairwise JSD
+    let mut sum = 0.0_f32;
+    let mut count = 0u32;
+    for i in 0..dists.len() {
+        for j in (i + 1)..dists.len() {
+            sum += jsd(&dists[i], &dists[j]);
+            count += 1;
+        }
+    }
+    if count == 0 {
+        0.0
+    } else {
+        sum / count as f32
+    }
 }
 
 /// Silence onset metrics: how receivers behave when signals disappear vs during signals.
@@ -720,25 +725,31 @@ mod tests {
     }
 
     #[test]
-    fn per_prey_jsd_different_distributions() {
-        let with = [[50, 0, 0, 0, 0], [0; 5]]; // always action 0 with signal
-        let without = [[0, 0, 0, 0, 50], [0; 5]]; // always action 4 without
-        let result = per_prey_receiver_jsd(&with, &without, 10);
+    fn per_prey_symbol_jsd_different_distributions() {
+        // Symbol 0: always action 0. Symbol 1: always action 4. Rest empty.
+        let mut actions = [[0u32; 5]; NUM_SYMBOLS];
+        actions[0] = [50, 0, 0, 0, 0];
+        actions[1] = [0, 0, 0, 0, 50];
+        let result = per_prey_symbol_jsd(&actions, 10);
         assert!(result > 0.5, "Expected high JSD, got {result}");
     }
 
     #[test]
-    fn per_prey_jsd_identical_distributions() {
-        let dist = [[10, 10, 10, 10, 10], [0; 5]];
-        let result = per_prey_receiver_jsd(&dist, &dist, 10);
+    fn per_prey_symbol_jsd_identical_distributions() {
+        let mut actions = [[0u32; 5]; NUM_SYMBOLS];
+        actions[0] = [10, 10, 10, 10, 10];
+        actions[1] = [10, 10, 10, 10, 10];
+        let result = per_prey_symbol_jsd(&actions, 10);
         assert!(result < 1e-10, "Expected ~0 JSD, got {result}");
     }
 
     #[test]
-    fn per_prey_jsd_below_threshold_returns_zero() {
-        let with = [[1, 1, 1, 1, 1], [0; 5]]; // 5 total < 10 min
-        let without = [[10, 10, 10, 10, 10], [0; 5]];
-        assert!(per_prey_receiver_jsd(&with, &without, 10).abs() < 1e-10);
+    fn per_prey_symbol_jsd_insufficient_data() {
+        // Only one symbol with enough data -> 0.0
+        let mut actions = [[0u32; 5]; NUM_SYMBOLS];
+        actions[0] = [50, 0, 0, 0, 0];
+        actions[1] = [1, 1, 1, 1, 1]; // 5 total < 10 min
+        assert!(per_prey_symbol_jsd(&actions, 10).abs() < 1e-10);
     }
 
     #[test]

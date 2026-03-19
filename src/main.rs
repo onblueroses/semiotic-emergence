@@ -64,6 +64,7 @@ struct SimParams {
     no_death_echoes: bool,
     no_freeze_pressure: bool,
     food_vision: i32,
+    max_signal_hidden_cap: usize,
 }
 
 impl SimParams {
@@ -90,6 +91,9 @@ impl SimParams {
         let group_interval: usize = parse_flag(args, "--group-interval").unwrap_or(100);
         let no_death_echoes = args.iter().any(|a| a == "--no-death-echoes");
         let no_freeze_pressure = args.iter().any(|a| a == "--no-freeze-pressure");
+        let max_signal_hidden_cap: usize = parse_flag(args, "--max-signal-hidden")
+            .unwrap_or(brain::MAX_SIGNAL_HIDDEN)
+            .clamp(brain::MIN_SIGNAL_HIDDEN, brain::MAX_SIGNAL_HIDDEN);
         let vision_raw: Option<f32> = parse_flag(args, "--vision");
 
         let zone_coverage: Option<f32> = parse_flag(args, "--zone-coverage");
@@ -145,6 +149,7 @@ impl SimParams {
             no_death_echoes,
             no_freeze_pressure,
             food_vision,
+            max_signal_hidden_cap,
         }
     }
 }
@@ -319,8 +324,8 @@ struct EvalResult {
     alive_per_tick: Vec<f32>,
     min_zone_dist: Vec<f32>,
     signal_rate_per_prey: Vec<f32>,
-    actions_with_signal: Vec<[[u32; 5]; 2]>,
-    actions_without_signal: Vec<[[u32; 5]; 2]>,
+    actions_per_symbol: Vec<[[u32; 5]; NUM_SYMBOLS]>,
+    ticks_without_signal: Vec<u32>,
     silence_onset_actions: Vec<[[u32; 5]; 2]>,
     zone_deaths: u32,
     freeze_zone_deaths: u32,
@@ -395,13 +400,10 @@ fn evaluate_generation(
             .collect()
     };
 
-    let actions_with_signal: Vec<[[u32; 5]; 2]> =
-        world.prey.iter().map(|p| p.actions_with_signal).collect();
-    let actions_without_signal: Vec<[[u32; 5]; 2]> = world
-        .prey
-        .iter()
-        .map(|p| p.actions_without_signal)
-        .collect();
+    let actions_per_symbol: Vec<[[u32; 5]; NUM_SYMBOLS]> =
+        world.prey.iter().map(|p| p.actions_per_symbol).collect();
+    let ticks_without_signal: Vec<u32> =
+        world.prey.iter().map(|p| p.ticks_without_signal).collect();
     let silence_onset_actions: Vec<[[u32; 5]; 2]> =
         world.prey.iter().map(|p| p.silence_onset_actions).collect();
 
@@ -416,8 +418,8 @@ fn evaluate_generation(
         alive_per_tick: world.alive_per_tick.iter().map(|&a| a as f32).collect(),
         min_zone_dist: world.min_zone_dist_per_tick,
         signal_rate_per_prey,
-        actions_with_signal,
-        actions_without_signal,
+        actions_per_symbol,
+        ticks_without_signal,
         silence_onset_actions,
         zone_deaths: world.zone_deaths,
         freeze_zone_deaths: world.freeze_zone_deaths,
@@ -474,15 +476,14 @@ fn compute_gen_metrics(
 
     // Three-way coupling: receiver_fit_corr and response_fit_corr
     let reception_rates: Vec<f32> = ev
-        .actions_with_signal
+        .actions_per_symbol
         .iter()
-        .zip(&ev.actions_without_signal)
-        .map(|(w, wo)| {
-            let total_w: u32 = w.iter().flat_map(|c| c.iter()).sum();
-            let total_wo: u32 = wo.iter().flat_map(|c| c.iter()).sum();
-            let total = total_w + total_wo;
+        .zip(&ev.ticks_without_signal)
+        .map(|(sym_actions, &no_sig)| {
+            let total_with: u32 = sym_actions.iter().flat_map(|s| s.iter()).sum();
+            let total = total_with + no_sig;
             if total > 0 {
-                total_w as f32 / total as f32
+                total_with as f32 / total as f32
             } else {
                 0.0
             }
@@ -491,15 +492,28 @@ fn compute_gen_metrics(
     let receiver_fit_corr = metrics::pearson(&reception_rates, &ev.fitness);
 
     let per_prey_jsd_vec: Vec<f32> = ev
-        .actions_with_signal
+        .actions_per_symbol
         .iter()
-        .zip(&ev.actions_without_signal)
-        .map(|(w, wo)| metrics::per_prey_receiver_jsd(w, wo, MIN_RECEIVER_SAMPLES))
+        .map(|sym_actions| metrics::per_prey_symbol_jsd(sym_actions, MIN_RECEIVER_SAMPLES))
         .collect();
     let response_fit_corr = metrics::pearson(&per_prey_jsd_vec, &ev.fitness);
 
+    // Reconstruct aggregate with-signal actions for silence onset comparison
+    let with_signal_aggregate: Vec<[[u32; 5]; 2]> = ev
+        .actions_per_symbol
+        .iter()
+        .map(|sym_actions| {
+            let mut pooled = [0u32; 5];
+            for sym in sym_actions {
+                for a in 0..5 {
+                    pooled[a] += sym[a];
+                }
+            }
+            [pooled, [0; 5]] // context 1 unused, silence onset only uses context 0
+        })
+        .collect();
     let (silence_onset_jsd, silence_move_delta) =
-        metrics::compute_silence_onset_metrics(&ev.silence_onset_actions, &ev.actions_with_signal);
+        metrics::compute_silence_onset_metrics(&ev.silence_onset_actions, &with_signal_aggregate);
 
     // Brain size stats - split into base and signal
     let base_sizes: Vec<usize> = population
@@ -725,8 +739,8 @@ fn run_seed(
                 alive_per_tick: ev.alive_per_tick,
                 min_zone_dist: ev.min_zone_dist,
                 signal_rate_per_prey: ev.signal_rate_per_prey,
-                actions_with_signal: ev.actions_with_signal,
-                actions_without_signal: ev.actions_without_signal,
+                actions_per_symbol: ev.actions_per_symbol,
+                ticks_without_signal: ev.ticks_without_signal,
                 silence_onset_actions: ev.silence_onset_actions,
                 zone_deaths: ev.zone_deaths,
                 freeze_zone_deaths: ev.freeze_zone_deaths,
@@ -804,6 +818,7 @@ fn run_seed(
             params.reproduction_radius,
             params.fallback_radius,
             params.deme_divisions,
+            params.max_signal_hidden_cap,
             &mut rng,
         );
 
@@ -817,6 +832,7 @@ fn run_seed(
                     params.grid_size,
                     params.deme_divisions,
                     params.mutation_sigma,
+                    params.max_signal_hidden_cap,
                     &mut rng,
                 );
             }
@@ -1120,6 +1136,7 @@ mod tests {
                 params.reproduction_radius,
                 params.fallback_radius,
                 params.deme_divisions,
+                params.max_signal_hidden_cap,
                 rng,
             );
         }
