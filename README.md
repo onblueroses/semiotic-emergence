@@ -39,11 +39,11 @@ cargo run --release -- 42 100000 --demes 3 --signal-threshold 0.3  # with group 
 
 CLI flags: `--pop N`, `--grid N`, `--pred N` (flee zones), `--freeze-zones N`, `--food N`, `--ticks N`, `--zone-radius F`, `--zone-speed F`, `--zone-drain F`, `--zone-coverage F`, `--signal-cost F`, `--signal-range F`, `--signal-threshold F`, `--patch-ratio F`, `--kin-bonus F`, `--demes N`, `--migration-rate F`, `--group-interval N`, `--checkpoint-interval N`, `--resume PATH`, `--metrics-interval N`.
 
-Output: `output.csv` (24 columns), `trajectory.csv`, `input_mi.csv`. Batch mode also writes `divergence.csv`.
+Output: `output.csv` (25 columns), `trajectory.csv`, `input_mi.csv`. Batch mode also writes `divergence.csv`.
 
 ## Metrics
 
-Per-generation CSV tracks 24 columns including:
+Per-generation CSV tracks 25 columns including:
 
 - **MI** (mutual information) - does symbol choice correlate with sender context (zone distance)?
 - **JSD** (Jensen-Shannon divergence) - do receivers change behavior depending on which signal they get?
@@ -80,4 +80,6 @@ See [FINDINGS.md](FINDINGS.md) for full analysis across runs.
 
 **Kill zones** (v4): Visible predators replaced with invisible kill zones. Zones are circular regions that drift randomly. Prey cannot see zones; body-state inputs (zone damage, energy delta, freeze pressure) provide indirect sensation. Flee zones drain energy on a gradient; freeze zones penalize movement. The incompatible optimal responses prevent hardcoded strategies.
 
-**v7** (current): Three structural barriers to communication identified from v6 analysis (98k gens, MI~0): no information asymmetry, individual-only selection, trivially easy emission. v7 addresses all three: death witness inputs (prey near zone deaths get directional info about danger), deme-based group selection (multi-level selection rewarding communicating demes), and configurable signal threshold (higher values make silence the default, giving signals dynamic range). 39 brain inputs (up from 36), 5683-weight genome. First runs in progress.
+**v7**: Three structural barriers to communication identified from v6 analysis (98k gens, MI~0): no information asymmetry, individual-only selection, trivially easy emission. v7 addresses all three: death witness inputs (prey near zone deaths get directional info about danger), deme-based group selection (multi-level selection rewarding communicating demes), and configurable signal threshold (higher values make silence the default, giving signals dynamic range). 39 brain inputs (up from 36), 5683-weight genome.
+
+**v8-v10**: Controlled experiments stripping free information channels (death echoes, freeze pressure) and varying vision range. Era 8 revealed that food encoding persisted across parameter configurations (input MI 0.10-0.18) but signals remained net negative at 384 population. v10 (2,000 population, 100x100 grid) is testing whether the population threshold for signal adaptive value lies below 5,000.

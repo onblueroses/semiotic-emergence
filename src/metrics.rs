@@ -29,32 +29,48 @@ pub fn compute_mutual_info(signal_events: &[SignalEvent], mi_bins: &[f32; 3]) ->
     mi_from_contingency(&counts)
 }
 
-/// I(Signal; `FoodDistance`) using fixed bins on inputs\[5\] (normalized 0-1).
-/// Bins: [0, 0.25), [0.25, 0.5), [0.5, 0.75), [0.75, 1.0].
+/// I(Signal; `FoodDistance`) using adaptive quartile binning on inputs\[5\].
+/// Bin edges derived from data each generation, avoiding degenerate bins when
+/// food distances cluster near zero (which they do at every tested grid/food setting).
 pub fn compute_food_mi(signal_events: &[SignalEvent]) -> f32 {
+    adaptive_quartile_mi(signal_events, |e| e.inputs[5])
+}
+
+/// MI between emitted symbol and an arbitrary continuous variable, using
+/// data-derived quartile bin edges. Handles any value distribution without
+/// fixed-bin degeneracy.
+fn adaptive_quartile_mi(
+    signal_events: &[SignalEvent],
+    value_fn: impl Fn(&SignalEvent) -> f32,
+) -> f32 {
     if signal_events.len() < 20 {
+        return 0.0;
+    }
+    let mut vals: Vec<f32> = signal_events.iter().map(&value_fn).collect();
+    vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let q1 = vals[vals.len() / 4];
+    let q2 = vals[vals.len() / 2];
+    let q3 = vals[3 * vals.len() / 4];
+    // If all values are identical, MI is zero (no variance to correlate with)
+    if (q1 - q3).abs() < f32::EPSILON {
         return 0.0;
     }
     let mut counts = [[0u32; 4]; NUM_SYMBOLS];
     for e in signal_events {
         let sym = (e.symbol as usize).min(NUM_SYMBOLS - 1);
-        let bin = food_dist_bin(e.inputs[5]);
+        let v = value_fn(e);
+        let bin = if v <= q1 {
+            0
+        } else if v <= q2 {
+            1
+        } else if v <= q3 {
+            2
+        } else {
+            3
+        };
         counts[sym][bin] += 1;
     }
     mi_from_contingency(&counts)
-}
-
-/// Food distance bin: [0, 0.25), [0.25, 0.5), [0.5, 0.75), [0.75, 1.0].
-fn food_dist_bin(dist: f32) -> usize {
-    if dist < 0.25 {
-        0
-    } else if dist < 0.5 {
-        1
-    } else if dist < 0.75 {
-        2
-    } else {
-        3
-    }
 }
 
 /// Zone distance bin using configurable bin edges.
@@ -804,6 +820,34 @@ mod tests {
         assert!(
             mi < 0.01,
             "Expected food_mi ~ 0 for uniform distribution, got {mi}"
+        );
+    }
+
+    #[test]
+    fn food_mi_clustered_near_zero() {
+        // Regression: food distances cluster near zero at realistic params (food=520, grid=100).
+        // Fixed bins put everything in [0, 0.25) giving MI=0. Adaptive bins should detect signal.
+        let mut events = Vec::new();
+        for i in 0..200 {
+            // Symbol 0 when very close (0.01-0.02), symbol 1 when slightly further (0.03-0.05)
+            let (symbol, food_dist) = if i % 2 == 0 {
+                (0_u8, 0.01 + (i as f32 % 10.0) * 0.001)
+            } else {
+                (1_u8, 0.03 + (i as f32 % 10.0) * 0.002)
+            };
+            let mut inputs = [0.5_f32; INPUTS];
+            inputs[5] = food_dist;
+            events.push(SignalEvent {
+                symbol,
+                zone_dist: 5.0,
+                inputs,
+                emitter_idx: 0,
+            });
+        }
+        let mi = compute_food_mi(&events);
+        assert!(
+            mi > 0.05,
+            "Adaptive bins should detect correlation even when all values < 0.05, got {mi}"
         );
     }
 

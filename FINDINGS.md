@@ -40,9 +40,9 @@ Every significant run, its parameters, and headline result.
 | v6-mute-s300 | 6 | 300 | 133,160 | drain 0.02, freeze zones, --no-signals | ~8% fitter than signal run |
 | v7-sig-42 | 7 | 42 | 94,820 | pop=1000, drain 0.05, demes, death echoes, threshold 0.3 | Signals -12.8%, memory encoding, zone MI ~0 |
 | v7-mute-42 | 7 | 42 | 100,520 | same, --no-signals | baseline |
-| v8-scarce-42 | 8 | 42 | 43,310 | no-death-echoes, no-freeze-pressure, vision 2.0 | food_mi=0, MI~0, mute +43% fitter |
+| v8-scarce-42 | 8 | 42 | 43,310 | no-death-echoes, no-freeze-pressure, vision 2.0 | Food encoding 0.10-0.18 (input_mi), MI~0, mute +43% fitter |
 | v8-mute-42 | 8 | 42 | 95,940 | same, --no-signals | baseline |
-| v9-deme-42 | 8 | 42 | ~21,000 | v8 + demes 4, vision 0.5 | food_mi=0, MI~0, mute +56% fitter (killed early) |
+| v9-deme-42 | 8 | 42 | ~21,000 | v8 + demes 4, vision 0.5 | MI~0, mute +56% fitter (killed early) |
 | v9-mute-42 | 8 | 42 | ~36,000 | same, --no-signals | baseline (killed early) |
 | gpu-5k-s42 | GPU | 42 | 100,000 | 5k pop, 150x150, A100, JAX | **Signals have adaptive value** (+0.51 corr) |
 
@@ -533,7 +533,7 @@ Each addition provided alternative information channels that competed with signa
 ### The design
 
 Three code changes motivated by the Cross-Era Analysis:
-1. **food_mi metric**: I(Signal; FoodDistance) to measure what signals actually encode (food, not zones)
+1. **food_mi metric**: I(Signal; FoodDistance) using adaptive quartile binning to measure what signals actually encode
 2. **Optional input stripping**: `--no-death-echoes` (zeros inputs 36-38), `--no-freeze-pressure` (zeros input 2) to remove free information channels competing with signals
 3. **Vision flag**: `--vision F` (scale-relative food search radius) to make food hard to find
 
@@ -541,9 +541,9 @@ Three code changes motivated by the Cross-Era Analysis:
 
 Parameters: pop=384, grid=56, drain=0.02, signal_cost=0.002, vision=2.0 (~5.6 cells), no-death-echoes, no-freeze-pressure.
 
-**1. food_mi is flat zero.** Across 43k generations, signals carry zero food information. The food_mi metric works (tested with synthetic data) - signals simply don't encode food distance.
+**1. Food encoding present but hidden.** The `food_mi` column in output.csv reported zero due to a binning bug (fixed bins degenerate when food distances cluster near zero). Retroactive analysis of input_mi.csv shows food encoding at 0.10-0.18 - consistent with Era 4 levels. Signals encoded food location throughout, matching the pattern from every previous era.
 
-**2. MI near zero.** Zone MI 0.0002 at gen 10k. No context-dependent signaling emerging.
+**2. Zone MI near zero.** Zone MI 0.0002 at gen 10k. No zone-distance encoding emerging.
 
 **3. Mute decisively outperforms (+43%).** At gen 10k: signal avg fitness 805, mute avg fitness 1257. The signal cost penalty (0.002/emission * ~385 emissions/agent/gen ≈ 0.77 energy) is lethal without compensating benefit.
 
@@ -553,13 +553,13 @@ Parameters: pop=384, grid=56, drain=0.02, signal_cost=0.002, vision=2.0 (~5.6 ce
 
 Added `--demes 4 --migration-rate 0.05 --vision 0.5` (~1.4 cells). Hypothesis: kin selection (demes) + severe information asymmetry (near-blindness) would make food signaling individually adaptive.
 
-**1. Same result.** food_mi=0, MI=0.0002, mute +56% fitter at gen 10k. Killed at ~21k gens after confirming the pattern.
+**1. Same result.** MI=0.0002, mute +56% fitter at gen 10k. Killed at ~21k gens after confirming the pattern.
 
 **2. Demes don't fix the altruistic signaling problem at this scale.** With 384 agents in 16 demes (~24 per deme), kin clusters are too small for inclusive fitness to offset the metabolic signal cost.
 
 ### What this means
 
-Stripping free information, adding kin selection, and making food scarce did not help. The problem is not ecological pressure or competing information channels. **The problem is population scale** - see GPU section below.
+Stripping free information, adding kin selection, and making food scarce did not make signals adaptive. Food encoding persisted (input MI 0.10-0.18) but provided insufficient fitness advantage to offset signal costs at 384 population. **The problem is population scale** - see GPU section below.
 
 ---
 
@@ -640,7 +640,7 @@ Inputs 0-1 are justified: prey need body-state awareness. Inputs 2, 36-38 give a
 
 ### Implications for next runs
 
-1. **Add food_mi metric** - I(Signal; FoodDistance) as headline metric alongside zone MI
+1. **Fix food_mi metric** - I(Signal; FoodDistance) using adaptive quartile binning (fixed bins were degenerate)
 2. **Remove inputs 2, 36-38** - restore information asymmetry
 3. **Make food harder to find** - amplify the one thing signals successfully encoded
 4. **Stop adding features** - each addition has degraded communication
@@ -677,8 +677,8 @@ What holds true across all runs, what's been disproven, and what remains open.
 | Higher signal threshold improves signal quality | 7 | Reduced signal diversity (entropy 1.17 vs 1.64), correlating with lower MI |
 | 10x cheaper signals enable communication | 7 | Cost was never the bottleneck; signals fail because responses don't improve survival |
 | Medium drain (0.05) is the sweet spot | 7 | Signals -12.8% at 0.05, worse than -8% at 0.02 |
-| Stripping free info channels restores signal value | 8 | food_mi=0, MI~0, mute +43% fitter despite removing death echoes and freeze pressure |
-| Reduced vision forces signal reliance | 8 | Vision 2.0 (~5.6 cells) and 0.5 (~1.4 cells) both produced zero food_mi |
+| Stripping free info channels restores signal value | 8 | Food encoding persisted (input MI 0.10-0.18) but mute still +43% fitter |
+| Reduced vision forces signal reliance | 8 | Vision 2.0 and 0.5 both had food encoding but signals still net negative |
 | Demes enable altruistic food signaling | 8 (v9) | 4x4 demes + near-blindness still produced mute +56% fitter |
 | Ecological conditions are the bottleneck | 8+GPU | **Disproven: population scale is the bottleneck** |
 
@@ -703,9 +703,9 @@ What holds true across all runs, what's been disproven, and what remains open.
 
 3. **Why is response_fit_corr always zero?** ANSWERED: Measurement artifact. Signal coverage is so high that every prey hears signals every tick. The "no signal" bucket never reaches the 10-sample threshold. Fix: compare actions under different symbols, not hearing vs not-hearing.
 
-4. **Can stripping redundant inputs restore signal value?** ANSWERED: No. Era 8 (v8) stripped death echoes and freeze pressure. food_mi=0, MI~0, mute +43% fitter. The problem was population scale, not competing information channels.
+4. **Can stripping redundant inputs restore signal value?** ANSWERED: No. Era 8 (v8) stripped death echoes and freeze pressure. Food encoding persisted (input MI 0.10-0.18) but mute still +43% fitter. The problem was population scale, not competing information channels.
 
-5. **Does making food harder to find amplify signal value?** ANSWERED: Not at 384 pop. Era 8 (v8 vision=2.0, v9 vision=0.5) still produced zero food_mi. Scale, not scarcity, is the bottleneck.
+5. **Does making food harder to find amplify signal value?** ANSWERED: Not at 384 pop. Era 8 (v8 vision=2.0, v9 vision=0.5) had food encoding present but signals still net negative. Scale, not scarcity, is the bottleneck.
 
 6. **What is the minimum population for signal emergence?** The threshold is between 384 (no emergence) and 5,000 (emergence). A 2,000-population Rust run would bracket this. If signals emerge at 2k, the Rust version becomes a viable platform for further experiments.
 
