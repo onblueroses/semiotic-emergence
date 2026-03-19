@@ -654,7 +654,7 @@ What holds true across all runs, what's been disproven, and what remains open.
 ### Universal patterns (every era, every seed)
 
 - **Population scale is the key variable.** At 384-1000 agents, signals are net negative at every parameter configuration tested (8 eras, 15+ runs). At 5,000 agents (GPU), signals become adaptive (r=+0.51). The signal environment must be dense enough for statistical regularity to emerge from noisy senders.
-- **response_fit_corr = 0 is a broken metric.** The three-way causal chain measurement was data-starved, not biologically zero. With signal coverage ~50% of grid and hundreds of emitters, every prey hears signals on every tick - the "no signal" bucket never fills. This was confirmed in the GPU run and explains the persistent zero across all eras. Proposed fix: compare actions under symbol X vs symbol Y, not hearing vs not-hearing.
+- **response_fit_corr = 0 was a broken metric (fixed in commit 31a1516).** The three-way causal chain measurement was data-starved, not biologically zero. With signal coverage ~50% of grid and hundreds of emitters, every prey hears signals on every tick - the "no signal" bucket never fills. This was confirmed in the GPU run and explains the persistent zero across all eras. Fix implemented: `per_prey_symbol_jsd` compares actions under different dominant symbols (mean pairwise JSD), replacing the old with/without-signal comparison. First nonzero readings expected from v11 runs.
 - **receiver_fit_corr is a spatial confound.** Center prey hear more signals AND survive more. Consistently 0.48-0.87 across all eras. Not evidence of signal utility.
 - **Silence near danger.** Prey reduce per-capita signaling near threats. Present from gen 0, maintained but not amplified by evolution. Likely an architectural spandrel of shared hidden layers, not a learned strategy.
 - **Symbol monopoly under weak selection.** Without strong differentiation pressure, one symbol dominates. Seen in eras 1, 2 (phase 3), and 5. Only resisted when signals encode useful information (era 4 at 0.02 drain).
@@ -709,7 +709,7 @@ What holds true across all runs, what's been disproven, and what remains open.
 
 6. **What is the minimum population for signal emergence?** The threshold is between 384 (no emergence) and 5,000 (emergence). A 2,000-population Rust run would bracket this. If signals emerge at 2k, the Rust version becomes a viable platform for further experiments.
 
-7. **Can the response_fit_corr metric be fixed?** Three proposed approaches: (a) symbol X vs Y comparison, (b) above/below median signal strength, (c) per-symbol response profiles. None tested yet. This would be the first proper Level 4 measurement in the project's history.
+7. **Can the response_fit_corr metric be fixed?** FIXED (commit 31a1516). Implemented approach (a): `per_prey_symbol_jsd` computes mean pairwise JSD across dominant-symbol action distributions per prey. response_fit_corr = Pearson(per_prey_symbol_jsd, fitness). Also added `--max-signal-hidden N` cap and segment-scoped crossover. Awaiting first v11 run for data. Risk: if symbol monopoly persists, most prey will have only 1 qualifying symbol and metric degenerates again.
 
 8. **Publication readiness.** The GPU result (signal adaptive value at 5k, phase transition at 40k, receivers extracting meaning from noisy senders) is publishable. The Rust history (8 eras of negative results at small scale) provides essential context showing the scale threshold. Combined, this tells a complete story about conditions for communication emergence.
 
@@ -720,10 +720,10 @@ What holds true across all runs, what's been disproven, and what remains open.
 | 1 | Signals have adaptive value | **NO** at all configs (-8% to -25%) | **YES** (r=+0.51, +52 fitness) |
 | 2 | Receivers change behavior | Weak yes (JSD 0.15-0.27) | Yes (JSD 0.033-0.066, rising) |
 | 3 | Different symbols carry different info | Yes at 0.02 drain (food encoding) | Weak (PC1=89.9%, one channel) |
-| 4 | Responses are appropriate | Metric broken (data starvation) | Metric broken (same cause) |
+| 4 | Responses are appropriate | Metric fixed (commit 31a1516), awaiting v11 data | Metric fixed, needs GPU rebuild |
 | 5 | Genuine reference | Not testable | Not testable |
 
-**Critical gap:** Level 4 has never been properly measured. The proposed fix (symbol X vs Y comparison) would answer this for the first time.
+**Critical gap:** Level 4 fix is implemented (commit 31a1516) but not yet measured. First v11 run will produce nonzero response_fit_corr for the first time. Watch for: (1) mute baseline should be near-zero, (2) symbol monopoly degeneracy if qualifying fraction < 30%.
 
 ### Parameter history
 
