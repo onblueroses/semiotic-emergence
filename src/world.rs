@@ -325,10 +325,10 @@ pub struct Prey {
     pub ticks_alive: u32,
     pub food_eaten: u32,
     pub memory: [f32; MEMORY_SIZE],
-    /// Per-prey action counts when receiving any signal, by context.
-    pub actions_with_signal: [[u32; 5]; 2],
-    /// Per-prey action counts when not receiving any signal, by context.
-    pub actions_without_signal: [[u32; 5]; 2],
+    /// Per-prey action counts by dominant received symbol (for per-symbol response JSD).
+    pub actions_per_symbol: [[u32; 5]; NUM_SYMBOLS],
+    /// Ticks where this prey received no signal (for `receiver_fit_corr` reception rate).
+    pub ticks_without_signal: u32,
     /// Actions at the tick a signal disappears (onset of silence), by context.
     pub silence_onset_actions: [[u32; 5]; 2],
     /// Whether this prey received a signal on the previous tick (for onset detection).
@@ -470,8 +470,8 @@ impl World {
                 ticks_alive: 0,
                 food_eaten: 0,
                 memory: std::array::from_fn(|_| rng.gen_range(-0.1..0.1)),
-                actions_with_signal: [[0; 5]; 2],
-                actions_without_signal: [[0; 5]; 2],
+                actions_per_symbol: [[0; 5]; NUM_SYMBOLS],
+                ticks_without_signal: 0,
                 silence_onset_actions: [[0; 5]; 2],
                 had_signal_prev_tick: false,
                 zone_damage: 0.0,
@@ -739,9 +739,9 @@ impl World {
                 // Per-prey receiver tracking for three-way coupling + silence onset
                 let has_signal = max_str > 0.0;
                 if has_signal {
-                    self.prey[i].actions_with_signal[context][action] += 1;
+                    self.prey[i].actions_per_symbol[best_sym][action] += 1;
                 } else {
-                    self.prey[i].actions_without_signal[context][action] += 1;
+                    self.prey[i].ticks_without_signal += 1;
                     if self.prey[i].had_signal_prev_tick {
                         self.prey[i].silence_onset_actions[context][action] += 1;
                     }
@@ -1143,8 +1143,8 @@ mod tests {
             ticks_alive: 0,
             food_eaten: 0,
             memory: [0.0; MEMORY_SIZE],
-            actions_with_signal: [[0; 5]; 2],
-            actions_without_signal: [[0; 5]; 2],
+            actions_per_symbol: [[0; 5]; NUM_SYMBOLS],
+            ticks_without_signal: 0,
             silence_onset_actions: [[0; 5]; 2],
             had_signal_prev_tick: false,
             zone_damage: 0.0,
@@ -1840,18 +1840,16 @@ mod tests {
         let mut rng = ChaCha8Rng::seed_from_u64(0);
 
         world.step(&mut rng);
-        let total_with: u32 = world.prey[0]
-            .actions_with_signal
+        let total_symbol: u32 = world.prey[0]
+            .actions_per_symbol
             .iter()
-            .flat_map(|c| c.iter())
+            .flat_map(|s| s.iter())
             .sum();
-        let total_without: u32 = world.prey[0]
-            .actions_without_signal
-            .iter()
-            .flat_map(|c| c.iter())
-            .sum();
-        assert_eq!(total_with, 1, "Should have 1 action with signal");
-        assert_eq!(total_without, 0, "Should have 0 actions without signal");
+        assert_eq!(total_symbol, 1, "Should have 1 action under some symbol");
+        assert_eq!(
+            world.prey[0].ticks_without_signal, 0,
+            "Should have 0 ticks without signal"
+        );
         assert!(world.prey[0].had_signal_prev_tick);
 
         world.signals.clear();
@@ -1861,15 +1859,10 @@ mod tests {
             .iter()
             .flat_map(|c| c.iter())
             .sum();
-        let total_without_after: u32 = world.prey[0]
-            .actions_without_signal
-            .iter()
-            .flat_map(|c| c.iter())
-            .sum();
         assert_eq!(total_onset, 1, "Should detect silence onset");
         assert_eq!(
-            total_without_after, 1,
-            "Should have 1 action without signal"
+            world.prey[0].ticks_without_signal, 1,
+            "Should have 1 tick without signal"
         );
         assert!(!world.prey[0].had_signal_prev_tick);
 

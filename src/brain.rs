@@ -50,6 +50,21 @@ pub const SEG_SIGOUT_BIAS: usize = SEG_SIGHID_SIGOUT + MAX_SIGNAL_HIDDEN * SIGNA
 pub const SEG_BASE_MEM: usize = SEG_SIGOUT_BIAS + SIGNAL_OUTPUTS;
 pub const SEG_MEM_BIAS: usize = SEG_BASE_MEM + MAX_BASE_HIDDEN * MEMORY_OUTPUTS;
 
+/// Genome segment boundaries as (start, end) pairs for segment-scoped crossover.
+/// Each segment is a functional unit that should be inherited as a whole.
+pub const SEGMENT_BOUNDARIES: [(usize, usize); 10] = [
+    (SEG_INPUT_BASE, SEG_BASE_BIAS),      // input -> base hidden
+    (SEG_BASE_BIAS, SEG_BASE_MOVE),       // base hidden biases
+    (SEG_BASE_MOVE, SEG_MOVE_BIAS),       // base -> movement
+    (SEG_MOVE_BIAS, SEG_BASE_SIGHID),     // movement biases
+    (SEG_BASE_SIGHID, SEG_SIGHID_BIAS),   // base -> signal hidden
+    (SEG_SIGHID_BIAS, SEG_SIGHID_SIGOUT), // signal hidden biases
+    (SEG_SIGHID_SIGOUT, SEG_SIGOUT_BIAS), // signal hidden -> signal out
+    (SEG_SIGOUT_BIAS, SEG_BASE_MEM),      // signal output biases
+    (SEG_BASE_MEM, SEG_MEM_BIAS),         // base -> memory
+    (SEG_MEM_BIAS, MAX_GENOME_LEN),       // memory biases
+];
+
 #[derive(Copy, Clone, Debug)]
 pub struct ForwardResult {
     pub actions: [f32; MOVEMENT_OUTPUTS],
