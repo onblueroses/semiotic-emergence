@@ -12,3 +12,14 @@ nul
 CLAUDE.md
 profile*.txt
 .claude/
+figures/*/
+figures/viz-data.tar.gz
+figures/__pycache__/
+analysis*/
+__pycache__/
+*.png
+!figures/fig*.png
+mi_analyze.py
+output_optimized.csv
+runs-snapshot.tar.gz
+semiotic-emergence/
