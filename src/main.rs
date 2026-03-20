@@ -1,3 +1,15 @@
+#![allow(
+    clippy::large_stack_arrays,
+    clippy::explicit_iter_loop,
+    clippy::float_cmp,
+    clippy::unnecessary_cast,
+    clippy::nonminimal_bool,
+    clippy::unwrap_used,
+    clippy::too_many_lines,
+    clippy::no_effect_underscore_binding,
+    clippy::needless_range_loop
+)]
+
 mod brain;
 mod evolution;
 mod metrics;
@@ -31,6 +43,7 @@ struct Checkpoint {
     traj_jsd_history: Vec<f32>,
 }
 
+#[allow(clippy::struct_excessive_bools)]
 struct SimParams {
     pop_size: usize,
     grid_size: i32,
@@ -63,6 +76,7 @@ struct SimParams {
     group_interval: usize,
     no_death_echoes: bool,
     no_freeze_pressure: bool,
+    blind: bool,
     food_vision: i32,
     max_signal_hidden_cap: usize,
 }
@@ -89,8 +103,9 @@ impl SimParams {
         let deme_divisions: usize = parse_flag(args, "--demes").unwrap_or(1);
         let migration_rate: f32 = parse_flag(args, "--migration-rate").unwrap_or(0.05);
         let group_interval: usize = parse_flag(args, "--group-interval").unwrap_or(100);
-        let no_death_echoes = args.iter().any(|a| a == "--no-death-echoes");
-        let no_freeze_pressure = args.iter().any(|a| a == "--no-freeze-pressure");
+        let blind = args.iter().any(|a| a == "--blind");
+        let no_death_echoes = blind || args.iter().any(|a| a == "--no-death-echoes");
+        let no_freeze_pressure = blind || args.iter().any(|a| a == "--no-freeze-pressure");
         let max_signal_hidden_cap: usize = parse_flag(args, "--max-signal-hidden")
             .unwrap_or(brain::MAX_SIGNAL_HIDDEN)
             .clamp(brain::MIN_SIGNAL_HIDDEN, brain::MAX_SIGNAL_HIDDEN);
@@ -148,6 +163,7 @@ impl SimParams {
             group_interval,
             no_death_echoes,
             no_freeze_pressure,
+            blind,
             food_vision,
             max_signal_hidden_cap,
         }
@@ -358,6 +374,7 @@ fn evaluate_generation(
         params.signal_threshold,
         params.no_death_echoes,
         params.no_freeze_pressure,
+        params.blind,
         params.food_vision,
     );
 

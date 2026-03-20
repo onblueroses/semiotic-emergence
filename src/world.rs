@@ -429,6 +429,7 @@ pub struct World {
     pub signal_threshold: f32,
     pub no_death_echoes: bool,
     pub no_freeze_pressure: bool,
+    pub blind: bool,
     pub food_vision: i32,
 }
 
@@ -455,6 +456,7 @@ impl World {
         signal_threshold: f32,
         no_death_echoes: bool,
         no_freeze_pressure: bool,
+        blind: bool,
         food_vision: i32,
     ) -> Self {
         let brains: Vec<Brain> = agents.iter().map(|a| a.brain.clone()).collect();
@@ -558,6 +560,7 @@ impl World {
             signal_threshold,
             no_death_echoes,
             no_freeze_pressure,
+            blind,
             food_vision,
         }
     }
@@ -874,6 +877,16 @@ impl World {
             inp[DEATH_INPUT_START] = 0.0;
             inp[DEATH_INPUT_START + 1] = 0.0;
             inp[DEATH_INPUT_START + 2] = 0.0;
+        }
+        if self.blind {
+            // Zero all spatial perception: food (3-5), ally (6-8)
+            // freeze_pressure (2) and death echoes (36-38) already handled above
+            inp[3] = 0.0;
+            inp[4] = 0.0;
+            inp[5] = 0.0;
+            inp[6] = 0.0;
+            inp[7] = 0.0;
+            inp[8] = 0.0;
         }
 
         inp
@@ -1205,6 +1218,7 @@ mod tests {
             signal_threshold: 1.0 / 6.0,
             no_death_echoes: false,
             no_freeze_pressure: false,
+            blind: false,
             food_vision: TEST_GRID / 2,
             zone_deaths: 0,
             freeze_zone_deaths: 0,
@@ -1622,6 +1636,7 @@ mod tests {
             4,
             0,
             1.0 / 6.0,
+            false,
             false,
             false,
             TEST_GRID / 2,
@@ -2069,6 +2084,7 @@ mod tests {
             1.0 / 6.0,
             false,
             false,
+            false,
             TEST_GRID / 2,
         );
 
@@ -2216,5 +2232,22 @@ mod tests {
             inputs[2].abs() < f32::EPSILON,
             "Expected zero freeze_pressure with no_freeze_pressure"
         );
+    }
+
+    #[test]
+    fn blind_zeros_spatial_inputs() {
+        // Two prey so ally inputs could be nonzero
+        let mut world = minimal_world(&[(5, 5), (6, 5)], (100.0, 100.0));
+        world.blind = true;
+        let inputs = world.build_inputs(0);
+        // food (3-5) and ally (6-8) must be zero
+        for i in 3..=8 {
+            assert!(
+                inputs[i].abs() < f32::EPSILON,
+                "Expected zero input[{i}] with blind"
+            );
+        }
+        // Signals (9-26), memory (27-34), energy (35) should still work
+        assert!(inputs[35] > 0.0, "Energy should be nonzero");
     }
 }

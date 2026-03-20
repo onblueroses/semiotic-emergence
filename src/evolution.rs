@@ -696,6 +696,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::similar_names)]
     fn crossover_inherits_hidden_sizes() {
         use rand::SeedableRng;
         use rand_chacha::ChaCha8Rng;
@@ -708,31 +709,31 @@ mod tests {
         b.base_hidden_size = 20;
         b.signal_hidden_size = 16;
 
-        let mut got_a_base = false;
-        let mut got_b_base = false;
-        let mut got_a_sig = false;
-        let mut got_b_sig = false;
+        let mut got_parent_a_base = false;
+        let mut got_parent_b_base = false;
+        let mut got_parent_a_sig = false;
+        let mut got_parent_b_sig = false;
         for _ in 0..100 {
             let child = crossover(&a, &b, &mut rng);
             if child.base_hidden_size == 8 {
-                got_a_base = true;
+                got_parent_a_base = true;
             }
             if child.base_hidden_size == 20 {
-                got_b_base = true;
+                got_parent_b_base = true;
             }
             if child.signal_hidden_size == 4 {
-                got_a_sig = true;
+                got_parent_a_sig = true;
             }
             if child.signal_hidden_size == 16 {
-                got_b_sig = true;
+                got_parent_b_sig = true;
             }
         }
         assert!(
-            got_a_base && got_b_base,
+            got_parent_a_base && got_parent_b_base,
             "Should inherit base_hidden_size from both parents"
         );
         assert!(
-            got_a_sig && got_b_sig,
+            got_parent_a_sig && got_parent_b_sig,
             "Should inherit signal_hidden_size from both parents"
         );
     }
