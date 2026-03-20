@@ -51,7 +51,7 @@ Every significant run, its parameters, and headline result.
 | v11-cap32-42 | 11 | 42 | 74,810 | pop=384, max-signal-hidden=32 (control), metrics-interval=10 | response_fit_corr near zero, occasionally +0.16 |
 | v12-blind6-42 | 12 | 42 | running | pop=384, --blind, max-signal-hidden=6 | Blind mode: spatial perception stripped (running) |
 
-Raw data files: `analysis/` directory and VPS `runs/` directories.
+Raw data files: `analysis/` directory and VPS `runs/` directories. Figures generated from `figures/generate_figures.py`.
 
 ---
 
@@ -347,6 +347,9 @@ The turbulent semiotic window (act 4) appears in all three seeds during the post
 
 *Question: Do signals actually improve fitness, or are they noise that evolution tolerates?*
 
+![Signal fitness impact across experimental conditions](figures/fig1_signal_value.png)
+*Figure 1: Signal vs mute fitness across eras. Panels A-C show smoothed fitness time series; panel D summarizes signal fitness impact. Signals are net negative at 384-1000 population across all configurations tested. Only the GPU run (pop=5000) shows positive signal value.*
+
 ### Experimental design
 
 First controlled counterfactual in the project's history. Three runs, same binary, same parameters except the signal channel.
@@ -465,6 +468,12 @@ The headline MI metric (I(Signal; ZoneDistance)) was blind to food encoding. For
 ## Era 7: Information Asymmetry + Group Selection
 
 *Question: Do death witness inputs, demes, and configurable signal threshold improve communication?*
+
+![Semiotic metric evolution across eras](figures/fig2_semiotic_metrics.png)
+*Figure 2: Core semiotic metrics across runs. MI stays near zero regardless of configuration. Iconicity stable at ~0.48 (prey signal more in zones). Signal entropy drops as populations converge on fewer symbols. Receiver JSD (in-zone) shows moderate behavioral differentiation.*
+
+![Neural architecture evolution](figures/fig3_brain_evolution.png)
+*Figure 3: Brain evolution across conditions. Mute runs (no signal channel) evolve smaller brains. v10 (pop=2000) shows signal hidden layer at cap (32). Zone deaths converge between signal and mute runs over time.*
 
 ### The design
 
@@ -617,6 +626,9 @@ Key shifts at scale: food encoding vanishes (signal environment replaces it as p
 
 *Question: Does the fixed response_fit_corr metric reveal whether prey differentiate behavior across symbols, and does constraining signal capacity improve encoding quality?*
 
+![Volume knob experiment: cap=6 vs cap=32](figures/fig4_volume_knob.png)
+*Figure 4: Volume knob experiment comparing signal hidden layer cap=6 vs cap=32. Key finding: cap=6 produces higher food MI and more symbol diversity, but response_fit_corr is negative (symbol differentiation is maladaptive). Cap=32 oscillates near zero. Direct spatial inputs outcompete the signal channel at 384 population.*
+
 ### Background
 
 The response_fit_corr metric was zero across all prior eras due to a measurement artifact (commit 31a1516 fix). v11 runs are the first to measure whether prey that differentiate actions across received symbols survive better, using `per_prey_symbol_jsd` (mean pairwise JSD across dominant-symbol action distributions per prey).
@@ -754,6 +766,9 @@ What holds true across all runs, what's been disproven, and what remains open.
 7. **Can the response_fit_corr metric be fixed?** FIXED AND MEASURED (commit 31a1516, v11 data). Metric works - produces nonzero values. But the biological result is that symbol differentiation is maladaptive at 384 pop (cap=6: -0.13 to -0.28) and neutral (cap=32: ~0). Direct spatial inputs outcompete the signal channel.
 
 8. **Does removing spatial perception flip response_fit_corr positive?** TESTING (v12-blind6-42). `--blind` zeros food dx/dy/dist, ally dx/dy/dist (plus death echoes and freeze pressure already). If signals become the only source of spatial information, symbol differentiation should become adaptive. Expected: positive response_fit_corr, higher MI, possible vocabulary emergence.
+
+![Blind mode early results](figures/fig5_blind_mode.png)
+*Figure 5: v12-blind6-42 early trajectory (~3k gens). Brain collapsed to minimum (~4 neurons), MI flat zero, signal entropy recovering from initial crash. Too early for conclusions - needs 20k+ gens.*
 
 ### Evidence hierarchy status
 
