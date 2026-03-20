@@ -51,7 +51,7 @@ Every significant run, its parameters, and headline result.
 | v11-cap32-42 | 11 | 42 | 74,810 | pop=384, max-signal-hidden=32 (control), metrics-interval=10 | response_fit_corr near zero, occasionally +0.16 |
 | v12-blind6-42 | 12 | 42 | running | pop=384, --blind, max-signal-hidden=6 | Blind mode: spatial perception stripped (running) |
 
-Detailed per-run analysis: `findings/` directory. Data files: `analysis/` directory.
+Raw data files: `analysis/` directory and VPS `runs/` directories.
 
 ---
 
@@ -93,7 +93,6 @@ Epoch 1 was receiver-dominated - all per-symbol JSDs simultaneously hit 0.693 (m
 
 Moved to 8x scale with an evolvable hidden layer to test whether larger brains and populations stabilize semiotic states. Hidden size became a heritable gene (4-16 range) with energy cost proportional to neuron count.
 
-Detailed analysis: `findings/2026-03-09-baseline-runs.md`
 
 ---
 
@@ -123,8 +122,6 @@ This era had three sub-phases as we diagnosed and addressed structural barriers.
 
 **7. Trajectory freezes completely.** Trajectory JSD declines from 0.016 (0-10k) to 0.0006 (90-100k). The semiotic landscape is frozen by end of run.
 
-Detailed analysis: `findings/2026-03-09-100k-8x-scale.md`
-
 ### Phase 2: Pro-communication tuning
 
 Four changes to address the structural barriers identified in Phase 1:
@@ -135,8 +132,6 @@ Four changes to address the structural barriers identified in Phase 1:
 | Signal cost | 0.01 | 0.0 (free) | Removes -0.34 sender fitness penalty |
 | Predator speed | round(3*scale) | round(1.5*scale) | Warned prey now have ~6 ticks to react instead of ~3 |
 | Evasion boost | none | +1 movement when receiving signal near predator | Direct fitness benefit for signal-responsive prey |
-
-Rationale: `findings/2026-03-09-pro-communication-tuning.md`
 
 ### Phase 3: Evasion boost era (runs 1-2)
 
@@ -259,7 +254,7 @@ This creates structural information asymmetry:
 
 First kill zone runs (seeds 42/43, ~900 gens) used ZONE_DRAIN_RATE = 0.10, killing in 10 ticks.
 
-Early smoke test showed promising metrics: positive iconicity (alarm calling), 6:1 jsd_pred/jsd_no_pred ratio, receiver_fit_corr 0.76. But three structural issues emerged:
+Early smoke test showed nonzero semiotic metrics: positive iconicity (alarm calling), 6:1 jsd_pred/jsd_no_pred ratio, receiver_fit_corr 0.76. But three structural issues emerged:
 
 **1. Dead silence vs behavioral silence.** silence_corr showed strong negatives (-0.58 to -0.90), but this was a mortality artifact: zones killing prey reduces total signal volume regardless of behavior. Fix: normalize signals_per_tick by alive_per_tick.
 
@@ -417,9 +412,6 @@ Combined, this would produce a 2x2 matrix isolating the interaction:
 |--|-----------|-----------|
 | signals enabled | net negative (-25.5%) | not yet tested |
 | signals disabled | baseline (mute-s100) | not yet tested |
-
-Detailed analysis: `findings/2026-03-13-overnight-analysis.md`
-Experimental design: `findings/2026-03-12-overnight-experiment.md`
 
 ---
 
@@ -757,13 +749,11 @@ What holds true across all runs, what's been disproven, and what remains open.
 
 5. **Does making food harder to find amplify signal value?** ANSWERED: Not at 384 pop. Era 8 (v8 vision=2.0, v9 vision=0.5) had food encoding present but signals still net negative. Scale, not scarcity, is the bottleneck.
 
-6. **What is the minimum population for signal emergence?** The threshold is between 384 (no emergence) and 5,000 (emergence). A 2,000-population Rust run would bracket this. If signals emerge at 2k, the Rust version becomes a viable platform for further experiments.
+6. **What is the minimum population for signal emergence?** Open. Threshold between 384 (no emergence across 9 eras) and 5,000 (emergence on GPU). v10-2k-42 brackets this at 2,000 pop (running, 66.6k/100k gens).
 
 7. **Can the response_fit_corr metric be fixed?** FIXED AND MEASURED (commit 31a1516, v11 data). Metric works - produces nonzero values. But the biological result is that symbol differentiation is maladaptive at 384 pop (cap=6: -0.13 to -0.28) and neutral (cap=32: ~0). Direct spatial inputs outcompete the signal channel.
 
 8. **Does removing spatial perception flip response_fit_corr positive?** TESTING (v12-blind6-42). `--blind` zeros food dx/dy/dist, ally dx/dy/dist (plus death echoes and freeze pressure already). If signals become the only source of spatial information, symbol differentiation should become adaptive. Expected: positive response_fit_corr, higher MI, possible vocabulary emergence.
-
-9. **Publication readiness.** The GPU result (signal adaptive value at 5k, phase transition at 40k, receivers extracting meaning from noisy senders) is publishable. The Rust history (8 eras of negative results at small scale) provides essential context showing the scale threshold. Combined, this tells a complete story about conditions for communication emergence.
 
 ### Evidence hierarchy status
 
