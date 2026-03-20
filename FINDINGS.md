@@ -14,6 +14,7 @@ Experimental history of semiotic-emergence. Each era documents what we tested, w
 - [Era 7: Information Asymmetry + Group Selection](#era-7-information-asymmetry--group-selection) - Death echoes, demes, threshold
 - [Era 8: Signal Value Testing](#era-8-signal-value-testing) - Food MI, input stripping, food scarcity
 - [GPU Scale-Up: Population is the Key Variable](#gpu-scale-up-population-is-the-key-variable) - 5,000 prey on A100
+- [Era 9: Response Quality](#era-9-response-quality) - Volume knob hypothesis, response_fit_corr first data
 - [Cross-Era Analysis](#cross-era-analysis-the-metric-problem) - The metric problem
 - [Standing Conclusions](#standing-conclusions)
 
@@ -45,6 +46,10 @@ Every significant run, its parameters, and headline result.
 | v9-deme-42 | 8 | 42 | ~21,000 | v8 + demes 4, vision 0.5 | MI~0, mute +56% fitter (killed early) |
 | v9-mute-42 | 8 | 42 | ~36,000 | same, --no-signals | baseline (killed early) |
 | gpu-5k-s42 | GPU | 42 | 100,000 | 5k pop, 150x150, A100, JAX | **Signals have adaptive value** (+0.51 corr) |
+| v10-2k-42 | 10 | 42 | 66,600+ | pop=2000, grid=100, zone-radius=14, food=520 | Population bracket test (running) |
+| v11-cap6-42 | 11 | 42 | 67,540 | pop=384, max-signal-hidden=6, metrics-interval=10 | response_fit_corr negative (-0.13 to -0.28) |
+| v11-cap32-42 | 11 | 42 | 74,810 | pop=384, max-signal-hidden=32 (control), metrics-interval=10 | response_fit_corr near zero, occasionally +0.16 |
+| v12-blind6-42 | 12 | 42 | running | pop=384, --blind, max-signal-hidden=6 | Blind mode: spatial perception stripped (running) |
 
 Detailed per-run analysis: `findings/` directory. Data files: `analysis/` directory.
 
@@ -616,6 +621,50 @@ Key shifts at scale: food encoding vanishes (signal environment replaces it as p
 
 ---
 
+## Era 9: Response Quality
+
+*Question: Does the fixed response_fit_corr metric reveal whether prey differentiate behavior across symbols, and does constraining signal capacity improve encoding quality?*
+
+### Background
+
+The response_fit_corr metric was zero across all prior eras due to a measurement artifact (commit 31a1516 fix). v11 runs are the first to measure whether prey that differentiate actions across received symbols survive better, using `per_prey_symbol_jsd` (mean pairwise JSD across dominant-symbol action distributions per prey).
+
+Two experiments test the "volume knob" hypothesis: that capping signal hidden layer capacity forces the network to develop more structured encoding with fewer neurons.
+
+### v11-cap6-42: Constrained signal capacity (seed 42, 67.5k gens)
+
+Parameters: pop=384, grid=56, max-signal-hidden=6 (vs default 32), metrics-interval=10.
+
+**1. First nonzero response_fit_corr in project history.** At gen 170: 0.137. But by gen 1k+, consistently **negative** (-0.13 to -0.28). Symbol differentiation is actively maladaptive - prey that respond differently to different symbols do worse.
+
+**2. Signal hidden at ceiling.** avg_signal_hidden=5.0-5.4 (cap=6). Evolution maximizes the constrained capacity.
+
+**3. Higher food_mi than control.** 0.008-0.013 vs 0.001-0.015. More food-location information encoded per signal, consistent with the volume knob hypothesis.
+
+**4. Higher signal entropy.** 0.90-1.00 (vs 0.82-1.12 at cap=32). More diverse symbol use, but not more useful.
+
+### v11-cap32-42: Control (seed 42, 74.8k gens)
+
+Parameters: pop=384, grid=56, max-signal-hidden=32 (default), metrics-interval=10.
+
+**1. response_fit_corr near zero, occasionally slightly positive.** Range: -0.15 to +0.16. No consistent direction. Symbol differentiation is neutral at best.
+
+**2. Signal hidden near ceiling.** avg_signal_hidden=29.7-30.7 (cap=32). Evolution maximizes signal capacity regardless of constraint.
+
+**3. Higher signal entropy.** 1.09-1.12, approaching max (ln(6)=1.79). More symbol diversity, but same lack of functional encoding.
+
+**4. traj_fluct_ratio nonzero.** 0.55-0.67, suggesting ongoing trajectory evolution absent in cap=6.
+
+### Interpretation
+
+**The volume knob hypothesis is partially confirmed but insufficient.** Cap=6 produces more food encoding (higher food_mi) and more symbol diversity. But the encoding isn't useful enough - response_fit_corr is negative because prey have better spatial information from direct inputs (food_dx, food_dy, ally_dx, ally_dy). Differentiating behavior by symbol is worse than using direct perception.
+
+**Why negative?** Prey that ignore symbol differences and act on direct spatial inputs (food direction, ally direction) outperform prey that try to use signal content. At 384 pop, the signal environment is too noisy for symbol-differentiated responses to be reliable. Evolution penalizes symbol differentiation because the signal channel is less informative than direct perception.
+
+**Next step: blind mode.** `--blind` strips all spatial perception (food dx/dy/dist, ally dx/dy/dist), leaving only body state (energy, energy_delta, zone_damage), signals, and memory. This makes signals the ONLY source of spatial information, creating selection pressure for vocabulary. v12-blind6-42 launched with this configuration.
+
+---
+
 ## Cross-Era Analysis: The Metric Problem
 
 ### Discovery: MI was measuring the wrong thing
@@ -654,7 +703,7 @@ What holds true across all runs, what's been disproven, and what remains open.
 ### Universal patterns (every era, every seed)
 
 - **Population scale is the key variable.** At 384-1000 agents, signals are net negative at every parameter configuration tested (8 eras, 15+ runs). At 5,000 agents (GPU), signals become adaptive (r=+0.51). The signal environment must be dense enough for statistical regularity to emerge from noisy senders.
-- **response_fit_corr = 0 was a broken metric (fixed in commit 31a1516).** The three-way causal chain measurement was data-starved, not biologically zero. With signal coverage ~50% of grid and hundreds of emitters, every prey hears signals on every tick - the "no signal" bucket never fills. This was confirmed in the GPU run and explains the persistent zero across all eras. Fix implemented: `per_prey_symbol_jsd` compares actions under different dominant symbols (mean pairwise JSD), replacing the old with/without-signal comparison. First nonzero readings expected from v11 runs.
+- **response_fit_corr is negative at 384 pop.** The metric was fixed in commit 31a1516 (was always 0 due to measurement artifact). v11 data shows symbol differentiation is actively maladaptive at cap=6 (-0.13 to -0.28) and neutral at cap=32 (~0). Prey that respond differently to different symbols do worse because direct spatial inputs (food/ally direction) are more reliable than the noisy signal channel. This is the strongest evidence yet that population scale - not ecological conditions or metric artifacts - is the bottleneck.
 - **receiver_fit_corr is a spatial confound.** Center prey hear more signals AND survive more. Consistently 0.48-0.87 across all eras. Not evidence of signal utility.
 - **Silence near danger.** Prey reduce per-capita signaling near threats. Present from gen 0, maintained but not amplified by evolution. Likely an architectural spandrel of shared hidden layers, not a learned strategy.
 - **Symbol monopoly under weak selection.** Without strong differentiation pressure, one symbol dominates. Seen in eras 1, 2 (phase 3), and 5. Only resisted when signals encode useful information (era 4 at 0.02 drain).
@@ -681,6 +730,7 @@ What holds true across all runs, what's been disproven, and what remains open.
 | Reduced vision forces signal reliance | 8 | Vision 2.0 and 0.5 both had food encoding but signals still net negative |
 | Demes enable altruistic food signaling | 8 (v9) | 4x4 demes + near-blindness still produced mute +56% fitter |
 | Ecological conditions are the bottleneck | 8+GPU | **Disproven: population scale is the bottleneck** |
+| Constraining signal capacity improves encoding quality | 9 (v11) | Cap=6 produces more food encoding but symbol differentiation is maladaptive (-0.13 to -0.28 response_fit_corr). Direct spatial inputs outcompete signals. |
 
 ### What works
 
@@ -709,9 +759,11 @@ What holds true across all runs, what's been disproven, and what remains open.
 
 6. **What is the minimum population for signal emergence?** The threshold is between 384 (no emergence) and 5,000 (emergence). A 2,000-population Rust run would bracket this. If signals emerge at 2k, the Rust version becomes a viable platform for further experiments.
 
-7. **Can the response_fit_corr metric be fixed?** FIXED (commit 31a1516). Implemented approach (a): `per_prey_symbol_jsd` computes mean pairwise JSD across dominant-symbol action distributions per prey. response_fit_corr = Pearson(per_prey_symbol_jsd, fitness). Also added `--max-signal-hidden N` cap and segment-scoped crossover. Awaiting first v11 run for data. Risk: if symbol monopoly persists, most prey will have only 1 qualifying symbol and metric degenerates again.
+7. **Can the response_fit_corr metric be fixed?** FIXED AND MEASURED (commit 31a1516, v11 data). Metric works - produces nonzero values. But the biological result is that symbol differentiation is maladaptive at 384 pop (cap=6: -0.13 to -0.28) and neutral (cap=32: ~0). Direct spatial inputs outcompete the signal channel.
 
-8. **Publication readiness.** The GPU result (signal adaptive value at 5k, phase transition at 40k, receivers extracting meaning from noisy senders) is publishable. The Rust history (8 eras of negative results at small scale) provides essential context showing the scale threshold. Combined, this tells a complete story about conditions for communication emergence.
+8. **Does removing spatial perception flip response_fit_corr positive?** TESTING (v12-blind6-42). `--blind` zeros food dx/dy/dist, ally dx/dy/dist (plus death echoes and freeze pressure already). If signals become the only source of spatial information, symbol differentiation should become adaptive. Expected: positive response_fit_corr, higher MI, possible vocabulary emergence.
+
+9. **Publication readiness.** The GPU result (signal adaptive value at 5k, phase transition at 40k, receivers extracting meaning from noisy senders) is publishable. The Rust history (8 eras of negative results at small scale) provides essential context showing the scale threshold. Combined, this tells a complete story about conditions for communication emergence.
 
 ### Evidence hierarchy status
 
@@ -720,10 +772,10 @@ What holds true across all runs, what's been disproven, and what remains open.
 | 1 | Signals have adaptive value | **NO** at all configs (-8% to -25%) | **YES** (r=+0.51, +52 fitness) |
 | 2 | Receivers change behavior | Weak yes (JSD 0.15-0.27) | Yes (JSD 0.033-0.066, rising) |
 | 3 | Different symbols carry different info | Yes at 0.02 drain (food encoding) | Weak (PC1=89.9%, one channel) |
-| 4 | Responses are appropriate | Metric fixed (commit 31a1516), awaiting v11 data | Metric fixed, needs GPU rebuild |
+| 4 | Responses are appropriate | **NO** - symbol differentiation maladaptive (v11) | Metric fixed, needs GPU rebuild |
 | 5 | Genuine reference | Not testable | Not testable |
 
-**Critical gap:** Level 4 fix is implemented (commit 31a1516) but not yet measured. First v11 run will produce nonzero response_fit_corr for the first time. Watch for: (1) mute baseline should be near-zero, (2) symbol monopoly degeneracy if qualifying fraction < 30%.
+**Critical gap:** Level 4 now measured at 384 pop - negative (symbol differentiation maladaptive). The `--blind` experiment (v12) tests whether removing direct spatial perception flips this by making signals the only spatial information source. Level 4 at 5k pop (GPU) remains unmeasured.
 
 ### Parameter history
 
