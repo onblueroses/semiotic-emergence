@@ -10,7 +10,7 @@
 
 **Config:** 1000 prey, 72x72 grid, 18% zone coverage (flee + freeze), 100 food, 500 ticks/gen, `--metrics-interval 10`, `--demes 3`, `--signal-threshold 0.3`.
 
-**Speed (2026-03-17, commit 5cf1d66):**
+**Speed (2026-03-17, commit 5cf1d66, predates spatial tournament bucketing #8):**
 
 | Run | Threads | Gen/min | Notes |
 |-----|---------|---------|-------|
@@ -162,31 +162,36 @@ Signal reception uses `SignalGrid` spatial index for O(nearby) lookup instead of
 
 ### Done
 
-1. ~~**Signal spatial grid.**~~ Implemented as `SignalGrid` with SoA layout, prefix-sum offsets, ring search with per-symbol early exit.
+1. ~~**Signal spatial grid.**~~ Implemented as `SignalGrid` with SoA layout, prefix-sum offsets, ring search.
 2. ~~**Slim Prey struct.**~~ Brain moved to `World.brains` vec. Prey is ~120 bytes, fits in L2.
 3. ~~**CompactBrain dense forward.**~~ Packs active weights contiguously (~700 vs 5683). 100% cache utilization.
 4. ~~**sqrt skip on non-metrics gens.**~~ `is_in_zone()` uses dist_sq, no sqrt. Full distance only on metrics gens.
 5. ~~**rem_euclid -> conditional wrap.**~~ `wrap_coord()` in all ring loops, movement, food checks. CMOV vs division.
 6. ~~**Spatial zone_drain.**~~ Queries prey_grid cells within zone bounding box. ~150 checks vs ~3000.
 7. ~~**Allocation-free tournament selection.**~~ Reservoir sampling, no Vec heap allocation.
+8. ~~**Spatial bucketing for tournament selection.**~~ (651b7b2) O(nearby) parent lookup via prey_grid instead of O(N) linear scan. Fixed cell size to target radius/3 for effective ring search (5940345).
 
 ### High impact
 
-8. **SIMD distance batch in receive_detailed_grid.** After spatial filtering, batch remaining candidates into SSE/AVX lanes (4-8 at once). Pure arithmetic inner loop is ideal for vectorization. Expected: 2-4x on remaining receive_detailed work.
+9. **SIMD distance batch in receive_detailed_grid.** After spatial filtering, batch remaining candidates into SSE/AVX lanes (4-8 at once). Pure arithmetic inner loop is ideal for vectorization. Expected: 2-4x on remaining receive_detailed work.
 
 ### Medium impact
 
-9. **Batch brain forward.** Restructure as matrix multiply across all prey. Enables BLAS-style optimization. Requires genome layout changes for row-major access.
+10. **Batch brain forward.** Restructure as matrix multiply across all prey. Enables BLAS-style optimization. Requires genome layout changes for row-major access.
 
 ### Not worth it
 
-10. **I/O decoupling.** CSV writes happen once per generation. Not the bottleneck.
+11. **I/O decoupling.** CSV writes happen once per generation. Not the bottleneck.
 
-11. **GPU offload.** Branch-heavy step() maps poorly to GPU. Brain forward at 1000x12 neurons is too small to amortize transfer overhead.
+12. **GPU offload.** Branch-heavy step() maps poorly to GPU. Brain forward at 1000x12 neurons is too small to amortize transfer overhead.
 
-12. **target-cpu=native on laptop.** Tested on i7-12650H (AVX2). No measurable difference - LLVM auto-vectorizes with SSE2, hot loops are branch-heavy not SIMD-friendly. (VPS znver3 targeting does help via Zen 3 specific scheduling.)
+13. **target-cpu=native on laptop.** Tested on i7-12650H (AVX2). No measurable difference - LLVM auto-vectorizes with SSE2, hot loops are branch-heavy not SIMD-friendly. (VPS znver3 targeting does help via Zen 3 specific scheduling.)
 
-13. **wrap_delta lookup table.** With conditional wrap replacing `rem_euclid`, the LUT approach is unnecessary. The branch predictor handles the conditional well.
+14. **wrap_delta lookup table.** With conditional wrap replacing `rem_euclid`, the LUT approach is unnecessary. The branch predictor handles the conditional well.
+
+15. **Branchless signal reception.** (dd01820) Two-pass approach: first pass collects candidates without branches, second pass selects winners. 7% regression - loss of early single-axis bailout and temp buffer overhead outweighed branch elimination. Well-predicted branches win here.
+
+16. **Per-symbol signal index.** (ea3dc97, reverted fd4f0d5) Counting-sort signals by symbol within each grid cell, enabling 6 independent ring scans with per-symbol early exit. 23% regression at pop=2000 - 6x cell-iteration overhead from separate ring traversals per symbol outweighs reduced distance computations at high signal density.
 
 ---
 
