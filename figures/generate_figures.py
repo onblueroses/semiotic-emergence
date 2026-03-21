@@ -19,7 +19,8 @@ plt.rcParams.update({
     'savefig.dpi': 150,
 })
 
-DATA_DIR = os.path.dirname(os.path.abspath(__file__))
+FIG_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(os.path.dirname(FIG_DIR), 'data')
 
 def load_run(name):
     path = os.path.join(DATA_DIR, name, 'output.csv')
@@ -112,7 +113,7 @@ def fig1_signal_value():
                 ha='center', va='bottom' if val > 0 else 'top', fontsize=9, fontweight='bold')
 
     plt.tight_layout()
-    plt.savefig(os.path.join(DATA_DIR, 'fig1_signals_adaptive_at_scale.png'))
+    plt.savefig(os.path.join(FIG_DIR, 'fig1_signals_adaptive_at_scale.png'))
     plt.close()
     print('Saved fig1_signals_adaptive_at_scale.png')
 
@@ -181,7 +182,7 @@ def fig2_semiotic_metrics():
     ax.legend(loc='upper right')
 
     plt.tight_layout()
-    plt.savefig(os.path.join(DATA_DIR, 'fig2_metric_evolution_across_eras.png'))
+    plt.savefig(os.path.join(FIG_DIR, 'fig2_metric_evolution_across_eras.png'))
     plt.close()
     print('Saved fig2_metric_evolution_across_eras.png')
 
@@ -256,7 +257,7 @@ def fig3_brain_evolution():
     ax.legend(loc='best')
 
     plt.tight_layout()
-    plt.savefig(os.path.join(DATA_DIR, 'fig3_neural_architecture_growth.png'))
+    plt.savefig(os.path.join(FIG_DIR, 'fig3_neural_architecture_growth.png'))
     plt.close()
     print('Saved fig3_neural_architecture_growth.png')
 
@@ -345,7 +346,7 @@ def fig4_volume_knob():
     ax.legend()
 
     plt.tight_layout()
-    plt.savefig(os.path.join(DATA_DIR, 'fig4_capacity_vs_encoding_quality.png'))
+    plt.savefig(os.path.join(FIG_DIR, 'fig4_capacity_vs_encoding_quality.png'))
     plt.close()
     print('Saved fig4_capacity_vs_encoding_quality.png')
 
@@ -405,7 +406,7 @@ def fig5_blind_mode():
     ax.legend()
 
     plt.tight_layout()
-    plt.savefig(os.path.join(DATA_DIR, 'fig5_blind_mode_no_emergence.png'))
+    plt.savefig(os.path.join(FIG_DIR, 'fig5_blind_mode_no_emergence.png'))
     plt.close()
     print('Saved fig5_blind_mode_no_emergence.png')
 
@@ -491,7 +492,7 @@ def fig6_blind_vs_sighted():
     ax.legend()
 
     plt.tight_layout()
-    plt.savefig(os.path.join(DATA_DIR, 'fig6_perception_required_for_signals.png'))
+    plt.savefig(os.path.join(FIG_DIR, 'fig6_perception_required_for_signals.png'))
     plt.close()
     print('Saved fig6_perception_required_for_signals.png')
 

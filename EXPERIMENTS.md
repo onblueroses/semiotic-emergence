@@ -52,7 +52,7 @@ Every significant run, its parameters, and headline result.
 | v11-cap32-42 | 11 | 42 | 74,810 | pop=384, max-signal-hidden=32 (control), metrics-interval=10 | response_fit_corr near zero, occasionally +0.16 |
 | v12-blind6-42 | 12 | 42 | 100,000 | pop=384, --blind, max-signal-hidden=6 | Blind mode failed: MI~0, 2 symbols extinct, fitness halved vs sighted |
 
-Raw data: `figures/` subdirectories contain CSV data for each run used in figure generation. Additional archival data in `data/`.
+Raw data: `data/` contains CSV output for each run listed above. See `data/README.md` for column formats.
 
 ---
 
