@@ -112,9 +112,9 @@ def fig1_signal_value():
                 ha='center', va='bottom' if val > 0 else 'top', fontsize=9, fontweight='bold')
 
     plt.tight_layout()
-    plt.savefig(os.path.join(DATA_DIR, 'fig1_signal_value.png'))
+    plt.savefig(os.path.join(DATA_DIR, 'fig1_signals_adaptive_at_scale.png'))
     plt.close()
-    print('Saved fig1_signal_value.png')
+    print('Saved fig1_signals_adaptive_at_scale.png')
 
 
 # --- Figure 2: Semiotic Metrics Evolution ---
@@ -181,9 +181,9 @@ def fig2_semiotic_metrics():
     ax.legend(loc='upper right')
 
     plt.tight_layout()
-    plt.savefig(os.path.join(DATA_DIR, 'fig2_semiotic_metrics.png'))
+    plt.savefig(os.path.join(DATA_DIR, 'fig2_metric_evolution_across_eras.png'))
     plt.close()
-    print('Saved fig2_semiotic_metrics.png')
+    print('Saved fig2_metric_evolution_across_eras.png')
 
 
 # --- Figure 3: Brain Evolution ---
@@ -256,9 +256,9 @@ def fig3_brain_evolution():
     ax.legend(loc='best')
 
     plt.tight_layout()
-    plt.savefig(os.path.join(DATA_DIR, 'fig3_brain_evolution.png'))
+    plt.savefig(os.path.join(DATA_DIR, 'fig3_neural_architecture_growth.png'))
     plt.close()
-    print('Saved fig3_brain_evolution.png')
+    print('Saved fig3_neural_architecture_growth.png')
 
 
 # --- Figure 4: Volume Knob Experiment (Era 9) ---
@@ -345,9 +345,9 @@ def fig4_volume_knob():
     ax.legend()
 
     plt.tight_layout()
-    plt.savefig(os.path.join(DATA_DIR, 'fig4_volume_knob.png'))
+    plt.savefig(os.path.join(DATA_DIR, 'fig4_capacity_vs_encoding_quality.png'))
     plt.close()
-    print('Saved fig4_volume_knob.png')
+    print('Saved fig4_capacity_vs_encoding_quality.png')
 
 
 # --- Figure 5: Blind Mode Early Results ---
@@ -405,9 +405,9 @@ def fig5_blind_mode():
     ax.legend()
 
     plt.tight_layout()
-    plt.savefig(os.path.join(DATA_DIR, 'fig5_blind_mode.png'))
+    plt.savefig(os.path.join(DATA_DIR, 'fig5_blind_mode_no_emergence.png'))
     plt.close()
-    print('Saved fig5_blind_mode.png')
+    print('Saved fig5_blind_mode_no_emergence.png')
 
 
 # --- Figure 6: Blind vs Sighted Comparison ---
@@ -491,9 +491,9 @@ def fig6_blind_vs_sighted():
     ax.legend()
 
     plt.tight_layout()
-    plt.savefig(os.path.join(DATA_DIR, 'fig6_blind_vs_sighted.png'))
+    plt.savefig(os.path.join(DATA_DIR, 'fig6_perception_required_for_signals.png'))
     plt.close()
-    print('Saved fig6_blind_vs_sighted.png')
+    print('Saved fig6_perception_required_for_signals.png')
 
 
 if __name__ == '__main__':
