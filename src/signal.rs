@@ -23,18 +23,14 @@ pub struct Signal {
 /// Reception searches cells in ring order (center outward) with per-symbol
 /// early exit to skip outer rings when all symbols already found closer.
 pub struct SignalGrid {
-    /// Signal x coordinates, grouped by cell then by symbol within cell.
+    /// Signal x coordinates, grouped by cell.
     sig_x: Vec<i16>,
-    /// Signal y coordinates, grouped by cell then by symbol within cell.
+    /// Signal y coordinates, grouped by cell.
     sig_y: Vec<i16>,
-    /// Signal symbols, grouped by cell then by symbol within cell.
+    /// Signal symbols, grouped by cell.
     sig_sym: Vec<u8>,
     /// Per-cell (start, len) into the signal arrays.
     offsets: Vec<(u32, u16)>,
-    /// Per-cell cumulative symbol counts. Entry `[ci][s]` = offset within
-    /// cell `ci` where symbol `s` starts. `[ci][NUM_SYMBOLS]` = cell len.
-    /// Enables per-symbol scans with independent early exit.
-    sym_offsets: Vec<[u16; NUM_SYMBOLS + 1]>,
     cell_size: i32,
     cells_per_axis: i32,
     cells_radius: i32,
@@ -57,7 +53,6 @@ impl SignalGrid {
             sig_y: Vec::new(),
             sig_sym: Vec::new(),
             offsets: vec![(0, 0); total],
-            sym_offsets: vec![[0; NUM_SYMBOLS + 1]; total],
             cell_size,
             cells_per_axis,
             cells_radius,
@@ -67,12 +62,9 @@ impl SignalGrid {
 
     pub fn rebuild(&mut self, signals: &[Signal], current_tick: u32) {
         let total_cells = self.offsets.len();
-        // Count signals per cell AND per symbol within cell
+        // Count signals per cell
         for o in &mut self.offsets {
             *o = (0, 0);
-        }
-        for so in &mut self.sym_offsets {
-            *so = [0; NUM_SYMBOLS + 1];
         }
         let mut count = 0u32;
         for sig in signals {
@@ -83,29 +75,15 @@ impl SignalGrid {
             let cy = sig.y.rem_euclid(self.grid_size) / self.cell_size;
             let ci = (cy * self.cells_per_axis + cx) as usize;
             self.offsets[ci].1 += 1;
-            let s = (sig.symbol as usize).min(NUM_SYMBOLS - 1);
-            self.sym_offsets[ci][s] += 1;
             count += 1;
         }
-        // Prefix sum for cell start offsets
+        // Prefix sum to compute start offsets
         let mut running = 0u32;
         for ci in 0..total_cells {
             self.offsets[ci].0 = running;
             running += u32::from(self.offsets[ci].1);
         }
-        // Convert per-cell symbol counts to cumulative offsets within cell
-        for ci in 0..total_cells {
-            let so = &mut self.sym_offsets[ci];
-            let mut cum = 0u16;
-            for s in 0..NUM_SYMBOLS {
-                let c = so[s];
-                so[s] = cum;
-                cum += c;
-            }
-            so[NUM_SYMBOLS] = cum;
-        }
-        // Fill SoA arrays sorted by symbol within each cell (counting sort).
-        // Use a copy of sym_offsets as write cursors.
+        // Fill SoA arrays using offsets[ci].0 as write cursor, then restore
         let n = count as usize;
         self.sig_x.clear();
         self.sig_x.resize(n, 0);
@@ -113,7 +91,6 @@ impl SignalGrid {
         self.sig_y.resize(n, 0);
         self.sig_sym.clear();
         self.sig_sym.resize(n, 0);
-        let mut cursors = self.sym_offsets.clone();
         for sig in signals {
             if sig.tick_emitted >= current_tick {
                 continue;
@@ -121,12 +98,15 @@ impl SignalGrid {
             let cx = sig.x.rem_euclid(self.grid_size) / self.cell_size;
             let cy = sig.y.rem_euclid(self.grid_size) / self.cell_size;
             let ci = (cy * self.cells_per_axis + cx) as usize;
-            let s = (sig.symbol as usize).min(NUM_SYMBOLS - 1);
-            let pos = self.offsets[ci].0 as usize + cursors[ci][s] as usize;
+            let pos = self.offsets[ci].0 as usize;
             self.sig_x[pos] = sig.x as i16;
             self.sig_y[pos] = sig.y as i16;
             self.sig_sym[pos] = sig.symbol;
-            cursors[ci][s] += 1;
+            self.offsets[ci].0 += 1;
+        }
+        // Restore start offsets (each was advanced by len)
+        for ci in 0..total_cells {
+            self.offsets[ci].0 -= u32::from(self.offsets[ci].1);
         }
     }
 }
@@ -171,9 +151,9 @@ pub struct ReceivedSignal {
 }
 
 /// Compute detailed received signals using spatial grid for O(nearby) instead of O(all).
-/// Per-symbol ring scan: each symbol gets its own ring traversal with independent early
-/// exit, so common nearby symbols terminate fast while only rare symbols scan far.
-/// Signals are sorted by symbol within each cell (counting sort in rebuild).
+/// Searches cells in ring order (center outward) and exits early when all 6 symbols
+/// have been found closer than any signal in the next ring could be.
+/// Reads signal data directly from the grid's contiguous arrays (no indirection).
 #[allow(clippy::similar_names)]
 pub fn receive_detailed_grid(
     grid: &SignalGrid,
@@ -197,68 +177,76 @@ pub fn receive_detailed_grid(
     let mut best_dx = [0.0_f32; NUM_SYMBOLS];
     let mut best_dy = [0.0_f32; NUM_SYMBOLS];
 
-    for sym in 0..NUM_SYMBOLS {
-        for ring in 0..=r_max {
-            // Per-symbol early exit: once this symbol is found closer than any
-            // signal in the next ring could be, skip remaining rings.
-            if ring >= 2 {
-                let min_gap = ((ring - 1) * cs) as f32;
-                if best_dist_sq[sym] <= min_gap * min_gap {
-                    break;
-                }
+    for ring in 0..=r_max {
+        // Early exit: if every symbol already has a hit closer than the minimum
+        // possible distance from any signal in this ring, no need to check further.
+        // Min distance for ring r: (r-1)*cell_size (conservative lower bound).
+        if ring >= 2 {
+            let min_gap = ((ring - 1) * cs) as f32;
+            let min_sq = min_gap * min_gap;
+            if best_dist_sq[0] <= min_sq
+                && best_dist_sq[1] <= min_sq
+                && best_dist_sq[2] <= min_sq
+                && best_dist_sq[3] <= min_sq
+                && best_dist_sq[4] <= min_sq
+                && best_dist_sq[5] <= min_sq
+            {
+                break;
             }
+        }
 
-            for dcy in -ring..=ring {
-                for dcx in -ring..=ring {
-                    if ring > 0 && dcx.abs().max(dcy.abs()) != ring {
+        // Iterate cells at Chebyshev distance == ring
+        for dcy in -ring..=ring {
+            for dcx in -ring..=ring {
+                if ring > 0 && dcx.abs().max(dcy.abs()) != ring {
+                    continue;
+                }
+                let ncx = wrap_coord(cx + dcx, cpa) as usize;
+                let ncy = wrap_coord(cy + dcy, cpa) as usize;
+                let ci = ncy * cpa as usize + ncx;
+                let (start, len) = grid.offsets[ci];
+                let s = start as usize;
+                let end = s + len as usize;
+
+                // Inner loop: SoA access + inlined wrap_delta
+                for k in s..end {
+                    let ddx = {
+                        let d = i32::from(grid.sig_x[k]) - rx;
+                        if d > half_gs {
+                            d - grid_size_i
+                        } else if d < -half_gs {
+                            d + grid_size_i
+                        } else {
+                            d
+                        }
+                    };
+                    if ddx > range_i || ddx < -range_i {
                         continue;
                     }
-                    let ncx = wrap_coord(cx + dcx, cpa) as usize;
-                    let ncy = wrap_coord(cy + dcy, cpa) as usize;
-                    let ci = ncy * cpa as usize + ncx;
-                    let cell_start = grid.offsets[ci].0 as usize;
-                    let so = &grid.sym_offsets[ci];
-                    let s = cell_start + so[sym] as usize;
-                    let end = cell_start + so[sym + 1] as usize;
-
-                    for k in s..end {
-                        let ddx = {
-                            let d = i32::from(grid.sig_x[k]) - rx;
-                            if d > half_gs {
-                                d - grid_size_i
-                            } else if d < -half_gs {
-                                d + grid_size_i
-                            } else {
-                                d
-                            }
-                        };
-                        if ddx > range_i || ddx < -range_i {
-                            continue;
+                    let ddy = {
+                        let d = i32::from(grid.sig_y[k]) - ry;
+                        if d > half_gs {
+                            d - grid_size_i
+                        } else if d < -half_gs {
+                            d + grid_size_i
+                        } else {
+                            d
                         }
-                        let ddy = {
-                            let d = i32::from(grid.sig_y[k]) - ry;
-                            if d > half_gs {
-                                d - grid_size_i
-                            } else if d < -half_gs {
-                                d + grid_size_i
-                            } else {
-                                d
-                            }
-                        };
-                        if ddy > range_i || ddy < -range_i {
-                            continue;
-                        }
-                        let dxf = ddx as f32;
-                        let dyf = ddy as f32;
-                        let dist_sq = dxf * dxf + dyf * dyf;
-                        if dist_sq >= range_sq {
-                            continue;
-                        }
-                        if dist_sq < best_dist_sq[sym] {
-                            best_dist_sq[sym] = dist_sq;
-                            best_dx[sym] = dxf;
-                            best_dy[sym] = dyf;
-                        }
+                    };
+                    if ddy > range_i || ddy < -range_i {
+                        continue;
+                    }
+                    let dxf = ddx as f32;
+                    let dyf = ddy as f32;
+                    let dist_sq = dxf * dxf + dyf * dyf;
+                    if dist_sq >= range_sq {
+                        continue;
+                    }
+                    let sym = grid.sig_sym[k] as usize;
+                    if sym < NUM_SYMBOLS && dist_sq < best_dist_sq[sym] {
+                        best_dist_sq[sym] = dist_sq;
+                        best_dx[sym] = dxf;
+                        best_dy[sym] = dyf;
                     }
                 }
             }
