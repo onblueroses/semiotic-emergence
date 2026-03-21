@@ -13,7 +13,7 @@ CLAUDE.md
 profile*.txt
 .claude/
 figures/*/
-figures/viz-data.tar.gz
+figures/*.tar.gz
 figures/__pycache__/
 analysis*/
 __pycache__/

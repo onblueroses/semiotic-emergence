@@ -360,7 +360,7 @@ def fig5_blind_mode():
         return
 
     fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-    fig.suptitle('Era 12: Blind Mode Early Results (spatial perception stripped)', fontweight='bold', fontsize=14)
+    fig.suptitle('Era 12: Blind Mode (spatial perception stripped, 100k gens)', fontweight='bold', fontsize=14)
 
     w = max(5, len(d['generation']) // 20)
 
@@ -410,10 +410,97 @@ def fig5_blind_mode():
     print('Saved fig5_blind_mode.png')
 
 
+# --- Figure 6: Blind vs Sighted Comparison ---
+# v12-blind6-42 (blind, cap=6) vs v11-cap6-42 (sighted, cap=6) - same signal capacity, different perception
+
+def fig6_blind_vs_sighted():
+    blind = load_run('v12-blind6-42')
+    sighted = load_run('v11-cap6-42')
+
+    fig, axes = plt.subplots(2, 3, figsize=(15, 8))
+    fig.suptitle('Blind vs Sighted: Same Signal Capacity (cap=6), 100k Gens', fontweight='bold', fontsize=14)
+
+    wb = max(5, len(blind['generation']) // 20)
+    ws = max(5, len(sighted['generation']) // 20)
+
+    # Panel A: Fitness
+    ax = axes[0, 0]
+    ax.plot(smooth_gen(sighted['generation'], ws), smooth(sighted['avg_fitness'], ws),
+            color='#2196F3', alpha=0.8, linewidth=1, label='Sighted (v11-cap6)')
+    ax.plot(smooth_gen(blind['generation'], wb), smooth(blind['avg_fitness'], wb),
+            color='#607D8B', alpha=0.8, linewidth=1, label='Blind (v12)')
+    ax.set_title('A. Avg Fitness')
+    ax.set_xlabel('Generation')
+    ax.set_ylabel('Fitness')
+    ax.legend()
+
+    # Panel B: MI
+    ax = axes[0, 1]
+    ax.plot(smooth_gen(sighted['generation'], ws), smooth(sighted['mutual_info'], ws),
+            color='#2196F3', alpha=0.8, linewidth=1, label='Sighted')
+    ax.plot(smooth_gen(blind['generation'], wb), smooth(blind['mutual_info'], wb),
+            color='#607D8B', alpha=0.8, linewidth=1, label='Blind')
+    ax.set_title('B. Mutual Information')
+    ax.set_xlabel('Generation')
+    ax.set_ylabel('MI (nats)')
+    ax.legend()
+
+    # Panel C: Signal entropy
+    ax = axes[0, 2]
+    ax.plot(smooth_gen(sighted['generation'], ws), smooth(sighted['signal_entropy'], ws),
+            color='#2196F3', alpha=0.8, linewidth=1, label='Sighted')
+    ax.plot(smooth_gen(blind['generation'], wb), smooth(blind['signal_entropy'], wb),
+            color='#607D8B', alpha=0.8, linewidth=1, label='Blind')
+    ax.axhline(y=np.log(6), color='gray', linestyle=':', alpha=0.5)
+    ax.set_title('C. Signal Entropy')
+    ax.set_xlabel('Generation')
+    ax.set_ylabel('Entropy (nats)')
+    ax.legend()
+
+    # Panel D: Iconicity
+    ax = axes[1, 0]
+    ax.plot(smooth_gen(sighted['generation'], ws), smooth(sighted['iconicity'], ws),
+            color='#2196F3', alpha=0.8, linewidth=1, label='Sighted')
+    ax.plot(smooth_gen(blind['generation'], wb), smooth(blind['iconicity'], wb),
+            color='#607D8B', alpha=0.8, linewidth=1, label='Blind')
+    ax.set_title('D. Iconicity')
+    ax.set_xlabel('Generation')
+    ax.set_ylabel('Iconicity')
+    ax.legend()
+
+    # Panel E: Signal hidden size
+    ax = axes[1, 1]
+    ax.plot(smooth_gen(sighted['generation'], ws), smooth(sighted['avg_signal_hidden'], ws),
+            color='#2196F3', alpha=0.8, linewidth=1, label='Sighted')
+    ax.plot(smooth_gen(blind['generation'], wb), smooth(blind['avg_signal_hidden'], wb),
+            color='#607D8B', alpha=0.8, linewidth=1, label='Blind')
+    ax.set_title('E. Signal Hidden Size')
+    ax.set_xlabel('Generation')
+    ax.set_ylabel('Avg neurons')
+    ax.legend()
+
+    # Panel F: Zone deaths
+    ax = axes[1, 2]
+    ax.plot(smooth_gen(sighted['generation'], ws), smooth(sighted['zone_deaths'], ws),
+            color='#2196F3', alpha=0.8, linewidth=1, label='Sighted')
+    ax.plot(smooth_gen(blind['generation'], wb), smooth(blind['zone_deaths'], wb),
+            color='#607D8B', alpha=0.8, linewidth=1, label='Blind')
+    ax.set_title('F. Zone Deaths per Generation')
+    ax.set_xlabel('Generation')
+    ax.set_ylabel('Deaths')
+    ax.legend()
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(DATA_DIR, 'fig6_blind_vs_sighted.png'))
+    plt.close()
+    print('Saved fig6_blind_vs_sighted.png')
+
+
 if __name__ == '__main__':
     fig1_signal_value()
     fig2_semiotic_metrics()
     fig3_brain_evolution()
     fig4_volume_knob()
     fig5_blind_mode()
+    fig6_blind_vs_sighted()
     print('All figures generated.')

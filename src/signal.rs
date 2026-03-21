@@ -5,6 +5,9 @@ use crate::world::wrap_delta;
 
 pub const NUM_SYMBOLS: usize = 6;
 
+/// Chunk size for vectorizable distance computation in signal reception.
+const RECV_CHUNK: usize = 64;
+
 #[derive(Clone, Debug)]
 pub struct Signal {
     pub x: i32,
@@ -165,7 +168,6 @@ pub fn receive_detailed_grid(
     let grid_size_i = grid_size as i32;
     let half_gs = grid_size_i >> 1;
     let range_sq = signal_range * signal_range;
-    let range_i = signal_range as i32;
     let cs = grid.cell_size;
     let cpa = grid.cells_per_axis;
     let r_max = grid.cells_radius;
@@ -208,46 +210,47 @@ pub fn receive_detailed_grid(
                 let s = start as usize;
                 let end = s + len as usize;
 
-                // Inner loop: SoA access + inlined wrap_delta
-                for k in s..end {
-                    let ddx = {
-                        let d = i32::from(grid.sig_x[k]) - rx;
-                        if d > half_gs {
-                            d - grid_size_i
-                        } else if d < -half_gs {
-                            d + grid_size_i
-                        } else {
-                            d
+                // Two-pass inner loop: branchless distance (vectorizable), then
+                // scalar per-symbol min update. Chunked to keep temps in L1.
+                let xs = &grid.sig_x[s..end];
+                let ys = &grid.sig_y[s..end];
+                let syms = &grid.sig_sym[s..end];
+                let n = xs.len();
+
+                let mut buf_dsq = [f32::MAX; RECV_CHUNK];
+                let mut buf_dx = [0.0_f32; RECV_CHUNK];
+                let mut buf_dy = [0.0_f32; RECV_CHUNK];
+
+                let mut i = 0;
+                while i < n {
+                    let chunk_n = RECV_CHUNK.min(n - i);
+
+                    // Pass 1: branchless wrap + distance (LLVM can auto-vectorize)
+                    for j in 0..chunk_n {
+                        let dx = i32::from(xs[i + j]) - rx;
+                        let ddx = dx - grid_size_i * i32::from(dx > half_gs)
+                            + grid_size_i * i32::from(dx < -half_gs);
+                        let dy = i32::from(ys[i + j]) - ry;
+                        let ddy = dy - grid_size_i * i32::from(dy > half_gs)
+                            + grid_size_i * i32::from(dy < -half_gs);
+                        buf_dx[j] = ddx as f32;
+                        buf_dy[j] = ddy as f32;
+                        buf_dsq[j] = (ddx * ddx + ddy * ddy) as f32;
+                    }
+
+                    // Pass 2: per-symbol minimum (scalar, only for in-range)
+                    for j in 0..chunk_n {
+                        if buf_dsq[j] < range_sq {
+                            let sym = syms[i + j] as usize;
+                            if sym < NUM_SYMBOLS && buf_dsq[j] < best_dist_sq[sym] {
+                                best_dist_sq[sym] = buf_dsq[j];
+                                best_dx[sym] = buf_dx[j];
+                                best_dy[sym] = buf_dy[j];
+                            }
                         }
-                    };
-                    if ddx > range_i || ddx < -range_i {
-                        continue;
                     }
-                    let ddy = {
-                        let d = i32::from(grid.sig_y[k]) - ry;
-                        if d > half_gs {
-                            d - grid_size_i
-                        } else if d < -half_gs {
-                            d + grid_size_i
-                        } else {
-                            d
-                        }
-                    };
-                    if ddy > range_i || ddy < -range_i {
-                        continue;
-                    }
-                    let dxf = ddx as f32;
-                    let dyf = ddy as f32;
-                    let dist_sq = dxf * dxf + dyf * dyf;
-                    if dist_sq >= range_sq {
-                        continue;
-                    }
-                    let sym = grid.sig_sym[k] as usize;
-                    if sym < NUM_SYMBOLS && dist_sq < best_dist_sq[sym] {
-                        best_dist_sq[sym] = dist_sq;
-                        best_dx[sym] = dxf;
-                        best_dy[sym] = dyf;
-                    }
+
+                    i += chunk_n;
                 }
             }
         }

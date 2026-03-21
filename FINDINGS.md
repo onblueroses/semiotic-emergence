@@ -15,6 +15,8 @@ Experimental history of semiotic-emergence. Each era documents what we tested, w
 - [Era 8: Signal Value Testing](#era-8-signal-value-testing) - Food MI, input stripping, food scarcity
 - [GPU Scale-Up: Population is the Key Variable](#gpu-scale-up-population-is-the-key-variable) - 5,000 prey on A100
 - [Era 9: Response Quality](#era-9-response-quality) - Volume knob hypothesis, response_fit_corr first data
+- [Era 10: Population Scale](#era-10-population-scale-pop2000-100k-gens) - 2000 pop bracket test
+- [Era 12: Blind Mode](#era-12-blind-mode-100k-gens) - Spatial perception stripped
 - [Cross-Era Analysis](#cross-era-analysis-the-metric-problem) - The metric problem
 - [Standing Conclusions](#standing-conclusions)
 
@@ -46,10 +48,10 @@ Every significant run, its parameters, and headline result.
 | v9-deme-42 | 8 | 42 | ~21,000 | v8 + demes 4, vision 0.5 | MI~0, mute +56% fitter (killed early) |
 | v9-mute-42 | 8 | 42 | ~36,000 | same, --no-signals | baseline (killed early) |
 | gpu-5k-s42 | GPU | 42 | 100,000 | 5k pop, 150x150, A100, JAX | **Signals have adaptive value** (+0.51 corr) |
-| v10-2k-42 | 10 | 42 | 66,600+ | pop=2000, grid=100, zone-radius=14, food=520 | Population bracket test (running) |
+| v10-2k-42 | 10 | 42 | 100,000 | pop=2000, grid=100, zone-radius=14, food=520 | Signal hidden 26.8/32, MI 0.008, all 6 symbols active |
 | v11-cap6-42 | 11 | 42 | 67,540 | pop=384, max-signal-hidden=6, metrics-interval=10 | response_fit_corr negative (-0.13 to -0.28) |
 | v11-cap32-42 | 11 | 42 | 74,810 | pop=384, max-signal-hidden=32 (control), metrics-interval=10 | response_fit_corr near zero, occasionally +0.16 |
-| v12-blind6-42 | 12 | 42 | running | pop=384, --blind, max-signal-hidden=6 | Blind mode: spatial perception stripped (running) |
+| v12-blind6-42 | 12 | 42 | 100,000 | pop=384, --blind, max-signal-hidden=6 | Blind mode failed: MI~0, 2 symbols extinct, fitness halved vs sighted |
 
 Raw data files: `analysis/` directory and VPS `runs/` directories. Figures generated from `figures/generate_figures.py`.
 
@@ -665,7 +667,82 @@ Parameters: pop=384, grid=56, max-signal-hidden=32 (default), metrics-interval=1
 
 **Why negative?** Prey that ignore symbol differences and act on direct spatial inputs (food direction, ally direction) outperform prey that try to use signal content. At 384 pop, the signal environment is too noisy for symbol-differentiated responses to be reliable. Evolution penalizes symbol differentiation because the signal channel is less informative than direct perception.
 
-**Next step: blind mode.** `--blind` strips all spatial perception (food dx/dy/dist, ally dx/dy/dist), leaving only body state (energy, energy_delta, zone_damage), signals, and memory. This makes signals the ONLY source of spatial information, creating selection pressure for vocabulary. v12-blind6-42 launched with this configuration.
+**Next step: blind mode.** `--blind` strips all spatial perception (food dx/dy/dist, ally dx/dy/dist), leaving only body state (energy, energy_delta, zone_damage), signals, and memory. This makes signals the ONLY source of spatial information, creating selection pressure for vocabulary. v12-blind6-42 launched with this configuration. Results in Era 12 below.
+
+---
+
+## Era 10: Population Scale (pop=2000, 100k gens)
+
+*Question: Where is the population threshold for signal emergence? The gap is between 384 (no emergence) and 5,000 (emergence on GPU).*
+
+**Parameters:** pop=2000, grid=100, zone-radius=14, food=520, metrics-interval=200, seed 42. v10 architecture (pre-response_fit_corr fix).
+
+**Run:** v10-2k-42, 100,000 generations (~72 hours on VPS, 12 vCPU).
+
+### Findings
+
+**1. Signal hidden layer grew to near-maximum.** avg_signal_hidden=26.8 [21-32] at completion, with peak 30.4 at gen 62,800. Base hidden stayed at ~12 [10-15]. Strong selection for signal processing capacity at 2000 pop - the signal hidden layer is 2.3x the base layer.
+
+**2. All 6 symbols remained active.** Final distribution: [10%, 21%, 3%, 21%, 16%, 30%]. HHI=0.210 (low concentration). No symbol went extinct over 100k gens. At 384 pop, runs typically lose 1-2 symbols by 50k gens.
+
+**3. MI sustained but low.** Sustained MI=0.008 (last 10%), peak 0.018 at gen 95k. Higher than 384-pop runs (~0.002-0.005) but far below the GPU run.
+
+**4. Brain size correlates with fitness and entropy.** Brain-fitness correlation: base 0.514, signal 0.506. Brain-entropy: base 0.725, signal 0.667. Larger brains associate with higher fitness and more diverse signaling.
+
+**5. Food distance is the top encoding.** Input MI analysis: food_dist (0.089), freeze_pressure (0.068), food_dy (0.067) dominate. Signal inputs are mid-tier (sig2_str 0.042, sig3_str 0.041). Signals encode spatial information but direct perception still dominates.
+
+**6. response_fit_corr unmeasurable.** v10 predates the response_fit_corr fix (commit 31a1516) - all zeros. Cannot assess whether symbol differentiation is adaptive at 2000 pop.
+
+![v10 brain evolution (complete)](figures/fig3_brain_evolution.png)
+*Figure 3 (updated): Panel C shows v10 brain evolution across full 100k gens. Signal hidden (orange) grows rapidly to 27-30 near the cap of 32, while base hidden (green) stabilizes at ~12. The shaded range shows population variance.*
+
+### Interpretation
+
+2000 pop is an intermediate regime. Signal capacity (hidden layer size) is strongly selected, symbols are maintained, and MI is higher than at 384 pop. But MI remains low in absolute terms (0.008 vs ~0.1 at 5k pop on GPU). The population may be large enough for signal infrastructure to be selected but not large enough for the statistical regularity needed for functional reference.
+
+The missing response_fit_corr data means we can't determine whether symbol differentiation is adaptive at 2000 pop - the one metric that would answer the question wasn't available in v10. A v12+ run at 2000 pop with the fixed metric would be the direct test.
+
+---
+
+## Era 12: Blind Mode (100k gens)
+
+*Question: Does removing spatial perception force signal dependence?*
+
+**Parameters:** pop=384, grid=56, --blind (zeros food dx/dy/dist and ally dx/dy/dist inputs 3-8, implies --no-death-echoes and --no-freeze-pressure), max-signal-hidden=6, metrics-interval=10, seed 42.
+
+**Run:** v12-blind6-42, 100,000 generations.
+
+### Findings
+
+**1. Fitness halved compared to sighted.** Sustained avg fitness 836 vs ~1100 sighted (v11-cap6). Removing spatial perception is a severe handicap. Fitness climbed slowly over 100k gens (750 to 850) but never approached sighted levels.
+
+**2. MI remained near zero.** Sustained MI=0.003, peak 0.025 (brief spike at gen 99k). No sustained signal-zone correlation emerged over 100k gens. Removing spatial inputs did not create selective pressure for zone-encoding signals.
+
+**3. Two symbols went extinct.** sym0 and sym5 dropped to 0% usage. Final HHI=0.523 (high concentration) with sym3 dominating at 70%. The vocabulary contracted rather than differentiating.
+
+**4. Brain stayed small.** Signal hidden: 4.4 [2-6] (well below cap 6). Base hidden: 7.0 [4-10]. Evolution did not maximize signal capacity when spatial perception was removed - the opposite of v10 and v11 where signal hidden grows to ceiling. Without useful spatial information to relay, there's no selection pressure for signal processing.
+
+**5. Memory and signal strength dominate encoding.** Input MI top 3: mem5 (0.150), sig4_str (0.143), mem6 (0.139). Food/ally/death inputs are all zero (as expected from --blind). Signals correlate with memory state, not world state.
+
+**6. response_fit_corr slightly negative.** -0.044 sustained. Symbol differentiation is weakly maladaptive, similar to v11-cap6 (-0.13 to -0.28) but less negative. Direct perception isn't available to outcompete signals, but signals still don't help.
+
+**7. Receiver_fit_corr remains high.** 0.807 - but this is the same spatial confound (center prey hear more AND survive more). Not evidence of signal utility.
+
+![Blind mode complete results](figures/fig5_blind_mode.png)
+*Figure 5 (updated): v12-blind6-42 full 100k-gen trajectory. Panel A: fitness slowly climbs but plateaus around 840. Panel B: MI flat at zero, iconicity stable at ~0.5 (no zone-signal correlation). Panel C: entropy oscillates (0.6-1.4), never stabilizes. Panel D: brain size stays near minimum, with a late-run base hidden spike.*
+
+![Blind vs sighted comparison](figures/fig6_blind_vs_sighted.png)
+*Figure 6: Blind (v12) vs sighted (v11-cap6) at identical signal capacity (cap=6). Sighted prey maintain ~30% higher fitness, higher MI, and higher entropy. Signal hidden sizes are similar (~4-5) but sighted prey use the capacity more effectively.*
+
+### Interpretation
+
+**The blind mode hypothesis is disproven.** Removing spatial perception did not force signal dependence - it just made prey worse at surviving. The expectation was that without direct food/ally perception, signals would become the only source of spatial information and evolution would be forced to develop vocabulary. Instead:
+
+1. **No information to relay.** Blind prey can't see food or allies, so they can't signal about food or allies. The information asymmetry that makes signals valuable (some prey know things others don't) is destroyed rather than redirected through the signal channel.
+
+2. **Memory replaces perception.** The top input MI dimensions are memory cells, not signals. Prey learned to use recurrent memory to track their own state history rather than relying on social information.
+
+3. **Signal hidden didn't grow.** At v10 (2000 pop, sighted), signal hidden grows to 27/32. At v11-cap6 (384 pop, sighted), it hits 5/6. At v12-blind (384 pop, blind), it stays at 4.4/6. Without useful information flowing through the signal channel, there's no selection pressure for signal processing capacity.
 
 ---
 
@@ -735,6 +812,7 @@ What holds true across all runs, what's been disproven, and what remains open.
 | Demes enable altruistic food signaling | 8 (v9) | 4x4 demes + near-blindness still produced mute +56% fitter |
 | Ecological conditions are the bottleneck | 8+GPU | **Disproven: population scale is the bottleneck** |
 | Constraining signal capacity improves encoding quality | 9 (v11) | Cap=6 produces more food encoding but symbol differentiation is maladaptive (-0.13 to -0.28 response_fit_corr). Direct spatial inputs outcompete signals. |
+| Removing spatial perception forces signal dependence | 12 (v12) | Blind mode: MI~0, 2 symbols extinct, fitness halved. Prey can't signal about things they can't perceive. Memory replaces perception, not signals. |
 
 ### What works
 
@@ -761,14 +839,11 @@ What holds true across all runs, what's been disproven, and what remains open.
 
 5. **Does making food harder to find amplify signal value?** ANSWERED: Not at 384 pop. Era 8 (v8 vision=2.0, v9 vision=0.5) had food encoding present but signals still net negative. Scale, not scarcity, is the bottleneck.
 
-6. **What is the minimum population for signal emergence?** Open. Threshold between 384 (no emergence across 9 eras) and 5,000 (emergence on GPU). v10-2k-42 brackets this at 2,000 pop (running, 66.6k/100k gens).
+6. **What is the minimum population for signal emergence?** PARTIALLY ANSWERED. v10-2k-42 (100k gens, pop=2000) shows intermediate regime: signal hidden grows to near-max (26.8/32), all 6 symbols survive, MI=0.008 sustained. But response_fit_corr unavailable (pre-fix). Threshold still bracketed between 384 and 5,000. Next test: v12+ architecture at 2000 pop to measure response_fit_corr.
 
 7. **Can the response_fit_corr metric be fixed?** FIXED AND MEASURED (commit 31a1516, v11 data). Metric works - produces nonzero values. But the biological result is that symbol differentiation is maladaptive at 384 pop (cap=6: -0.13 to -0.28) and neutral (cap=32: ~0). Direct spatial inputs outcompete the signal channel.
 
-8. **Does removing spatial perception flip response_fit_corr positive?** TESTING (v12-blind6-42). `--blind` zeros food dx/dy/dist, ally dx/dy/dist (plus death echoes and freeze pressure already). If signals become the only source of spatial information, symbol differentiation should become adaptive. Expected: positive response_fit_corr, higher MI, possible vocabulary emergence.
-
-![Blind mode early results](figures/fig5_blind_mode.png)
-*Figure 5: v12-blind6-42 early trajectory (~3k gens). Brain collapsed to minimum (~4 neurons), MI flat zero, signal entropy recovering from initial crash. Too early for conclusions - needs 20k+ gens.*
+8. **Does removing spatial perception flip response_fit_corr positive?** ANSWERED: No. v12-blind6-42 (100k gens) shows response_fit_corr=-0.044, MI~0, 2 symbols extinct. Blind prey can't see food/allies and therefore can't signal about them. Removing perception destroys the information asymmetry that makes signals valuable rather than redirecting it through the signal channel. See Era 12.
 
 ### Evidence hierarchy status
 
@@ -780,7 +855,7 @@ What holds true across all runs, what's been disproven, and what remains open.
 | 4 | Responses are appropriate | **NO** - symbol differentiation maladaptive (v11) | Metric fixed, needs GPU rebuild |
 | 5 | Genuine reference | Not testable | Not testable |
 
-**Critical gap:** Level 4 now measured at 384 pop - negative (symbol differentiation maladaptive). The `--blind` experiment (v12) tests whether removing direct spatial perception flips this by making signals the only spatial information source. Level 4 at 5k pop (GPU) remains unmeasured.
+**Critical gap:** Level 4 measured at 384 pop - negative both sighted (v11) and blind (v12). Blind mode disproven as a path to signal emergence. v10 at 2000 pop shows signal infrastructure selection (hidden layer growth, symbol diversity) but response_fit_corr unmeasurable (pre-fix architecture). The key open experiment is v12+ architecture at 2000 pop to measure response_fit_corr. Level 4 at 5k pop (GPU) also remains unmeasured.
 
 ### Parameter history
 
