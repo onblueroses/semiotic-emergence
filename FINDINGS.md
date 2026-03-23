@@ -1,20 +1,20 @@
 # Findings
 
-What we know, what we disproved, and what remains open. For the chronological experimental history (12 eras, 24 runs), see [EXPERIMENTS.md](EXPERIMENTS.md).
+What we know, what we disproved, and what remains open. For the chronological experimental history (13 eras, 25 runs), see [EXPERIMENTS.md](EXPERIMENTS.md).
 
 ---
 
 ## Evidence Hierarchy
 
-| Level | Claim | Rust (384-1k pop) | GPU (5k pop) |
-|-------|-------|-------------------|-------------|
-| 1 | Signals have adaptive value | **NO** at all configs (-8% to -25%) | **YES** (r=+0.51, +52 fitness) |
-| 2 | Receivers change behavior | Weak yes (JSD 0.15-0.27) | Yes (JSD 0.033-0.066, rising) |
-| 3 | Different symbols carry different info | Yes at 0.02 drain (food encoding) | Weak (PC1=89.9%, one channel) |
-| 4 | Responses are appropriate | **NO** - symbol differentiation maladaptive (v11) | Metric fixed, needs GPU rebuild |
-| 5 | Genuine reference | Not testable | Not testable |
+| Level | Claim | Rust (384 pop) | Rust (2k pop) | GPU (5k pop) |
+|-------|-------|----------------|---------------|-------------|
+| 1 | Signals have adaptive value | **NO** (-8% to -25%) | Untested (needs counterfactual) | **YES** (r=+0.51, +52 fitness) |
+| 2 | Receivers change behavior | Weak yes (JSD 0.15-0.27) | Yes (JSD 0.29-0.32) | Yes (JSD 0.033-0.066, rising) |
+| 3 | Different symbols carry different info | Yes at 0.02 drain (food encoding) | **Yes** (food_mi=0.14, sig strengths interleaved with food inputs) | Weak (PC1=89.9%, one channel) |
+| 4 | Responses are appropriate | **NO** (v11: -0.13 to -0.28) | **NO** (v13: -0.29) | Metric fixed, needs GPU rebuild |
+| 5 | Genuine reference | Not testable | Not testable | Not testable |
 
-**Critical gap:** Level 4 measured at 384 pop - negative both sighted (v11) and blind (v12). Blind mode disproven as a path to signal emergence. v10 at 2000 pop shows signal infrastructure selection (hidden layer growth, symbol diversity) but response_fit_corr unmeasurable (pre-fix architecture). The key open experiment is v12+ architecture at 2000 pop to measure response_fit_corr. Level 4 at 5k pop (GPU) also remains unmeasured.
+**Critical finding (v13):** Level 4 now measured at 2000 pop - still negative (response_fit_corr=-0.29). The receiver paradox: receiver_fit_corr=0.74 (being near signals correlates with fitness) but responding to signal content is maladaptive. This narrows the emergence threshold: response_fit_corr is negative at 2000 and positive at 5000, so the crossover is somewhere in 2000-5000. A counterfactual (--no-signals) at 2000 pop is needed to test Level 1. Level 4 at 5k pop (GPU) also remains unmeasured.
 
 ---
 
@@ -22,15 +22,15 @@ What we know, what we disproved, and what remains open. For the chronological ex
 
 ### Universal patterns (every era, every seed)
 
-- **Population scale is the key variable.** At 384-1000 agents, signals are net negative at every parameter configuration tested (8 eras, 15+ runs). At 5,000 agents (GPU), signals become adaptive (r=+0.51). The signal environment must be dense enough for statistical regularity to emerge from noisy senders.
+- **Population scale is the key variable.** At 384-1000 agents, signals are net negative at every parameter configuration tested (8 eras, 15+ runs). At 2000, signals carry real information (food_mi=0.14) but responses are maladaptive (response_fit_corr=-0.29). At 5,000 agents (GPU), signals become adaptive (r=+0.51). The emergence threshold lies between 2000 and 5000.
 
-- **response_fit_corr is negative at 384 pop.** The metric was fixed in commit 31a1516 (was always 0 due to measurement artifact). v11 data shows symbol differentiation is actively maladaptive at cap=6 (-0.13 to -0.28) and neutral at cap=32 (~0). Prey that respond differently to different symbols do worse because direct spatial inputs (food/ally direction) are more reliable than the noisy signal channel. This is the strongest evidence yet that population scale - not ecological conditions or metric artifacts - is the bottleneck.
+- **response_fit_corr is negative up to 2000 pop.** At 384 pop: -0.13 to -0.28 (v11). At 2000 pop: -0.29 (v13). Symbol differentiation is maladaptive because direct spatial inputs (food/ally direction) remain more reliable than the signal channel. The signal environment at 2000 pop is informationally richer than at 384 (food_mi 0.14 vs 0.01) but still too noisy for symbol-differentiated responses to outperform direct perception.
 
-- **receiver_fit_corr is a spatial confound.** Center prey hear more signals AND survive more. Consistently 0.48-0.87 across all eras. Not evidence of signal utility.
+- **The receiver paradox.** receiver_fit_corr is consistently positive (0.48-0.87 across all eras, 0.74 at 2000 pop), but response_fit_corr is consistently negative. Being near signals correlates with fitness; acting on signal content reduces fitness. The positive receiver correlation is a spatial confound: center prey hear more signals AND encounter more food AND have more escape routes. The negative response correlation is the real signal: the channel is too noisy for content to be actionable.
 
 - **Silence near danger.** Prey reduce per-capita signaling near threats. Present from gen 0, maintained but not amplified by evolution. Likely an architectural spandrel of shared hidden layers, not a learned strategy.
 
-- **Symbol monopoly under weak selection.** Without strong differentiation pressure, one symbol dominates. Seen in eras 1, 2 (phase 3), and 5. Only resisted when signals encode useful information (era 4 at 0.02 drain).
+- **Symbol reduction, not monopoly, at scale.** At 384 pop, one symbol dominates (monopoly). At 2000 pop (v13), the vocabulary reduces from 6 to 4 active symbols with a relatively even distribution (HHI=0.28 vs monopoly ~0.5+). The surviving symbols carry real information (input MI 0.08-0.10); the extinct ones don't. This is vocabulary optimization, not collapse.
 
 - **Fitness converges, conventions diverge.** Different seeds reach similar fitness but with completely different brain architectures, dominant symbols, and encoding profiles. Fitness is constrained by physics; everything else is contingent.
 
@@ -72,8 +72,9 @@ What we know, what we disproved, and what remains open. For the chronological ex
 | Cooperative food patches | 3 | Working. Creates coordination incentive that signals exploit |
 | 4:1 vision:signal ratio | 3 | Working. Forces reliance on social information |
 | Zone drain 0.02 (50-tick kill) | 4 | Working. Enough time for signal-response loops |
-| Food encoding | 4 | Emerged independently in 3 seeds. MI 0.10-0.12 sustained |
+| Food encoding | 4 | Emerged independently in 3 seeds. MI 0.10-0.12 sustained. Strongest at 2k pop (0.14) |
 | Signal relay (seed43) | 4 | Emerged spontaneously as alternative to direct encoding |
+| Metrics-interval=10 | 13 | 10x finer resolution reveals dynamics masked at 200 (v10 vs v13 signal hidden trajectories) |
 
 ---
 
@@ -109,11 +110,13 @@ Inputs 0-1 are justified: prey need body-state awareness. Inputs 2, 36-38 give a
 
 ## Open Questions
 
-1. **What is the minimum population for signal emergence?** PARTIALLY ANSWERED. Bracketed between 384 (all negative) and 5,000 (positive). v10-2k-42 (100k gens, pop=2000) shows intermediate regime: signal infrastructure selected but response_fit_corr unmeasurable (pre-fix). Next test: v12+ architecture at 2000 pop with fixed metric.
+1. **What is the minimum population for signal emergence?** NARROWED. Bracketed between 2000 (response_fit_corr=-0.29, v13) and 5,000 (receiver_fit_corr=+0.51, GPU). The crossover where symbol differentiation becomes adaptive is somewhere in this range. Next tests: pop=3000 or 4000 bracket runs, and/or counterfactual at 2000.
 
-2. **Is response_fit_corr positive at 5k pop?** The GPU run used the pre-fix architecture. The metric was broken (measurement artifact). Needs a GPU rebuild with the fixed per-symbol JSD metric.
+2. **Is receiver_fit_corr a pure spatial confound at 2000 pop?** v13 shows receiver_fit_corr=0.74 but we can't separate signal utility from spatial advantage without a counterfactual. Next test: v13-mute-2k-42 (same params, --no-signals). If mute prey show similar center-survival advantage, the 0.74 is spatial confound.
 
-3. **Can the Rust simulation scale to 5k+ efficiently?** Current architecture is CPU-bound. The GPU mirror spec (Python/JAX) is the planned path for 100k-prey runs.
+3. **Is response_fit_corr positive at 5k pop?** The GPU run used the pre-fix architecture. The metric was broken (measurement artifact). Needs a GPU rebuild with the fixed per-symbol JSD metric.
+
+4. **Can the Rust simulation scale to 5k+ efficiently?** At 2000 pop: 25 gen/min (CPU-bound on signal reception at 41% of runtime). 5000 pop would be ~4 gen/min, making 100k gens impractical on VPS. GPU mirror (Python/JAX) is the planned path.
 
 ---
 
@@ -132,3 +135,5 @@ Inputs 0-1 are justified: prey need body-state awareness. Inputs 2, 36-38 give a
 6. **Can the response_fit_corr metric be fixed?** Fixed and measured (commit 31a1516, v11 data). Metric works. Biological result: symbol differentiation is maladaptive at 384 pop.
 
 7. **Does removing spatial perception flip response_fit_corr positive?** No. v12-blind6-42 shows response_fit_corr=-0.044, MI~0, 2 symbols extinct. Removing perception destroys information asymmetry rather than redirecting it through signals.
+
+8. **Is response_fit_corr positive at 2000 pop?** No. v13-2k-42 (100k gens, fixed metrics) shows response_fit_corr=-0.29. Symbol differentiation remains maladaptive at 2000 pop despite strong food encoding (food_mi=0.14) and high receiver_fit_corr (0.74). The emergence threshold is above 2000.

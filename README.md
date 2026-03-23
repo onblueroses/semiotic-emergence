@@ -6,7 +6,7 @@ Hundreds of neural networks on a toroidal grid, under invisible lethal pressure,
 
 ## The answer so far
 
-Signals emerge as a survival resource, but only at population scale. At 384 agents, signals are net negative across every configuration tested (-8% to -25% fitness). At 5,000 agents, signals become adaptive (+0.51 correlation with survival). The signal environment must be statistically dense enough for receivers to extract patterns from noisy senders. Eighteen disproven hypotheses and 12 experimental eras converged on this single variable.
+Signals emerge as a survival resource, but only at population scale. At 384 agents, signals are net negative across every configuration tested (-8% to -25% fitness). At 5,000 agents, signals become adaptive (+0.51 correlation with survival). The signal environment must be statistically dense enough for receivers to extract patterns from noisy senders. Nineteen disproven hypotheses and 13 experimental eras converged on this single variable. At 2,000 agents, signals carry real food-location information (MI=0.14) but acting on signal content is still maladaptive - the crossover lies between 2,000 and 5,000.
 
 ![Signals are adaptive only at population scale](figures/fig1_signals_adaptive_at_scale.png)
 *Signal vs mute fitness across experimental conditions. Signals hurt at small populations. Only the GPU run (pop=5000) shows positive signal value.*
@@ -35,8 +35,8 @@ Output: `output.csv` (25 columns), `trajectory.csv`, `input_mi.csv`. Analysis: `
 | Document | What's in it |
 |----------|-------------|
 | [FRAMEWORK.md](FRAMEWORK.md) | The semiotic theory governing this project - what meaning requires, the pre-semiotic zone, measurement instruments |
-| [FINDINGS.md](FINDINGS.md) | Standing conclusions, evidence hierarchy, 18 disproven hypotheses, the metric problem |
-| [EXPERIMENTS.md](EXPERIMENTS.md) | Chronological lab notebook - 12 eras, 24 runs, every parameter change and why |
+| [FINDINGS.md](FINDINGS.md) | Standing conclusions, evidence hierarchy, 19 disproven hypotheses, the metric problem |
+| [EXPERIMENTS.md](EXPERIMENTS.md) | Chronological lab notebook - 13 eras, 25 runs, every parameter change and why |
 
 ## The code
 
