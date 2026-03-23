@@ -70,7 +70,7 @@ struct SimParams {
     fast_fail_tick: u32,
     signal_ticks: u32,
     num_freeze_zones: usize,
-    signal_threshold: f32,
+    gate_threshold: f32,
     deme_divisions: usize,
     migration_rate: f32,
     group_interval: usize,
@@ -78,7 +78,6 @@ struct SimParams {
     no_freeze_pressure: bool,
     blind: bool,
     food_vision: i32,
-    max_signal_hidden_cap: usize,
 }
 
 impl SimParams {
@@ -99,16 +98,13 @@ impl SimParams {
         let fast_fail_tick: u32 = parse_flag(args, "--fast-fail").unwrap_or(0);
         let signal_ticks: u32 = parse_flag(args, "--signal-ticks").unwrap_or(4);
         let num_freeze_zones: usize = parse_flag(args, "--freeze-zones").unwrap_or(2);
-        let signal_threshold: f32 = parse_flag(args, "--signal-threshold").unwrap_or(1.0 / 6.0);
+        let gate_threshold: f32 = parse_flag(args, "--gate-threshold").unwrap_or(0.5);
         let deme_divisions: usize = parse_flag(args, "--demes").unwrap_or(1);
         let migration_rate: f32 = parse_flag(args, "--migration-rate").unwrap_or(0.05);
         let group_interval: usize = parse_flag(args, "--group-interval").unwrap_or(100);
         let blind = args.iter().any(|a| a == "--blind");
         let no_death_echoes = blind || args.iter().any(|a| a == "--no-death-echoes");
         let no_freeze_pressure = blind || args.iter().any(|a| a == "--no-freeze-pressure");
-        let max_signal_hidden_cap: usize = parse_flag(args, "--max-signal-hidden")
-            .unwrap_or(brain::MAX_SIGNAL_HIDDEN)
-            .clamp(brain::MIN_SIGNAL_HIDDEN, brain::MAX_SIGNAL_HIDDEN);
         let vision_raw: Option<f32> = parse_flag(args, "--vision");
 
         let zone_coverage: Option<f32> = parse_flag(args, "--zone-coverage");
@@ -157,7 +153,7 @@ impl SimParams {
             fast_fail_tick,
             signal_ticks,
             num_freeze_zones,
-            signal_threshold,
+            gate_threshold,
             deme_divisions,
             migration_rate,
             group_interval,
@@ -165,7 +161,6 @@ impl SimParams {
             no_freeze_pressure,
             blind,
             food_vision,
-            max_signal_hidden_cap,
         }
     }
 }
@@ -232,9 +227,6 @@ struct GenMetrics {
     avg_base_hidden: f32,
     min_base_hidden: usize,
     max_base_hidden: usize,
-    avg_signal_hidden: f32,
-    min_signal_hidden: usize,
-    max_signal_hidden: usize,
     zone_deaths: u32,
     freeze_zone_deaths: u32,
     signal_entropy: f32,
@@ -245,7 +237,7 @@ impl GenMetrics {
     fn write_csv(&self, f: &mut impl Write, gen: usize) -> Result<(), Box<dyn std::error::Error>> {
         writeln!(
             f,
-            "{gen},{:.1},{:.1},{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.1},{},{},{:.1},{},{},{},{:.4},{},{:.4}",
+            "{gen},{:.1},{:.1},{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.1},{},{},{},{:.4},{},{:.4}",
             self.avg_fitness,
             self.max_fitness,
             self.total_signals,
@@ -263,9 +255,6 @@ impl GenMetrics {
             self.avg_base_hidden,
             self.min_base_hidden,
             self.max_base_hidden,
-            self.avg_signal_hidden,
-            self.min_signal_hidden,
-            self.max_signal_hidden,
             self.zone_deaths,
             self.signal_entropy,
             self.freeze_zone_deaths,
@@ -317,14 +306,13 @@ impl GenMetrics {
             .collect::<Vec<_>>()
             .join(",");
         println!(
-            "gen {gen:>4} | avg {:>7.1} | max {:>7.1} | signals {} | icon {:.3} | MI {:.3} | fMI {:.3} | ent {:.3} | jsd {:.3}/{:.3} | sym [{sym_str}] | sil {:.3} | zd {}/{} | base {:.1} [{}-{}] | sig {:.1} [{}-{}]",
+            "gen {gen:>4} | avg {:>7.1} | max {:>7.1} | signals {} | icon {:.3} | MI {:.3} | fMI {:.3} | ent {:.3} | jsd {:.3}/{:.3} | sym [{sym_str}] | sil {:.3} | zd {}/{} | base {:.1} [{}-{}]",
             self.avg_fitness, self.max_fitness, self.total_signals,
             self.iconicity, self.mutual_info, self.food_mi, self.signal_entropy,
             self.jsd_no_pred, self.jsd_pred,
             self.silence_corr,
             self.zone_deaths, self.freeze_zone_deaths,
-            self.avg_base_hidden, self.min_base_hidden, self.max_base_hidden,
-            self.avg_signal_hidden, self.min_signal_hidden, self.max_signal_hidden
+            self.avg_base_hidden, self.min_base_hidden, self.max_base_hidden
         );
     }
 }
@@ -371,7 +359,7 @@ fn evaluate_generation(
         params.zone_drain_rate,
         params.signal_ticks,
         params.num_freeze_zones,
-        params.signal_threshold,
+        params.gate_threshold,
         params.no_death_echoes,
         params.no_freeze_pressure,
         params.blind,
@@ -541,14 +529,6 @@ fn compute_gen_metrics(
     let min_base_hidden = base_sizes.iter().copied().min().unwrap_or(0);
     let max_base_hidden = base_sizes.iter().copied().max().unwrap_or(0);
 
-    let sig_sizes: Vec<usize> = population
-        .iter()
-        .map(|a| a.brain.signal_hidden_size)
-        .collect();
-    let avg_signal_hidden = sig_sizes.iter().sum::<usize>() as f32 / sig_sizes.len() as f32;
-    let min_signal_hidden = sig_sizes.iter().copied().min().unwrap_or(0);
-    let max_signal_hidden = sig_sizes.iter().copied().max().unwrap_or(0);
-
     GenMetrics {
         avg_fitness,
         max_fitness,
@@ -572,9 +552,6 @@ fn compute_gen_metrics(
         avg_base_hidden,
         min_base_hidden,
         max_base_hidden,
-        avg_signal_hidden,
-        min_signal_hidden,
-        max_signal_hidden,
         zone_deaths: ev.zone_deaths,
         freeze_zone_deaths: ev.freeze_zone_deaths,
         signal_entropy,
@@ -633,7 +610,7 @@ fn run_seed(
 
     if !resuming {
         if let Some(ref mut f) = csv {
-            writeln!(f, "generation,avg_fitness,max_fitness,signals_emitted,iconicity,mutual_info,jsd_no_pred,jsd_pred,silence_corr,sender_fit_corr,traj_fluct_ratio,receiver_fit_corr,response_fit_corr,silence_onset_jsd,silence_move_delta,avg_base_hidden,min_base_hidden,max_base_hidden,avg_signal_hidden,min_signal_hidden,max_signal_hidden,zone_deaths,signal_entropy,freeze_zone_deaths,food_mi")?;
+            writeln!(f, "generation,avg_fitness,max_fitness,signals_emitted,iconicity,mutual_info,jsd_no_pred,jsd_pred,silence_corr,sender_fit_corr,traj_fluct_ratio,receiver_fit_corr,response_fit_corr,silence_onset_jsd,silence_move_delta,avg_base_hidden,min_base_hidden,max_base_hidden,zone_deaths,signal_entropy,freeze_zone_deaths,food_mi")?;
         }
         if let Some(ref mut f) = traj_csv {
             write!(f, "generation")?;
@@ -810,18 +787,9 @@ fn run_seed(
             let avg_base = base_sizes.iter().sum::<usize>() as f32 / base_sizes.len() as f32;
             let min_base = base_sizes.iter().copied().min().unwrap_or(0);
             let max_base = base_sizes.iter().copied().max().unwrap_or(0);
-            let sig_sizes: Vec<usize> = population
-                .iter()
-                .map(|a| a.brain.signal_hidden_size)
-                .collect();
-            let avg_sig = sig_sizes.iter().sum::<usize>() as f32 / sig_sizes.len() as f32;
-            let min_sig = sig_sizes.iter().copied().min().unwrap_or(0);
-            let max_sig = sig_sizes.iter().copied().max().unwrap_or(0);
             println!(
-                "gen {:>4} | avg {:>7.1} | max {:>7.1} | signals {} | base {:.1} [{}-{}] | sig {:.1} [{}-{}]",
-                gen, avg, max, ev.total_signals,
-                avg_base, min_base, max_base,
-                avg_sig, min_sig, max_sig
+                "gen {:>4} | avg {:>7.1} | max {:>7.1} | signals {} | base {:.1} [{}-{}]",
+                gen, avg, max, ev.total_signals, avg_base, min_base, max_base
             );
         }
 
@@ -835,7 +803,6 @@ fn run_seed(
             params.reproduction_radius,
             params.fallback_radius,
             params.deme_divisions,
-            params.max_signal_hidden_cap,
             &mut rng,
         );
 
@@ -849,7 +816,6 @@ fn run_seed(
                     params.grid_size,
                     params.deme_divisions,
                     params.mutation_sigma,
-                    params.max_signal_hidden_cap,
                     &mut rng,
                 );
             }
@@ -1153,7 +1119,6 @@ mod tests {
                 params.reproduction_radius,
                 params.fallback_radius,
                 params.deme_divisions,
-                params.max_signal_hidden_cap,
                 rng,
             );
         }

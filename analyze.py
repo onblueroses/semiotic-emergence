@@ -31,6 +31,17 @@ CURRENT_COLUMNS = frozenset({
     "receiver_fit_corr", "response_fit_corr", "silence_onset_jsd",
     "silence_move_delta", "signal_entropy",
     "avg_base_hidden", "min_base_hidden", "max_base_hidden",
+    "zone_deaths", "freeze_zone_deaths",
+})
+
+# v13 split-head format (25 columns, has avg_signal_hidden)
+V13_COLUMNS = frozenset({
+    "generation", "avg_fitness", "max_fitness", "signals_emitted",
+    "iconicity", "mutual_info", "jsd_no_pred", "jsd_pred",
+    "silence_corr", "sender_fit_corr", "traj_fluct_ratio",
+    "receiver_fit_corr", "response_fit_corr", "silence_onset_jsd",
+    "silence_move_delta", "signal_entropy",
+    "avg_base_hidden", "min_base_hidden", "max_base_hidden",
     "avg_signal_hidden", "min_signal_hidden", "max_signal_hidden",
     "zone_deaths", "freeze_zone_deaths",
 })
@@ -58,7 +69,7 @@ COLUMN_RENAMES = {
     "signal_count": "signals_emitted",
 }
 
-KEY_METRICS = ["avg_fitness", "avg_base_hidden", "avg_signal_hidden", "mutual_info", "jsd_pred", "silence_corr", "signal_entropy"]
+KEY_METRICS = ["avg_fitness", "avg_base_hidden", "mutual_info", "jsd_pred", "silence_corr", "signal_entropy"]
 
 COMPARISON_ROWS = [
     ("Generations",       None,                   None,        ","),
@@ -67,8 +78,6 @@ COMPARISON_ROWS = [
     ("Sustained fitness", "avg_fitness",          "sustained", ".1f"),
     ("Final base hidden", "avg_base_hidden",     "final",     ".1f"),
     ("Peak base hidden",  "avg_base_hidden",     "peak",      ".1f"),
-    ("Final sig hidden",  "avg_signal_hidden",   "final",     ".1f"),
-    ("Peak sig hidden",   "avg_signal_hidden",   "peak",      ".1f"),
     ("Final MI",          "mutual_info",          "final",     ".4f"),
     ("Peak MI",           "mutual_info",          "peak",      ".4f"),
     ("MI peak gen",       "mutual_info",          "peak_gen",  ","),
@@ -372,7 +381,6 @@ def classify_segment(run: Run, start: int, end: int) -> str:
     labels = {
         "avg_fitness": "high-fitness" if z > 0 else "low-fitness",
         "avg_base_hidden": "large-base-brain" if z > 0 else "small-base-brain",
-        "avg_signal_hidden": "large-signal-brain" if z > 0 else "small-signal-brain",
         "mutual_info": "high-MI" if z > 0 else "low-MI",
         "jsd_pred": "high-response" if z > 0 else "low-response",
         "silence_corr": "silence-active" if z < 0 else "silence-weak",
@@ -476,14 +484,16 @@ def print_summary(run: Run, stats: dict):
 
     if not run.is_legacy:
         ab = s.get("avg_base_hidden", {})
-        ash = s.get("avg_signal_hidden", {})
-        print("\n  BRAIN SIZE (split-head)")
+        print("\n  BRAIN SIZE")
         print(f"    Base hidden:    {ab.get('final', 0):.1f}  "
               f"[{s.get('min_base_hidden', {}).get('final', 0):.0f}-{s.get('max_base_hidden', {}).get('final', 0):.0f}]"
               f"  (peak {ab.get('peak', 0):.1f} at gen {ab.get('peak_gen', 0):,})")
-        print(f"    Signal hidden:  {ash.get('final', 0):.1f}  "
-              f"[{s.get('min_signal_hidden', {}).get('final', 0):.0f}-{s.get('max_signal_hidden', {}).get('final', 0):.0f}]"
-              f"  (peak {ash.get('peak', 0):.1f} at gen {ash.get('peak_gen', 0):,})")
+        # v13 split-head runs also have signal_hidden
+        ash = s.get("avg_signal_hidden", {})
+        if ash:
+            print(f"    Signal hidden:  {ash.get('final', 0):.1f}  "
+                  f"[{s.get('min_signal_hidden', {}).get('final', 0):.0f}-{s.get('max_signal_hidden', {}).get('final', 0):.0f}]"
+                  f"  (peak {ash.get('peak', 0):.1f} at gen {ash.get('peak_gen', 0):,})")
         total = ab.get("final", 0) + ash.get("final", 0)
         drain = 0.0008  # base metabolic drain only; neuron_cost is 0.0 (brain size is free)
         print(f"    Total neurons:  {total:.1f}  base drain={drain:.5f}/tick  ({drain * 500:.2f} over 500 ticks)")
@@ -555,7 +565,10 @@ def print_lag_correlations(run: Run):
     if max_lag < 10:
         return
     print("\n  LAG CORRELATIONS")
-    for brain_metric, label in [("avg_base_hidden", "base brain"), ("avg_signal_hidden", "sig brain")]:
+    brain_pairs = [("avg_base_hidden", "base brain")]
+    if "avg_signal_hidden" in run.metrics:
+        brain_pairs.append(("avg_signal_hidden", "sig brain"))
+    for brain_metric, label in brain_pairs:
         result = lag_correlation(run, brain_metric, "mutual_info", max_lag)
         if result is None:
             continue

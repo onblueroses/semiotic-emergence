@@ -1,10 +1,10 @@
 use rand::Rng;
 
 use crate::brain::{
-    Brain, INPUTS, MAX_BASE_HIDDEN, MAX_SIGNAL_HIDDEN, MEMORY_OUTPUTS, MIN_BASE_HIDDEN,
-    MIN_SIGNAL_HIDDEN, MOVEMENT_OUTPUTS, SEGMENT_BOUNDARIES, SEG_BASE_BIAS, SEG_BASE_MEM,
-    SEG_BASE_MOVE, SEG_BASE_SIGHID, SEG_INPUT_BASE, SEG_MEM_BIAS, SEG_MOVE_BIAS, SEG_SIGHID_BIAS,
-    SEG_SIGHID_SIGOUT, SEG_SIGOUT_BIAS, SIGNAL_OUTPUTS,
+    Brain, CROSSOVER_GROUPS, INPUTS, LINKED_GROUP, MAX_BASE_HIDDEN, MEMORY_OUTPUTS,
+    MIN_BASE_HIDDEN, MOVEMENT_OUTPUTS, SEG_BASE_BIAS, SEG_BASE_GATE, SEG_BASE_MEM, SEG_BASE_MOVE,
+    SEG_BASE_SIGNAL, SEG_GATE_BIAS, SEG_INPUT_BASE, SEG_MEM_BIAS, SEG_MOVE_BIAS, SEG_SIGNAL_BIAS,
+    SIGNAL_OUTPUTS,
 };
 use crate::world::wrap_dist_sq;
 
@@ -222,26 +222,27 @@ fn local_tournament_select(
 
 pub fn crossover(a: &Brain, b: &Brain, rng: &mut impl Rng) -> Brain {
     let mut weights = a.weights;
-    for &(start, end) in &SEGMENT_BOUNDARIES {
+    // Linked group (0): base representation + base_hidden_size from same parent
+    let linked_parent_is_b = rng.gen_bool(0.5);
+    let (start, end) = CROSSOVER_GROUPS[LINKED_GROUP];
+    if linked_parent_is_b {
+        weights[start..end].copy_from_slice(&b.weights[start..end]);
+    }
+    // Independent output groups (1-4): each independently from either parent
+    for &(start, end) in &CROSSOVER_GROUPS[1..] {
         if rng.gen_bool(0.5) {
             weights[start..end].copy_from_slice(&b.weights[start..end]);
         }
     }
-    // Inherit each hidden size from a random parent (50/50, independent)
-    let base_hidden_size = if rng.gen_bool(0.5) {
-        a.base_hidden_size
-    } else {
+    // base_hidden_size co-inherits with linked group
+    let base_hidden_size = if linked_parent_is_b {
         b.base_hidden_size
-    };
-    let signal_hidden_size = if rng.gen_bool(0.5) {
-        a.signal_hidden_size
     } else {
-        b.signal_hidden_size
+        a.base_hidden_size
     };
     Brain {
         weights,
         base_hidden_size,
-        signal_hidden_size,
     }
 }
 
@@ -253,11 +254,9 @@ fn gaussian_noise(sigma: f32, rng: &mut impl Rng) -> f32 {
     (sum - 2.0) * 1.732_050_8 * sigma
 }
 
-/// Scoped Gaussian mutation respecting both hidden size genes.
-/// Base pool weights are scoped by `base_hidden_size`, signal pool by `signal_hidden_size`.
+/// Scoped Gaussian mutation. All weight pools scoped by `base_hidden_size`.
 pub fn mutate(brain: &mut Brain, sigma: f32, rng: &mut impl Rng) {
     let bh_scope = (brain.base_hidden_size + MUTATION_HEADROOM).min(MAX_BASE_HIDDEN);
-    let sh_scope = (brain.signal_hidden_size + MUTATION_HEADROOM).min(MAX_SIGNAL_HIDDEN);
     let w = &mut brain.weights;
 
     // Input -> base hidden: scope by bh
@@ -285,29 +284,25 @@ pub fn mutate(brain: &mut Brain, sigma: f32, rng: &mut impl Rng) {
         w[SEG_MOVE_BIAS + o] += gaussian_noise(sigma, rng);
     }
 
-    // Base -> signal hidden: scope rows by bh, cols by sh
-    for b in 0..bh_scope {
-        for s in 0..sh_scope {
-            w[SEG_BASE_SIGHID + b * MAX_SIGNAL_HIDDEN + s] += gaussian_noise(sigma, rng);
-        }
-    }
-
-    // Signal hidden biases: scope by sh
-    for s in 0..sh_scope {
-        w[SEG_SIGHID_BIAS + s] += gaussian_noise(sigma, rng);
-    }
-
-    // Signal hidden -> signal output: scope rows by sh, all SIGNAL_OUTPUTS cols
-    for s in 0..sh_scope {
+    // Base -> signal: scope rows by bh, all SIGNAL_OUTPUTS cols
+    for h in 0..bh_scope {
         for o in 0..SIGNAL_OUTPUTS {
-            w[SEG_SIGHID_SIGOUT + s * SIGNAL_OUTPUTS + o] += gaussian_noise(sigma, rng);
+            w[SEG_BASE_SIGNAL + h * SIGNAL_OUTPUTS + o] += gaussian_noise(sigma, rng);
         }
     }
 
-    // Signal output biases: always mutate all
+    // Signal biases: always mutate all
     for o in 0..SIGNAL_OUTPUTS {
-        w[SEG_SIGOUT_BIAS + o] += gaussian_noise(sigma, rng);
+        w[SEG_SIGNAL_BIAS + o] += gaussian_noise(sigma, rng);
     }
+
+    // Base -> gate: scope by bh
+    for h in 0..bh_scope {
+        w[SEG_BASE_GATE + h] += gaussian_noise(sigma, rng);
+    }
+
+    // Gate bias: always mutate
+    w[SEG_GATE_BIAS] += gaussian_noise(sigma, rng);
 
     // Base -> memory: scope rows by bh, all MEMORY_OUTPUTS cols
     for h in 0..bh_scope {
@@ -323,18 +318,12 @@ pub fn mutate(brain: &mut Brain, sigma: f32, rng: &mut impl Rng) {
 }
 
 #[allow(clippy::cast_possible_wrap)]
-pub fn mutate_hidden_size(brain: &mut Brain, max_sh: usize, rng: &mut impl Rng) {
+pub fn mutate_hidden_size(brain: &mut Brain, rng: &mut impl Rng) {
     if rng.gen::<f32>() < HIDDEN_SIZE_MUTATION_RATE {
         let delta: i32 = if rng.gen_bool(0.5) { 1 } else { -1 };
         let new_size = (brain.base_hidden_size as i32 + delta)
             .clamp(MIN_BASE_HIDDEN as i32, MAX_BASE_HIDDEN as i32);
         brain.base_hidden_size = new_size as usize;
-    }
-    if rng.gen::<f32>() < HIDDEN_SIZE_MUTATION_RATE {
-        let delta: i32 = if rng.gen_bool(0.5) { 1 } else { -1 };
-        let new_size = (brain.signal_hidden_size as i32 + delta)
-            .clamp(MIN_SIGNAL_HIDDEN as i32, max_sh as i32);
-        brain.signal_hidden_size = new_size as usize;
     }
 }
 
@@ -396,7 +385,6 @@ pub fn evolve_spatial(
     reproduction_radius: f32,
     fallback_radius: f32,
     deme_divisions: usize,
-    max_sh: usize,
     rng: &mut impl Rng,
 ) -> Vec<Agent> {
     scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -478,7 +466,7 @@ pub fn evolve_spatial(
         );
         let mut child_brain = crossover(&population[pa].brain, &population[pb].brain, rng);
         mutate(&mut child_brain, sigma, rng);
-        mutate_hidden_size(&mut child_brain, max_sh, rng);
+        mutate_hidden_size(&mut child_brain, rng);
 
         let jx = rng.gen_range(-OFFSPRING_JITTER..=OFFSPRING_JITTER);
         let jy = rng.gen_range(-OFFSPRING_JITTER..=OFFSPRING_JITTER);
@@ -508,7 +496,6 @@ pub fn group_selection(
     grid_size: i32,
     deme_divisions: usize,
     sigma: f32,
-    max_sh: usize,
     rng: &mut impl Rng,
 ) {
     let demes = compute_demes(grid_size, deme_divisions);
@@ -570,7 +557,7 @@ pub fn group_selection(
             let db = donors[rng.gen_range(0..donors.len())];
             let mut child = crossover(&population[da].brain, &population[db].brain, rng);
             mutate(&mut child, sigma, rng);
-            mutate_hidden_size(&mut child, max_sh, rng);
+            mutate_hidden_size(&mut child, rng);
             // Place at victim's position
             population[victim_idx].brain = child;
             population[victim_idx].parent_indices = [Some(da), Some(db)];
@@ -697,7 +684,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::similar_names)]
-    fn crossover_inherits_hidden_sizes() {
+    fn crossover_inherits_hidden_size() {
         use rand::SeedableRng;
         use rand_chacha::ChaCha8Rng;
         let mut rng = ChaCha8Rng::seed_from_u64(42);
@@ -705,41 +692,27 @@ mod tests {
         let mut a = Brain::random(&mut rng);
         let mut b = Brain::random(&mut rng);
         a.base_hidden_size = 8;
-        a.signal_hidden_size = 4;
         b.base_hidden_size = 20;
-        b.signal_hidden_size = 16;
 
-        let mut got_parent_a_base = false;
-        let mut got_parent_b_base = false;
-        let mut got_parent_a_sig = false;
-        let mut got_parent_b_sig = false;
+        let mut got_parent_a = false;
+        let mut got_parent_b = false;
         for _ in 0..100 {
             let child = crossover(&a, &b, &mut rng);
             if child.base_hidden_size == 8 {
-                got_parent_a_base = true;
+                got_parent_a = true;
             }
             if child.base_hidden_size == 20 {
-                got_parent_b_base = true;
-            }
-            if child.signal_hidden_size == 4 {
-                got_parent_a_sig = true;
-            }
-            if child.signal_hidden_size == 16 {
-                got_parent_b_sig = true;
+                got_parent_b = true;
             }
         }
         assert!(
-            got_parent_a_base && got_parent_b_base,
+            got_parent_a && got_parent_b,
             "Should inherit base_hidden_size from both parents"
-        );
-        assert!(
-            got_parent_a_sig && got_parent_b_sig,
-            "Should inherit signal_hidden_size from both parents"
         );
     }
 
     #[test]
-    fn crossover_selects_whole_segments() {
+    fn crossover_selects_whole_groups() {
         use rand::SeedableRng;
         use rand_chacha::ChaCha8Rng;
         let mut rng = ChaCha8Rng::seed_from_u64(77);
@@ -755,15 +728,56 @@ mod tests {
         }
 
         let child = crossover(&a, &b, &mut rng);
-        // Each segment must be entirely from one parent (all 1.0 or all 2.0)
-        for &(start, end) in &SEGMENT_BOUNDARIES {
+        // Each crossover group must be entirely from one parent (all 1.0 or all 2.0)
+        for &(start, end) in &CROSSOVER_GROUPS {
             let first = child.weights[start];
             assert!(
                 first == 1.0 || first == 2.0,
-                "Segment [{start},{end}) has unexpected value {first}"
+                "Group [{start},{end}) has unexpected value {first}"
             );
             for &w in &child.weights[start..end] {
-                assert_eq!(w, first, "Segment [{start},{end}) has mixed parents");
+                assert_eq!(w, first, "Group [{start},{end}) has mixed parents");
+            }
+        }
+    }
+
+    #[test]
+    fn crossover_linked_group_coherence() {
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha8Rng;
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let mut a = Brain::zero();
+        let mut b = Brain::zero();
+        a.base_hidden_size = 8;
+        b.base_hidden_size = 30;
+        for w in a.weights.iter_mut() {
+            *w = 1.0;
+        }
+        for w in b.weights.iter_mut() {
+            *w = 2.0;
+        }
+
+        // Over many trials, the linked group (input_base + base_bias) and
+        // base_hidden_size must always come from the same parent.
+        for _ in 0..200 {
+            let child = crossover(&a, &b, &mut rng);
+            let (lg_start, lg_end) = CROSSOVER_GROUPS[LINKED_GROUP];
+            let linked_val = child.weights[lg_start];
+            if linked_val == 1.0 {
+                assert_eq!(
+                    child.base_hidden_size, 8,
+                    "Linked group from A but hidden size from B"
+                );
+            } else {
+                assert_eq!(
+                    child.base_hidden_size, 30,
+                    "Linked group from B but hidden size from A"
+                );
+            }
+            // All weights in the linked group must be from the same parent
+            for &w in &child.weights[lg_start..lg_end] {
+                assert_eq!(w, linked_val, "Linked group has mixed parents");
             }
         }
     }
@@ -776,39 +790,17 @@ mod tests {
 
         let mut brain = Brain::zero();
         brain.base_hidden_size = MIN_BASE_HIDDEN;
-        brain.signal_hidden_size = MIN_SIGNAL_HIDDEN;
         for _ in 0..1000 {
-            mutate_hidden_size(&mut brain, MAX_SIGNAL_HIDDEN, &mut rng);
+            mutate_hidden_size(&mut brain, &mut rng);
             assert!(brain.base_hidden_size >= MIN_BASE_HIDDEN);
             assert!(brain.base_hidden_size <= MAX_BASE_HIDDEN);
-            assert!(brain.signal_hidden_size >= MIN_SIGNAL_HIDDEN);
-            assert!(brain.signal_hidden_size <= MAX_SIGNAL_HIDDEN);
         }
 
         brain.base_hidden_size = MAX_BASE_HIDDEN;
-        brain.signal_hidden_size = MAX_SIGNAL_HIDDEN;
         for _ in 0..1000 {
-            mutate_hidden_size(&mut brain, MAX_SIGNAL_HIDDEN, &mut rng);
+            mutate_hidden_size(&mut brain, &mut rng);
             assert!(brain.base_hidden_size >= MIN_BASE_HIDDEN);
             assert!(brain.base_hidden_size <= MAX_BASE_HIDDEN);
-            assert!(brain.signal_hidden_size >= MIN_SIGNAL_HIDDEN);
-            assert!(brain.signal_hidden_size <= MAX_SIGNAL_HIDDEN);
-        }
-    }
-
-    #[test]
-    fn mutate_hidden_size_respects_cap() {
-        use rand::SeedableRng;
-        use rand_chacha::ChaCha8Rng;
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
-
-        let cap = 8_usize;
-        let mut brain = Brain::zero();
-        brain.signal_hidden_size = cap;
-        for _ in 0..2000 {
-            mutate_hidden_size(&mut brain, cap, &mut rng);
-            assert!(brain.signal_hidden_size >= MIN_SIGNAL_HIDDEN);
-            assert!(brain.signal_hidden_size <= cap);
         }
     }
 
@@ -833,7 +825,6 @@ mod tests {
             TEST_REPRO_RADIUS,
             TEST_FALLBACK_RADIUS,
             1,
-            MAX_SIGNAL_HIDDEN,
             &mut rng,
         );
         assert_eq!(next.len(), 20);
@@ -875,7 +866,6 @@ mod tests {
             TEST_REPRO_RADIUS,
             TEST_FALLBACK_RADIUS,
             1,
-            MAX_SIGNAL_HIDDEN,
             &mut rng,
         );
 
@@ -895,7 +885,6 @@ mod tests {
             .map(|_| {
                 let mut brain = Brain::random(&mut rng);
                 brain.base_hidden_size = 10;
-                brain.signal_hidden_size = 5;
                 Agent {
                     brain,
                     x: rng.gen_range(0..TEST_GRID),
@@ -917,7 +906,6 @@ mod tests {
             TEST_REPRO_RADIUS,
             TEST_FALLBACK_RADIUS,
             1,
-            MAX_SIGNAL_HIDDEN,
             &mut rng,
         );
 
@@ -927,17 +915,11 @@ mod tests {
                 agent.brain.base_hidden_size, 10,
                 "Elites should preserve base_hidden_size"
             );
-            assert_eq!(
-                agent.brain.signal_hidden_size, 5,
-                "Elites should preserve signal_hidden_size"
-            );
         }
         // Non-elites: inherited from parents +/- mutation, within bounds
         for agent in &next {
             assert!(agent.brain.base_hidden_size >= MIN_BASE_HIDDEN);
             assert!(agent.brain.base_hidden_size <= MAX_BASE_HIDDEN);
-            assert!(agent.brain.signal_hidden_size >= MIN_SIGNAL_HIDDEN);
-            assert!(agent.brain.signal_hidden_size <= MAX_SIGNAL_HIDDEN);
         }
     }
 
@@ -1024,7 +1006,6 @@ mod tests {
             TEST_REPRO_RADIUS,
             TEST_FALLBACK_RADIUS,
             1,
-            MAX_SIGNAL_HIDDEN,
             &mut rng,
         );
 
@@ -1327,7 +1308,6 @@ mod tests {
             TEST_REPRO_RADIUS,
             TEST_FALLBACK_RADIUS,
             1,
-            MAX_SIGNAL_HIDDEN,
             &mut rng,
         );
         assert_eq!(next.len(), 20);
@@ -1358,7 +1338,6 @@ mod tests {
             TEST_REPRO_RADIUS,
             TEST_FALLBACK_RADIUS,
             2, // 2x2 = 4 demes
-            MAX_SIGNAL_HIDDEN,
             &mut rng,
         );
         assert_eq!(next.len(), 20);
@@ -1379,15 +1358,7 @@ mod tests {
             .map(|(x, y)| test_agent(&mut rng, x, y))
             .collect();
         let fitness: Vec<f32> = (0..n).map(|i| i as f32).collect();
-        group_selection(
-            &mut population,
-            &fitness,
-            grid,
-            3,
-            0.1,
-            MAX_SIGNAL_HIDDEN,
-            &mut rng,
-        );
+        group_selection(&mut population, &fitness, grid, 3, 0.1, &mut rng);
         assert_eq!(population.len(), n);
     }
 
