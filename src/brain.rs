@@ -6,27 +6,24 @@ pub const MAX_BASE_HIDDEN: usize = 64;
 pub const MIN_BASE_HIDDEN: usize = 4;
 pub const DEFAULT_BASE_HIDDEN: usize = 12;
 
-pub const MAX_SIGNAL_HIDDEN: usize = 32;
-pub const MIN_SIGNAL_HIDDEN: usize = 2;
-pub const DEFAULT_SIGNAL_HIDDEN: usize = 6;
-
 pub const MEMORY_SIZE: usize = 8;
 
 pub const MOVEMENT_OUTPUTS: usize = 5;
 pub const SIGNAL_OUTPUTS: usize = 6;
+pub const GATE_OUTPUTS: usize = 1;
 pub const MEMORY_OUTPUTS: usize = MEMORY_SIZE;
 
-/// Genome layout follows forward pass order:
-/// `[input->base, base_bias, base->move, move_bias, base->sighid, sighid_bias,
-///  sighid->sigout, sigout_bias, base->mem, mem_bias]`
+/// v14 shared-layer genome layout (forward pass order):
+/// `[input->base, base_bias, base->move, move_bias, base->signal, signal_bias,
+///  base->gate, gate_bias, base->mem, mem_bias]`
 pub const MAX_GENOME_LEN: usize = INPUTS * MAX_BASE_HIDDEN
     + MAX_BASE_HIDDEN
     + MAX_BASE_HIDDEN * MOVEMENT_OUTPUTS
     + MOVEMENT_OUTPUTS
-    + MAX_BASE_HIDDEN * MAX_SIGNAL_HIDDEN
-    + MAX_SIGNAL_HIDDEN
-    + MAX_SIGNAL_HIDDEN * SIGNAL_OUTPUTS
+    + MAX_BASE_HIDDEN * SIGNAL_OUTPUTS
     + SIGNAL_OUTPUTS
+    + MAX_BASE_HIDDEN * GATE_OUTPUTS
+    + GATE_OUTPUTS
     + MAX_BASE_HIDDEN * MEMORY_OUTPUTS
     + MEMORY_OUTPUTS;
 
@@ -38,37 +35,44 @@ fn fast_tanh(x: f32) -> f32 {
     (x * (27.0 + x2) / (27.0 + 9.0 * x2)).clamp(-1.0, 1.0)
 }
 
+/// Pade approximation of sigmoid: x/(2*(1+|x|)) + 0.5. Monotonic, bounded [0,1].
+/// ~3x faster than 1/(1+exp(-x)). Max error ~7.8% at |x|~3.
+#[allow(clippy::inline_always)]
+#[inline(always)]
+fn fast_sigmoid(x: f32) -> f32 {
+    x / (2.0 * (1.0 + x.abs())) + 0.5
+}
+
 // Segment offsets for genome indexing and mutation scoping
 pub const SEG_INPUT_BASE: usize = 0;
 pub const SEG_BASE_BIAS: usize = SEG_INPUT_BASE + INPUTS * MAX_BASE_HIDDEN;
 pub const SEG_BASE_MOVE: usize = SEG_BASE_BIAS + MAX_BASE_HIDDEN;
 pub const SEG_MOVE_BIAS: usize = SEG_BASE_MOVE + MAX_BASE_HIDDEN * MOVEMENT_OUTPUTS;
-pub const SEG_BASE_SIGHID: usize = SEG_MOVE_BIAS + MOVEMENT_OUTPUTS;
-pub const SEG_SIGHID_BIAS: usize = SEG_BASE_SIGHID + MAX_BASE_HIDDEN * MAX_SIGNAL_HIDDEN;
-pub const SEG_SIGHID_SIGOUT: usize = SEG_SIGHID_BIAS + MAX_SIGNAL_HIDDEN;
-pub const SEG_SIGOUT_BIAS: usize = SEG_SIGHID_SIGOUT + MAX_SIGNAL_HIDDEN * SIGNAL_OUTPUTS;
-pub const SEG_BASE_MEM: usize = SEG_SIGOUT_BIAS + SIGNAL_OUTPUTS;
+pub const SEG_BASE_SIGNAL: usize = SEG_MOVE_BIAS + MOVEMENT_OUTPUTS;
+pub const SEG_SIGNAL_BIAS: usize = SEG_BASE_SIGNAL + MAX_BASE_HIDDEN * SIGNAL_OUTPUTS;
+pub const SEG_BASE_GATE: usize = SEG_SIGNAL_BIAS + SIGNAL_OUTPUTS;
+pub const SEG_GATE_BIAS: usize = SEG_BASE_GATE + MAX_BASE_HIDDEN * GATE_OUTPUTS;
+pub const SEG_BASE_MEM: usize = SEG_GATE_BIAS + GATE_OUTPUTS;
 pub const SEG_MEM_BIAS: usize = SEG_BASE_MEM + MAX_BASE_HIDDEN * MEMORY_OUTPUTS;
 
-/// Genome segment boundaries as (start, end) pairs for segment-scoped crossover.
-/// Each segment is a functional unit that should be inherited as a whole.
-pub const SEGMENT_BOUNDARIES: [(usize, usize); 10] = [
-    (SEG_INPUT_BASE, SEG_BASE_BIAS),      // input -> base hidden
-    (SEG_BASE_BIAS, SEG_BASE_MOVE),       // base hidden biases
-    (SEG_BASE_MOVE, SEG_MOVE_BIAS),       // base -> movement
-    (SEG_MOVE_BIAS, SEG_BASE_SIGHID),     // movement biases
-    (SEG_BASE_SIGHID, SEG_SIGHID_BIAS),   // base -> signal hidden
-    (SEG_SIGHID_BIAS, SEG_SIGHID_SIGOUT), // signal hidden biases
-    (SEG_SIGHID_SIGOUT, SEG_SIGOUT_BIAS), // signal hidden -> signal out
-    (SEG_SIGOUT_BIAS, SEG_BASE_MEM),      // signal output biases
-    (SEG_BASE_MEM, SEG_MEM_BIAS),         // base -> memory
-    (SEG_MEM_BIAS, MAX_GENOME_LEN),       // memory biases
+/// Crossover groups for v14 shared-layer architecture.
+/// Group 0 = LINKED: input->base + `base_bias` (`base_hidden_size` co-inherits from same parent).
+/// Groups 1-4 = INDEPENDENT: each output projection + its biases.
+pub const CROSSOVER_GROUPS: [(usize, usize); 5] = [
+    (SEG_INPUT_BASE, SEG_BASE_MOVE),  // Linked: input->base + base_bias
+    (SEG_BASE_MOVE, SEG_BASE_SIGNAL), // Independent: base->move + move_bias
+    (SEG_BASE_SIGNAL, SEG_BASE_GATE), // Independent: base->signal + signal_bias
+    (SEG_BASE_GATE, SEG_BASE_MEM),    // Independent: base->gate + gate_bias
+    (SEG_BASE_MEM, MAX_GENOME_LEN),   // Independent: base->mem + mem_bias
 ];
+/// Index of the linked crossover group (`base_hidden_size` inherits from this parent)
+pub const LINKED_GROUP: usize = 0;
 
 #[derive(Copy, Clone, Debug)]
 pub struct ForwardResult {
     pub actions: [f32; MOVEMENT_OUTPUTS],
     pub signals: [f32; SIGNAL_OUTPUTS],
+    pub gate_value: f32,
     pub memory_write: [f32; MEMORY_OUTPUTS],
 }
 
@@ -100,7 +104,6 @@ pub struct Brain {
     #[serde(with = "weights_serde")]
     pub weights: [f32; MAX_GENOME_LEN],
     pub base_hidden_size: usize,
-    pub signal_hidden_size: usize,
 }
 
 impl Brain {
@@ -109,7 +112,6 @@ impl Brain {
         Self {
             weights,
             base_hidden_size: DEFAULT_BASE_HIDDEN,
-            signal_hidden_size: DEFAULT_SIGNAL_HIDDEN,
         }
     }
 
@@ -118,18 +120,15 @@ impl Brain {
         Self {
             weights: [0.0; MAX_GENOME_LEN],
             base_hidden_size: DEFAULT_BASE_HIDDEN,
-            signal_hidden_size: DEFAULT_SIGNAL_HIDDEN,
         }
     }
 
-    /// Split forward pass: inputs -> base hidden (tanh) -> {movement (raw), signal hidden (tanh) -> signal (raw), memory (tanh)}.
-    /// Loop order is flipped vs naive (outer=source, inner=dest) so weight access is
-    /// contiguous in memory, enabling LLVM auto-vectorization (AVX2 on x86).
+    /// Shared-layer forward pass: inputs -> base hidden (tanh) -> {movement (raw), signal (raw), gate (sigmoid), memory (tanh)}.
+    /// Loop order: outer=source, inner=dest for contiguous weight access (LLVM auto-vectorization).
     #[allow(clippy::needless_range_loop, dead_code)]
     pub fn forward(&self, inputs: &[f32; INPUTS]) -> ForwardResult {
         let w = &self.weights;
         let bh = self.base_hidden_size;
-        let sh = self.signal_hidden_size;
 
         // 1. Input -> Base hidden (tanh)
         let mut base_hidden = [0.0_f32; MAX_BASE_HIDDEN];
@@ -156,30 +155,23 @@ impl Brain {
             }
         }
 
-        // 3. Base hidden -> Signal hidden (tanh)
-        let mut sig_hidden = [0.0_f32; MAX_SIGNAL_HIDDEN];
-        sig_hidden[..sh].copy_from_slice(&w[SEG_SIGHID_BIAS..SEG_SIGHID_BIAS + sh]);
-        for b in 0..bh {
-            let hidden_val = base_hidden[b];
-            let w_start = SEG_BASE_SIGHID + b * MAX_SIGNAL_HIDDEN;
-            for h in 0..sh {
-                sig_hidden[h] += hidden_val * w[w_start + h];
-            }
-        }
-        for h in 0..sh {
-            sig_hidden[h] = fast_tanh(sig_hidden[h]);
-        }
-
-        // 4. Signal hidden -> Signal outputs (raw, softmax applied in signal.rs)
+        // 3. Base hidden -> Signal outputs (raw, symbol chosen by argmax)
         let mut signals = [0.0_f32; SIGNAL_OUTPUTS];
-        signals.copy_from_slice(&w[SEG_SIGOUT_BIAS..SEG_SIGOUT_BIAS + SIGNAL_OUTPUTS]);
-        for h in 0..sh {
-            let hidden_val = sig_hidden[h];
-            let w_start = SEG_SIGHID_SIGOUT + h * SIGNAL_OUTPUTS;
+        signals.copy_from_slice(&w[SEG_SIGNAL_BIAS..SEG_SIGNAL_BIAS + SIGNAL_OUTPUTS]);
+        for h in 0..bh {
+            let hidden_val = base_hidden[h];
+            let w_start = SEG_BASE_SIGNAL + h * SIGNAL_OUTPUTS;
             for o in 0..SIGNAL_OUTPUTS {
                 signals[o] += hidden_val * w[w_start + o];
             }
         }
+
+        // 4. Base hidden -> Gate (sigmoid, emit/suppress decision)
+        let mut gate_raw = w[SEG_GATE_BIAS];
+        for h in 0..bh {
+            gate_raw += base_hidden[h] * w[SEG_BASE_GATE + h];
+        }
+        let gate_value = fast_sigmoid(gate_raw);
 
         // 5. Base hidden -> Memory outputs (tanh to bound [-1, 1])
         let mut memory_write = [0.0_f32; MEMORY_OUTPUTS];
@@ -198,31 +190,31 @@ impl Brain {
         ForwardResult {
             actions,
             signals,
+            gate_value,
             memory_write,
         }
     }
 }
 
 /// Dense weight packing for forward pass. Only active weights (determined by
-/// `base_hidden_size` and `signal_hidden_size`) are stored contiguously.
+/// `base_hidden_size`) are stored contiguously.
 /// Built once per generation from Brain; Brain retains full genome for evolution.
 pub struct CompactBrain {
     /// All active weights packed contiguously.
     // Layout: base_bias(bh), input_base(INPUTS*bh), base_move(bh*5), move_bias(5),
-    //  base_sighid(bh*sh), sighid_bias(sh), sighid_sigout(sh*6), sigout_bias(6),
+    //  base_signal(bh*6), signal_bias(6), base_gate(bh*1), gate_bias(1),
     //  base_mem(bh*8), mem_bias(8)
     w: Vec<f32>,
     bh: usize,
-    sh: usize,
     // Offsets into w for each segment
     o_base_bias: usize,
     o_input_base: usize,
     o_base_move: usize,
     o_move_bias: usize,
-    o_base_sighid: usize,
-    o_sighid_bias: usize,
-    o_sighid_sigout: usize,
-    o_sigout_bias: usize,
+    o_base_signal: usize,
+    o_signal_bias: usize,
+    o_base_gate: usize,
+    o_gate_bias: usize,
     o_base_mem: usize,
     o_mem_bias: usize,
 }
@@ -230,15 +222,14 @@ pub struct CompactBrain {
 impl CompactBrain {
     pub fn from_brain(brain: &Brain) -> Self {
         let bh = brain.base_hidden_size;
-        let sh = brain.signal_hidden_size;
         let total = bh
             + INPUTS * bh
             + bh * MOVEMENT_OUTPUTS
             + MOVEMENT_OUTPUTS
-            + bh * sh
-            + sh
-            + sh * SIGNAL_OUTPUTS
+            + bh * SIGNAL_OUTPUTS
             + SIGNAL_OUTPUTS
+            + bh * GATE_OUTPUTS
+            + GATE_OUTPUTS
             + bh * MEMORY_OUTPUTS
             + MEMORY_OUTPUTS;
         let mut w = Vec::with_capacity(total);
@@ -253,7 +244,7 @@ impl CompactBrain {
             let src = SEG_INPUT_BASE + i * MAX_BASE_HIDDEN;
             w.extend_from_slice(&g[src..src + bh]);
         }
-        // base_move: pack rows of MOVEMENT_OUTPUTS from rows strided by MOVEMENT_OUTPUTS (already dense per row)
+        // base_move: pack rows of MOVEMENT_OUTPUTS
         let o_base_move = w.len();
         for h in 0..bh {
             let src = SEG_BASE_MOVE + h * MOVEMENT_OUTPUTS;
@@ -262,25 +253,24 @@ impl CompactBrain {
         // move_bias
         let o_move_bias = w.len();
         w.extend_from_slice(&g[SEG_MOVE_BIAS..SEG_MOVE_BIAS + MOVEMENT_OUTPUTS]);
-        // base_sighid: rows of sh from rows of MAX_SIGNAL_HIDDEN
-        let o_base_sighid = w.len();
-        for b in 0..bh {
-            let src = SEG_BASE_SIGHID + b * MAX_SIGNAL_HIDDEN;
-            w.extend_from_slice(&g[src..src + sh]);
-        }
-        // sighid_bias
-        let o_sighid_bias = w.len();
-        w.extend_from_slice(&g[SEG_SIGHID_BIAS..SEG_SIGHID_BIAS + sh]);
-        // sighid_sigout: rows of SIGNAL_OUTPUTS from rows strided by SIGNAL_OUTPUTS (dense)
-        let o_sighid_sigout = w.len();
-        for h in 0..sh {
-            let src = SEG_SIGHID_SIGOUT + h * SIGNAL_OUTPUTS;
+        // base_signal: pack rows of SIGNAL_OUTPUTS from rows strided by SIGNAL_OUTPUTS
+        let o_base_signal = w.len();
+        for h in 0..bh {
+            let src = SEG_BASE_SIGNAL + h * SIGNAL_OUTPUTS;
             w.extend_from_slice(&g[src..src + SIGNAL_OUTPUTS]);
         }
-        // sigout_bias
-        let o_sigout_bias = w.len();
-        w.extend_from_slice(&g[SEG_SIGOUT_BIAS..SEG_SIGOUT_BIAS + SIGNAL_OUTPUTS]);
-        // base_mem: rows of MEMORY_OUTPUTS from rows strided by MEMORY_OUTPUTS (dense)
+        // signal_bias
+        let o_signal_bias = w.len();
+        w.extend_from_slice(&g[SEG_SIGNAL_BIAS..SEG_SIGNAL_BIAS + SIGNAL_OUTPUTS]);
+        // base_gate: bh weights (one column)
+        let o_base_gate = w.len();
+        for h in 0..bh {
+            w.push(g[SEG_BASE_GATE + h]);
+        }
+        // gate_bias
+        let o_gate_bias = w.len();
+        w.push(g[SEG_GATE_BIAS]);
+        // base_mem: pack rows of MEMORY_OUTPUTS
         let o_base_mem = w.len();
         for h in 0..bh {
             let src = SEG_BASE_MEM + h * MEMORY_OUTPUTS;
@@ -294,15 +284,14 @@ impl CompactBrain {
         Self {
             w,
             bh,
-            sh,
             o_base_bias,
             o_input_base,
             o_base_move,
             o_move_bias,
-            o_base_sighid,
-            o_sighid_bias,
-            o_sighid_sigout,
-            o_sigout_bias,
+            o_base_signal,
+            o_signal_bias,
+            o_base_gate,
+            o_gate_bias,
             o_base_mem,
             o_mem_bias,
         }
@@ -312,7 +301,6 @@ impl CompactBrain {
     pub fn forward(&self, inputs: &[f32; INPUTS]) -> ForwardResult {
         let w = &self.w;
         let bh = self.bh;
-        let sh = self.sh;
 
         // 1. Input -> Base hidden (tanh)
         let mut base_hidden = [0.0_f32; MAX_BASE_HIDDEN];
@@ -339,30 +327,23 @@ impl CompactBrain {
             }
         }
 
-        // 3. Base hidden -> Signal hidden (tanh)
-        let mut sig_hidden = [0.0_f32; MAX_SIGNAL_HIDDEN];
-        sig_hidden[..sh].copy_from_slice(&w[self.o_sighid_bias..self.o_sighid_bias + sh]);
-        for b in 0..bh {
-            let hidden_val = base_hidden[b];
-            let row = self.o_base_sighid + b * sh;
-            for h in 0..sh {
-                sig_hidden[h] += hidden_val * w[row + h];
-            }
-        }
-        for h in 0..sh {
-            sig_hidden[h] = fast_tanh(sig_hidden[h]);
-        }
-
-        // 4. Signal hidden -> Signal outputs (raw)
+        // 3. Base hidden -> Signal outputs (raw)
         let mut signals = [0.0_f32; SIGNAL_OUTPUTS];
-        signals.copy_from_slice(&w[self.o_sigout_bias..self.o_sigout_bias + SIGNAL_OUTPUTS]);
-        for h in 0..sh {
-            let hidden_val = sig_hidden[h];
-            let row = self.o_sighid_sigout + h * SIGNAL_OUTPUTS;
+        signals.copy_from_slice(&w[self.o_signal_bias..self.o_signal_bias + SIGNAL_OUTPUTS]);
+        for h in 0..bh {
+            let hidden_val = base_hidden[h];
+            let row = self.o_base_signal + h * SIGNAL_OUTPUTS;
             for o in 0..SIGNAL_OUTPUTS {
                 signals[o] += hidden_val * w[row + o];
             }
         }
+
+        // 4. Base hidden -> Gate (sigmoid)
+        let mut gate_raw = w[self.o_gate_bias];
+        for h in 0..bh {
+            gate_raw += base_hidden[h] * w[self.o_base_gate + h];
+        }
+        let gate_value = fast_sigmoid(gate_raw);
 
         // 5. Base hidden -> Memory outputs (tanh)
         let mut memory_write = [0.0_f32; MEMORY_OUTPUTS];
@@ -381,11 +362,13 @@ impl CompactBrain {
         ForwardResult {
             actions,
             signals,
+            gate_value,
             memory_write,
         }
     }
 }
 
+#[allow(dead_code)] // Kept for analysis/metrics use (Decision #7)
 pub fn softmax(logits: &[f32; SIGNAL_OUTPUTS]) -> [f32; SIGNAL_OUTPUTS] {
     let max = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
     let mut result = [0.0_f32; SIGNAL_OUTPUTS];
@@ -406,14 +389,28 @@ mod tests {
 
     #[test]
     fn genome_length() {
-        // 39*64 + 64 + 64*5 + 5 + 64*32 + 32 + 32*6 + 6 + 64*8 + 8
-        // = 2496 + 64 + 320 + 5 + 2048 + 32 + 192 + 6 + 512 + 8 = 5683
-        assert_eq!(MAX_GENOME_LEN, 5683);
+        // 39*64 + 64 + 64*5 + 5 + 64*6 + 6 + 64*1 + 1 + 64*8 + 8
+        // = 2496 + 64 + 320 + 5 + 384 + 6 + 64 + 1 + 512 + 8 = 3860
+        assert_eq!(MAX_GENOME_LEN, 3860);
     }
 
     #[test]
     fn segment_offsets_contiguous() {
         assert_eq!(SEG_MEM_BIAS + MEMORY_OUTPUTS, MAX_GENOME_LEN);
+    }
+
+    #[test]
+    fn crossover_groups_cover_genome() {
+        assert_eq!(CROSSOVER_GROUPS[0].0, 0);
+        assert_eq!(CROSSOVER_GROUPS[4].1, MAX_GENOME_LEN);
+        for i in 0..4 {
+            assert_eq!(
+                CROSSOVER_GROUPS[i].1,
+                CROSSOVER_GROUPS[i + 1].0,
+                "gap between groups {i} and {}",
+                i + 1
+            );
+        }
     }
 
     #[test]
@@ -426,6 +423,8 @@ mod tests {
         for v in &result.signals {
             assert!(v.abs() < 1e-6);
         }
+        // Gate with zero weights and zero bias: fast_sigmoid(0) = 0.5
+        assert!((result.gate_value - 0.5).abs() < 1e-6);
         for v in &result.memory_write {
             assert!(v.abs() < 1e-6);
         }
@@ -444,6 +443,7 @@ mod tests {
         for (x, y) in a.signals.iter().zip(&b.signals) {
             assert!((x - y).abs() < 1e-10);
         }
+        assert!((a.gate_value - b.gate_value).abs() < 1e-10);
         for (x, y) in a.memory_write.iter().zip(&b.memory_write) {
             assert!((x - y).abs() < 1e-10);
         }
@@ -454,7 +454,6 @@ mod tests {
         let mut brain = Brain {
             weights: [0.1; MAX_GENOME_LEN],
             base_hidden_size: MAX_BASE_HIDDEN,
-            signal_hidden_size: DEFAULT_SIGNAL_HIDDEN,
         };
         let inputs = [1.0; INPUTS];
         let out_full = brain.forward(&inputs);
@@ -474,35 +473,10 @@ mod tests {
     }
 
     #[test]
-    fn forward_respects_signal_hidden_size() {
-        let mut brain = Brain {
-            weights: [0.1; MAX_GENOME_LEN],
-            base_hidden_size: DEFAULT_BASE_HIDDEN,
-            signal_hidden_size: MAX_SIGNAL_HIDDEN,
-        };
-        let inputs = [1.0; INPUTS];
-        let out_full = brain.forward(&inputs);
-
-        brain.signal_hidden_size = MIN_SIGNAL_HIDDEN;
-        let out_small = brain.forward(&inputs);
-
-        let differs = out_full
-            .signals
-            .iter()
-            .zip(&out_small.signals)
-            .any(|(a, b)| (a - b).abs() > 1e-6);
-        assert!(
-            differs,
-            "Different signal_hidden_size should produce different signal outputs"
-        );
-    }
-
-    #[test]
     fn forward_with_min_hidden() {
         let brain = Brain {
             weights: [0.0; MAX_GENOME_LEN],
             base_hidden_size: MIN_BASE_HIDDEN,
-            signal_hidden_size: MIN_SIGNAL_HIDDEN,
         };
         let result = brain.forward(&[1.0; INPUTS]);
         for v in &result.actions {
@@ -511,6 +485,7 @@ mod tests {
         for v in &result.signals {
             assert!(v.abs() < 1e-6);
         }
+        assert!((result.gate_value - 0.5).abs() < 1e-6);
         for v in &result.memory_write {
             assert!(v.abs() < 1e-6);
         }
@@ -524,6 +499,21 @@ mod tests {
         let result = brain.forward(&inputs);
         for v in &result.memory_write {
             assert!((-1.0..=1.0).contains(v), "Memory output {v} not in [-1, 1]");
+        }
+    }
+
+    #[test]
+    fn gate_output_bounded() {
+        let mut rng = rand::thread_rng();
+        for _ in 0..100 {
+            let brain = Brain::random(&mut rng);
+            let inputs: [f32; INPUTS] = std::array::from_fn(|_| rng.gen_range(-1.0..1.0));
+            let result = brain.forward(&inputs);
+            assert!(
+                (0.0..=1.0).contains(&result.gate_value),
+                "Gate value {} not in [0, 1]",
+                result.gate_value
+            );
         }
     }
 
@@ -560,13 +550,11 @@ mod tests {
     fn zero_constructor_defaults() {
         let brain = Brain::zero();
         assert_eq!(brain.base_hidden_size, DEFAULT_BASE_HIDDEN);
-        assert_eq!(brain.signal_hidden_size, DEFAULT_SIGNAL_HIDDEN);
         assert!(brain.weights.iter().all(|&w| w == 0.0));
     }
 
     #[test]
     fn fast_tanh_accuracy() {
-        // Within [-3, 3] (where most NN activations fall), error is <3%
         for i in -30..=30 {
             let x = i as f32 / 10.0;
             let approx = fast_tanh(x);
@@ -577,7 +565,6 @@ mod tests {
                 "fast_tanh({x}) = {approx}, std = {exact}, err = {err}"
             );
         }
-        // At extremes, clamped to [-1, 1]
         assert!((fast_tanh(10.0) - 1.0).abs() < 1e-6);
         assert!((fast_tanh(-10.0) + 1.0).abs() < 1e-6);
     }
@@ -595,12 +582,42 @@ mod tests {
     }
 
     #[test]
+    fn fast_sigmoid_accuracy() {
+        // Within [-3, 3], error is <8%
+        for i in -30..=30 {
+            let x = i as f32 / 10.0;
+            let approx = fast_sigmoid(x);
+            let exact = 1.0 / (1.0 + (-x).exp());
+            let err = (approx - exact).abs();
+            assert!(
+                err < 0.08,
+                "fast_sigmoid({x}) = {approx}, std = {exact}, err = {err}"
+            );
+        }
+        // Midpoint
+        assert!((fast_sigmoid(0.0) - 0.5).abs() < 1e-10);
+        // Bounded
+        assert!(fast_sigmoid(100.0) > 0.99);
+        assert!(fast_sigmoid(-100.0) < 0.01);
+    }
+
+    #[test]
+    fn fast_sigmoid_monotonic() {
+        let mut prev = fast_sigmoid(-10.0);
+        for i in -99..=100 {
+            let x = i as f32 / 10.0;
+            let y = fast_sigmoid(x);
+            assert!(y >= prev, "fast_sigmoid not monotonic at {x}");
+            prev = y;
+        }
+    }
+
+    #[test]
     fn compact_brain_matches_brain() {
         let mut rng = rand::thread_rng();
         for _ in 0..100 {
             let mut brain = Brain::random(&mut rng);
             brain.base_hidden_size = rng.gen_range(MIN_BASE_HIDDEN..=MAX_BASE_HIDDEN);
-            brain.signal_hidden_size = rng.gen_range(MIN_SIGNAL_HIDDEN..=MAX_SIGNAL_HIDDEN);
             let inputs: [f32; INPUTS] = std::array::from_fn(|_| rng.gen_range(-1.0..1.0));
             let expected = brain.forward(&inputs);
             let compact = CompactBrain::from_brain(&brain);
@@ -608,14 +625,19 @@ mod tests {
             for (i, (&e, &a)) in expected.actions.iter().zip(&actual.actions).enumerate() {
                 assert!(
                     (e - a).abs() < 1e-5,
-                    "action[{i}] mismatch: {e} vs {a} (bh={}, sh={})",
-                    brain.base_hidden_size,
-                    brain.signal_hidden_size
+                    "action[{i}] mismatch: {e} vs {a} (bh={})",
+                    brain.base_hidden_size
                 );
             }
             for (i, (&e, &a)) in expected.signals.iter().zip(&actual.signals).enumerate() {
                 assert!((e - a).abs() < 1e-5, "signal[{i}] mismatch: {e} vs {a}");
             }
+            assert!(
+                (expected.gate_value - actual.gate_value).abs() < 1e-5,
+                "gate mismatch: {} vs {}",
+                expected.gate_value,
+                actual.gate_value
+            );
             for (i, (&e, &a)) in expected
                 .memory_write
                 .iter()

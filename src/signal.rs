@@ -1,4 +1,4 @@
-use crate::brain::{softmax, SIGNAL_OUTPUTS};
+use crate::brain::SIGNAL_OUTPUTS;
 use crate::world::wrap_coord;
 #[cfg(test)]
 use crate::world::wrap_delta;
@@ -310,19 +310,22 @@ pub fn receive_detailed(
     result
 }
 
-/// Decide whether to emit a signal based on softmax of NN signal outputs.
-/// Returns `Some(symbol)` if max softmax probability > `1/NUM_SYMBOLS`, None otherwise.
-pub fn maybe_emit(signal_outputs: &[f32; SIGNAL_OUTPUTS], threshold: f32) -> Option<u8> {
-    let probs = softmax(signal_outputs);
-    let (max_idx, &max_prob) = probs
+/// Decide whether to emit a signal based on sigmoid gate value.
+/// If `gate_value > gate_threshold`, emit the symbol with highest raw signal output (argmax).
+/// Returns `None` if gate suppresses emission (silence is default).
+pub fn maybe_emit(
+    signal_outputs: &[f32; SIGNAL_OUTPUTS],
+    gate_value: f32,
+    gate_threshold: f32,
+) -> Option<u8> {
+    if gate_value <= gate_threshold {
+        return None;
+    }
+    let (max_idx, _) = signal_outputs
         .iter()
         .enumerate()
         .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))?;
-    if max_prob > threshold {
-        Some(max_idx as u8)
-    } else {
-        None
-    }
+    Some(max_idx as u8)
 }
 
 #[cfg(test)]
@@ -387,32 +390,34 @@ mod tests {
     }
 
     #[test]
-    fn emit_uniform_returns_none() {
-        // Equal logits -> softmax = 1/6 each -> max == threshold -> no emission
+    fn emit_gate_below_threshold_returns_none() {
         let outputs = [0.0_f32; SIGNAL_OUTPUTS];
-        assert!(maybe_emit(&outputs, 1.0 / NUM_SYMBOLS as f32).is_none());
+        // Gate value 0.3 below threshold 0.5 -> suppress
+        assert!(maybe_emit(&outputs, 0.3, 0.5).is_none());
     }
 
     #[test]
-    fn emit_concentrated_returns_symbol() {
+    fn emit_gate_above_threshold_returns_argmax() {
         let mut outputs = [0.0_f32; SIGNAL_OUTPUTS];
         outputs[3] = 5.0; // symbol 3 dominant
-        assert_eq!(maybe_emit(&outputs, 1.0 / NUM_SYMBOLS as f32), Some(3));
+                          // Gate value 0.8 above threshold 0.5 -> emit argmax
+        assert_eq!(maybe_emit(&outputs, 0.8, 0.5), Some(3));
     }
 
     #[test]
-    fn emit_slight_difference_returns_some() {
+    fn emit_gate_at_threshold_returns_none() {
+        let mut outputs = [0.0_f32; SIGNAL_OUTPUTS];
+        outputs[1] = 1.0;
+        // Gate value exactly at threshold -> suppress (<=)
+        assert!(maybe_emit(&outputs, 0.5, 0.5).is_none());
+    }
+
+    #[test]
+    fn emit_gate_just_above_threshold_returns_some() {
         let mut outputs = [0.0_f32; SIGNAL_OUTPUTS];
         outputs[1] = 0.01; // barely above others
-        assert_eq!(maybe_emit(&outputs, 1.0 / NUM_SYMBOLS as f32), Some(1));
-    }
-
-    #[test]
-    fn high_threshold_suppresses_emission() {
-        let mut outputs = [0.0_f32; SIGNAL_OUTPUTS];
-        outputs[1] = 0.01; // barely above others, would emit at default 1/6
-                           // At threshold 0.5, softmax(0.01 vs 5 zeros) ~ 0.169, below 0.5
-        assert!(maybe_emit(&outputs, 0.5).is_none());
+                           // Gate value just above threshold -> emit
+        assert_eq!(maybe_emit(&outputs, 0.501, 0.5), Some(1));
     }
 
     #[test]

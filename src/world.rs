@@ -426,7 +426,7 @@ pub struct World {
     pub patch_ratio: f32,
     pub zone_drain_rate: f32,
     pub signal_ticks: u32,
-    pub signal_threshold: f32,
+    pub gate_threshold: f32,
     pub no_death_echoes: bool,
     pub no_freeze_pressure: bool,
     pub blind: bool,
@@ -453,7 +453,7 @@ impl World {
         zone_drain_rate: f32,
         signal_ticks: u32,
         num_freeze_zones: usize,
-        signal_threshold: f32,
+        gate_threshold: f32,
         no_death_echoes: bool,
         no_freeze_pressure: bool,
         blind: bool,
@@ -557,7 +557,7 @@ impl World {
             patch_ratio,
             zone_drain_rate,
             signal_ticks,
-            signal_threshold,
+            gate_threshold,
             no_death_echoes,
             no_freeze_pressure,
             blind,
@@ -661,8 +661,7 @@ impl World {
             if !self.prey[i].alive {
                 continue;
             }
-            let total_hidden = self.brains[i].base_hidden_size + self.brains[i].signal_hidden_size;
-            let drain = self.base_drain + total_hidden as f32 * self.neuron_cost;
+            let drain = self.base_drain + self.brains[i].base_hidden_size as f32 * self.neuron_cost;
             self.prey[i].energy -= drain;
             if self.prey[i].energy <= 0.0 {
                 self.prey[i].alive = false;
@@ -699,8 +698,9 @@ impl World {
                         action = j + 1;
                     }
                 }
-                // Emit decision: pure softmax + threshold (moved from sequential phase)
-                let emit = signal::maybe_emit(&result.signals, self.signal_threshold);
+                // Emit decision: sigmoid gate + threshold (moved from sequential phase)
+                let emit =
+                    signal::maybe_emit(&result.signals, result.gate_value, self.gate_threshold);
                 (i, inputs, result, zone_dist, action, emit)
             })
             .collect_into_vec(&mut computed);
@@ -1215,7 +1215,7 @@ mod tests {
             patch_ratio: TEST_PATCH_RATIO,
             zone_drain_rate: TEST_ZONE_DRAIN_RATE,
             signal_ticks: 4,
-            signal_threshold: 1.0 / 6.0,
+            gate_threshold: 1.0 / 6.0,
             no_death_echoes: false,
             no_freeze_pressure: false,
             blind: false,
@@ -1597,7 +1597,6 @@ mod tests {
                 brain: Brain {
                     weights: [0.1; MAX_GENOME_LEN],
                     base_hidden_size: DEFAULT_BASE_HIDDEN,
-                    signal_hidden_size: crate::brain::DEFAULT_SIGNAL_HIDDEN,
                 },
                 x: 3,
                 y: 7,
@@ -1608,7 +1607,6 @@ mod tests {
                 brain: Brain {
                     weights: [0.2; MAX_GENOME_LEN],
                     base_hidden_size: DEFAULT_BASE_HIDDEN,
-                    signal_hidden_size: crate::brain::DEFAULT_SIGNAL_HIDDEN,
                 },
                 x: 15,
                 y: 2,
@@ -1667,8 +1665,7 @@ mod tests {
         world.step(&mut rng);
         let after = world.prey[0].energy;
 
-        let total_hidden = DEFAULT_BASE_HIDDEN + crate::brain::DEFAULT_SIGNAL_HIDDEN;
-        let expected_drain = TEST_BASE_DRAIN + total_hidden as f32 * TEST_NEURON_COST;
+        let expected_drain = TEST_BASE_DRAIN + DEFAULT_BASE_HIDDEN as f32 * TEST_NEURON_COST;
         assert!((before - after - expected_drain).abs() < 1e-6);
     }
 
@@ -1686,6 +1683,7 @@ mod tests {
         let _result = ForwardResult {
             actions: [0.0, 0.0, 0.0, 0.0, 1.0],
             signals: [0.0; crate::brain::SIGNAL_OUTPUTS],
+            gate_value: 0.0,
             memory_write: [0.0; MEMORY_SIZE],
         };
         let inputs = [0.0_f32; INPUTS];
@@ -1708,6 +1706,7 @@ mod tests {
         let _result = ForwardResult {
             actions: [0.0, 0.0, 0.0, 0.0, 1.0],
             signals: [0.0; crate::brain::SIGNAL_OUTPUTS],
+            gate_value: 0.0,
             memory_write: [0.0; MEMORY_SIZE],
         };
         let inputs = [0.0_f32; INPUTS];
@@ -1720,8 +1719,7 @@ mod tests {
     fn energy_death_at_zero() {
         let mut world = minimal_world(&[(0, 0)], (10.0, 10.0));
         world.zones[0].radius = 1.0; // small zone far from prey
-        let total_hidden = DEFAULT_BASE_HIDDEN + crate::brain::DEFAULT_SIGNAL_HIDDEN;
-        let drain = TEST_BASE_DRAIN + total_hidden as f32 * TEST_NEURON_COST;
+        let drain = TEST_BASE_DRAIN + DEFAULT_BASE_HIDDEN as f32 * TEST_NEURON_COST;
         world.prey[0].energy = drain * 0.5;
         world.food.push(Food {
             x: 10,
@@ -1914,9 +1912,7 @@ mod tests {
             is_patch: false,
         });
         world.brains[0].base_hidden_size = DEFAULT_BASE_HIDDEN;
-        world.brains[0].signal_hidden_size = crate::brain::DEFAULT_SIGNAL_HIDDEN;
         world.brains[1].base_hidden_size = crate::brain::MAX_BASE_HIDDEN;
-        world.brains[1].signal_hidden_size = crate::brain::MAX_SIGNAL_HIDDEN;
 
         let mut rng = ChaCha8Rng::seed_from_u64(0);
         world.step(&mut rng);
@@ -1940,9 +1936,7 @@ mod tests {
             is_patch: false,
         });
         world.brains[0].base_hidden_size = DEFAULT_BASE_HIDDEN;
-        world.brains[0].signal_hidden_size = crate::brain::DEFAULT_SIGNAL_HIDDEN;
         world.brains[1].base_hidden_size = crate::brain::MIN_BASE_HIDDEN;
-        world.brains[1].signal_hidden_size = crate::brain::MIN_SIGNAL_HIDDEN;
 
         let mut rng = ChaCha8Rng::seed_from_u64(0);
         world.step(&mut rng);
@@ -1958,12 +1952,11 @@ mod tests {
 
     #[test]
     fn default_hidden_drain_with_cheap_neurons() {
-        let total_hidden = DEFAULT_BASE_HIDDEN + crate::brain::DEFAULT_SIGNAL_HIDDEN;
-        let drain = TEST_BASE_DRAIN + total_hidden as f32 * TEST_NEURON_COST;
-        // base_hidden=12, signal_hidden=6 -> total=18 -> 0.0008 + 18*0.00002 = 0.00116
+        let drain = TEST_BASE_DRAIN + DEFAULT_BASE_HIDDEN as f32 * TEST_NEURON_COST;
+        // base_hidden=12 -> 0.0008 + 12*0.00002 = 0.00104
         assert!(
-            (drain - 0.00116).abs() < 1e-6,
-            "Default drain should be 0.00116 with cheap neurons, got {drain}"
+            (drain - 0.00104).abs() < 1e-6,
+            "Default drain should be 0.00104 with cheap neurons, got {drain}"
         );
     }
 
@@ -1983,6 +1976,7 @@ mod tests {
         let _result = ForwardResult {
             actions: [0.0, 0.0, 0.0, 0.0, 1.0],
             signals: [0.0; crate::brain::SIGNAL_OUTPUTS],
+            gate_value: 0.0,
             memory_write: [0.0; MEMORY_SIZE],
         };
         let inputs = [0.0_f32; INPUTS];
@@ -2011,6 +2005,7 @@ mod tests {
         let _result = ForwardResult {
             actions: [0.0, 0.0, 0.0, 0.0, 1.0],
             signals: [0.0; crate::brain::SIGNAL_OUTPUTS],
+            gate_value: 0.0,
             memory_write: [0.0; MEMORY_SIZE],
         };
         let inputs = [0.0_f32; INPUTS];
@@ -2038,6 +2033,7 @@ mod tests {
         let _result = ForwardResult {
             actions: [0.0, 0.0, 0.0, 0.0, 1.0],
             signals: [0.0; crate::brain::SIGNAL_OUTPUTS],
+            gate_value: 0.0,
             memory_write: [0.0; MEMORY_SIZE],
         };
         let inputs = [0.0_f32; INPUTS];
