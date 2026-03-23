@@ -17,6 +17,7 @@ Chronological lab notebook for semiotic-emergence. Each era documents what we te
 - [Era 9: Response Quality](#era-9-response-quality) - Volume knob hypothesis, response_fit_corr first data
 - [Era 10: Population Scale](#era-10-population-scale-pop2000-100k-gens) - 2000 pop bracket test
 - [Era 12: Blind Mode](#era-12-blind-mode-100k-gens) - Spatial perception stripped
+- [Era 13: Population Scale Redux](#era-13-population-scale-redux-pop2000-fixed-metrics) - Pop=2000 with fixed response_fit_corr
 - [Parameter History](#parameter-history)
 
 ---
@@ -51,6 +52,7 @@ Every significant run, its parameters, and headline result.
 | v11-cap6-42 | 11 | 42 | 67,540 | pop=384, max-signal-hidden=6, metrics-interval=10 | response_fit_corr negative (-0.13 to -0.28) |
 | v11-cap32-42 | 11 | 42 | 74,810 | pop=384, max-signal-hidden=32 (control), metrics-interval=10 | response_fit_corr near zero, occasionally +0.16 |
 | v12-blind6-42 | 12 | 42 | 100,000 | pop=384, --blind, max-signal-hidden=6 | Blind mode failed: MI~0, 2 symbols extinct, fitness halved vs sighted |
+| v13-2k-42 | 13 | 42 | 100,000 | pop=2000, grid=100, zone-radius=14, food=520, metrics-interval=10 | **receiver_fit_corr=0.74**, food_mi=0.14, symbol collapse to 4, response_fit_corr=-0.29 |
 
 Raw data: `data/` contains CSV output for each run listed above. See `data/README.md` for column formats.
 
@@ -745,29 +747,131 @@ The missing response_fit_corr data means we can't determine whether symbol diffe
 
 ---
 
+## Era 13: Population Scale Redux (pop=2000, fixed metrics)
+
+*Question: Is response_fit_corr positive at 2000 population? v10 showed signal infrastructure selection but the metric was broken. This is the direct test.*
+
+**Parameters:** pop=2000, grid=100, zone-radius=14, food=520, metrics-interval=10, seed 42. v13 architecture (post-response_fit_corr fix). Same ecological parameters as v10 but with fixed metrics and 10x finer measurement resolution (metrics-interval=10 vs 200).
+
+**Run:** v13-2k-42, 100,000 generations (~55 hours on VPS, 12 vCPU at 25.3 gen/min).
+
+### Findings
+
+**1. receiver_fit_corr = 0.74 - strongest in project history.** Sustained at 0.72 (last 10%), peak 0.87. Prey that receive more signals have substantially higher fitness. This exceeds the GPU run's +0.51. However, the same spatial confound applies: center prey hear more signals AND encounter more food patches AND have more escape routes.
+
+**2. response_fit_corr is negative (-0.29).** Sustained at -0.16 (last 10%), trending more negative toward the end. Prey that differentiate their behavior across received symbols do worse - the same pattern as v11 at 384 pop, but weaker. The receiver paradox: being near signals helps, but responding to their content hurts.
+
+**3. food_mi climbed steadily to 0.14.** Started near 0, reached 0.11 by gen 50k, 0.14 by completion. The strongest sustained food encoding at 2000 pop, comparable to v6's 0.137 (which was peak input MI on food_dx at 384 pop). Signals carry real food-location information.
+
+**4. MI peaked at 0.012 then collapsed.** Two MI peaks: gen 44-52k (high-MI epoch, 0.005-0.008) and gen 67-78k (peak 0.012). By gen 90k+, MI collapsed back to 0.0001. Zone-distance encoding is transient even as food encoding strengthens - the two information channels are decoupled.
+
+**5. Symbol collapse: 6 -> 4 active symbols.** Symbol usage evolved dramatically:
+
+| Gen | s0 | s1 | s2 | s3 | s4 | s5 | HHI |
+|-----|----|----|----|----|----|----|-----|
+| 0 | 17.9% | 16.8% | 15.7% | 16.4% | 16.0% | 17.2% | 0.167 |
+| 25k | 7.2% | 11.0% | 14.0% | 20.5% | 22.4% | 24.9% | 0.191 |
+| 50k | 18.0% | 2.2% | 31.3% | 20.1% | 15.3% | 13.0% | 0.212 |
+| 75k | 31.1% | 15.5% | 27.1% | 9.6% | 16.6% | 0.1% | 0.231 |
+| 100k | 33.7% | 27.4% | 28.5% | 0.0% | 10.0% | 0.3% | 0.280 |
+
+sym3 and sym5 went effectively extinct. sym0, sym1, sym2 dominate (~90% combined). This is NOT the monopoly pattern seen at 384 pop (one symbol dominates) - it's a reduction from 6 to 4 active symbols with a relatively even distribution among the survivors.
+
+**6. Signal hidden layer dynamics: collapse then explosion.** avg_signal_hidden trajectory:
+
+| Gen | sig_hidden | base_hidden | MI | Entropy |
+|-----|-----------|-------------|------|---------|
+| 0 | 6.0 | 12.0 | 0.001 | 1.79 |
+| 10k | 11.6 | 7.3 | 0.004 | 0.89 |
+| 30k | 4.0 | 8.4 | 0.000 | 1.63 |
+| 50k | 5.2 | 8.7 | 0.004 | 1.63 |
+| 70k | 5.4 | 8.7 | 0.006 | 1.58 |
+| 80k | 9.0 | 8.8 | 0.001 | 1.66 |
+| 100k | 6.7 | 9.3 | 0.000 | 1.33 |
+
+Unlike v10 where signal hidden grew monotonically to 27/32, v13 shows non-monotonic dynamics. Early expansion (gen 10k: 11.6), collapse (gen 30k: 4.0), then a second expansion phase (gen 80k: 9.0, max individual reaching 19). The population is exploring signal capacity rather than converging on maximum.
+
+**7. Input encoding hierarchy confirms signal utility.** Top sustained encodings (last 10%):
+
+| Input | MI | Category |
+|-------|------|----------|
+| food_dist | 0.128 | Direct perception |
+| sig0_str | 0.099 | Signal |
+| food_dy | 0.096 | Direct perception |
+| sig1_str | 0.093 | Signal |
+| food_dx | 0.083 | Direct perception |
+| sig4_str | 0.078 | Signal |
+| sig4_dy | 0.037 | Signal direction |
+| sig4_dx | 0.031 | Signal direction |
+
+Signal strengths (sig0, sig1, sig4) are interleaved with food perception inputs - they're competitive, not marginal. The extinct symbols (sig2: 0.002, sig3: 0.002) have near-zero encoding. Evolution aligned symbol usage with encoding capacity: used symbols carry information, unused ones don't.
+
+**8. Encoding stability increased over time.** Spearman rank correlation of input MI rankings: early-vs-mid 0.31, mid-vs-late 0.77, early-vs-late 0.25. The encoding hierarchy stabilized in the second half of the run - the same inputs consistently matter.
+
+**9. Lag correlations suggest causal ordering.** Signal brain leads MI by ~180 gens (r=-0.13). MI leads base brain by ~180 gens (r=0.20). Interpretation: signal processing capacity expands first, MI rises as signals become more informative, then base brain adapts to exploit the new information channel.
+
+**10. Evolutionary epochs show structured phases.** CUSUM change-point detection identified 5 major epochs:
+
+| Epoch | Gens | Duration | Character |
+|-------|------|----------|-----------|
+| Boot | 0-5.7k | 5,700 | Low fitness, initial exploration |
+| Early specialization | 5.7-21k | 15,300 | Entropy collapse then recovery, small base brain |
+| Signal exploration | 21-52k | 31,000 | High MI periods, high response differentiation |
+| Signal maturation | 52-86k | 34,000 | Alternating high-MI and signal brain expansion |
+| Late consolidation | 86-100k | 14,000 | Large base brain, entropy declining, symbols collapsing |
+
+### Comparison with v10 (same population, old metrics)
+
+| Metric | v10-2k-42 | v13-2k-42 | Note |
+|--------|----------|----------|------|
+| Signal hidden (final) | 26.8 [21-32] | 6.7 [2-19] | v13 explores rather than maximizing |
+| MI (sustained) | 0.008 | 0.0005 | v13 MI more transient |
+| Food MI (sustained) | 0.089 | 0.128 | v13 stronger food encoding |
+| Symbol diversity | 6 active | 4 active | v13 more concentrated |
+| Entropy (final) | ~1.5 | 1.33 | v13 lower |
+| response_fit_corr | unmeasurable | -0.29 | Now measured - negative |
+| receiver_fit_corr | unmeasurable | 0.74 | Now measured - strongly positive |
+
+The two runs differ more than expected given identical ecological parameters. v10 (metrics-interval=200) may have masked dynamics that v13 (metrics-interval=10) reveals. The signal hidden layer difference is striking: v10 grew to near-ceiling (27/32) while v13 stayed moderate (6.7 avg, max 19). This could reflect genuine behavioral differences (v10 ran pre-fix architecture) or measurement artifacts (v10's coarse interval smoothed over oscillations).
+
+### Interpretation
+
+**2000 pop is a transitional regime - closer to 384 than to 5000.** The receiver paradox (high receiver_fit_corr, negative response_fit_corr) is the key finding. Signals have spatial value (being near signals correlates with fitness) but semiotic value is negative (responding to signal content reduces fitness). This is the same qualitative pattern as 384 pop but with stronger magnitudes in both directions.
+
+**The receiver_fit_corr spatial confound remains unresolved.** The 0.74 correlation is high, but center prey hear more signals AND have more food AND have more escape routes. Without a controlled experiment (e.g., signals-off counterfactual at 2000 pop), we can't distinguish "signals help receivers" from "good locations have both signals and food."
+
+**Food encoding is real but not useful enough.** food_mi=0.14 means signals carry substantial food-location information. But response_fit_corr=-0.29 means acting on that information is counterproductive. The signal channel is informative but noisy enough that direct perception still outcompetes it.
+
+**Next steps:**
+1. **Counterfactual at 2000 pop.** Run v13-mute-2k-42 (same params, --no-signals) to measure whether the receiver_fit_corr advantage survives without signals. If mute prey are fitter, the 0.74 correlation is purely spatial confound.
+2. **Pop=3000 or 4000 bracket.** If 2000 is transitional, test where response_fit_corr flips positive.
+3. **Longer run at 2000 pop.** The symbol collapse was still accelerating at gen 100k (HHI rising). A 200k-gen run might show convergence to 2-3 symbols or restabilization.
+
+---
+
 ## Parameter History
 
 Tracks every significant parameter change and why.
 
-| Parameter | Era 1 | Era 2 (ph1) | Era 2 (ph2) | Era 2 (ph4) | Era 3 | Era 4 | v6 | v7 | v8 | GPU |
-|-----------|-------|-------------|-------------|-------------|-------|-------|----|----|----|----|
-| Population | 48 | 384 | 384 | 384 | 384 | 384 | 384 | 1000 | 384 | **5000** |
-| Grid | 20 | 56 | 56 | 56 | 56 | 56 | 56 | 72 | 56 | **150** |
-| Threat | 2 pred (vis) | 16 pred (vis) | 16 pred (vis) | 3 pred (vis) | 3 pred (vis) | 3 zones | 3 flee + 2 freeze | same | same | 5 flee + 2 freeze |
-| Threat speed | - | 8 | 4 | 4 | round(scale) | 0.5 prob | 0.5 prob | 0.5 prob | 0.5 | 3.75 |
-| Hidden layer | 6 fixed | 4-16 evolv | 4-16 evolv | 4-124 evolv | 4-64b + 2-32s | same | same | same | same | same |
-| Symbols | 3 | 3 | 3 | 3 | 6 | 6 | 6 | 6 | 6 | 6 |
-| Signal cost | 0.01 | 0.01 | 0.0 | 0.002 | 0.002 | 0.002 | 0.002 | 0.0002 | 0.002 | 0.015 |
-| Neuron cost | 0 | 0.0002 | 0.00002 | 0.00002 | 0.00001 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 |
-| Evasion boost | no | no | yes | no | no | no | no | no | no | no |
-| Vision | 4.0 | 11.2 | 11.2 | 11.2 | 5.6 | 5.6 | 5.6 | 5.6 | 5.6/1.4 | global |
-| Signal range | 8.0 | 22.4 | 22.4 | 22.4 | 22.4 | 22.4 | 22.4 | 16 | 22.4 | 60 |
-| Memory | no | no | no | no | 8 cells | 8 cells | 8 cells | 8 cells | 8 cells | 8 cells |
-| Patches | no | no | no | no | 50% | 50% | 50% | 50% | 50% | 50% |
-| Kin fitness | no | no | no | no | 0.5/0.25 | 0.5/0.25 | 0.5/0.25 | 0.25 | 0.10 | 0.10 |
-| Zone drain | - | - | - | - | - | 0.02 | 0.02 | 0.05 | 0.02 | 0.15 |
-| Food | 25 | 200 | 200 | 100 | 100 | 100 | 100 | 100 | 100 | 750 |
-| Freeze zones | - | - | - | - | - | no | 2 | 2 | 2 | 2 |
-| Death echoes | - | - | - | - | - | no | no | yes | **off** | no |
-| Demes | - | - | - | - | - | no | no | 3x3 | 1/4x4 | no |
-| Sig threshold | - | - | - | - | - | 1/6 | 1/6 | 0.3 | 1/6 | 1/6 |
+| Parameter | Era 1 | Era 2 (ph1) | Era 2 (ph2) | Era 2 (ph4) | Era 3 | Era 4 | v6 | v7 | v8 | GPU | v13 |
+|-----------|-------|-------------|-------------|-------------|-------|-------|----|----|----|----|-----|
+| Population | 48 | 384 | 384 | 384 | 384 | 384 | 384 | 1000 | 384 | **5000** | **2000** |
+| Grid | 20 | 56 | 56 | 56 | 56 | 56 | 56 | 72 | 56 | **150** | **100** |
+| Threat | 2 pred (vis) | 16 pred (vis) | 16 pred (vis) | 3 pred (vis) | 3 pred (vis) | 3 zones | 3 flee + 2 freeze | same | same | 5 flee + 2 freeze | 3 flee + 2 freeze |
+| Threat speed | - | 8 | 4 | 4 | round(scale) | 0.5 prob | 0.5 prob | 0.5 prob | 0.5 | 3.75 | 0.5 |
+| Hidden layer | 6 fixed | 4-16 evolv | 4-16 evolv | 4-124 evolv | 4-64b + 2-32s | same | same | same | same | same | same |
+| Symbols | 3 | 3 | 3 | 3 | 6 | 6 | 6 | 6 | 6 | 6 | 6 |
+| Signal cost | 0.01 | 0.01 | 0.0 | 0.002 | 0.002 | 0.002 | 0.002 | 0.0002 | 0.002 | 0.015 | 0.002 |
+| Neuron cost | 0 | 0.0002 | 0.00002 | 0.00002 | 0.00001 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 |
+| Evasion boost | no | no | yes | no | no | no | no | no | no | no | no |
+| Vision | 4.0 | 11.2 | 11.2 | 11.2 | 5.6 | 5.6 | 5.6 | 5.6 | 5.6/1.4 | global | 10 |
+| Signal range | 8.0 | 22.4 | 22.4 | 22.4 | 22.4 | 22.4 | 22.4 | 16 | 22.4 | 60 | 40 |
+| Memory | no | no | no | no | 8 cells | 8 cells | 8 cells | 8 cells | 8 cells | 8 cells | 8 cells |
+| Patches | no | no | no | no | 50% | 50% | 50% | 50% | 50% | 50% | 50% |
+| Kin fitness | no | no | no | no | 0.5/0.25 | 0.5/0.25 | 0.5/0.25 | 0.25 | 0.10 | 0.10 | 0.10 |
+| Zone drain | - | - | - | - | - | 0.02 | 0.02 | 0.05 | 0.02 | 0.15 | 0.02 |
+| Food | 25 | 200 | 200 | 100 | 100 | 100 | 100 | 100 | 100 | 750 | **520** |
+| Freeze zones | - | - | - | - | - | no | 2 | 2 | 2 | 2 | 2 |
+| Death echoes | - | - | - | - | - | no | no | yes | **off** | no | yes |
+| Demes | - | - | - | - | - | no | no | 3x3 | 1/4x4 | no | no |
+| Sig threshold | - | - | - | - | - | 1/6 | 1/6 | 0.3 | 1/6 | 1/6 | 1/6 |

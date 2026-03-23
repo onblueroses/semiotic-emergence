@@ -26,6 +26,8 @@ Simulation output from all significant runs. For experiment context, see [EXPERI
 
 **v12-blind6-42/** - Era 12 blind mode. Pop=384, all spatial perception stripped. MI~0, 2 symbols extinct, fitness halved. Memory replaces perception, not signals.
 
+**v13-2k-42/** - Era 13 population scale redux. Pop=2000, 100k generations with fixed response_fit_corr metric. receiver_fit_corr=0.74 (strongest in project), food_mi=0.14, but response_fit_corr=-0.29 (symbol differentiation still maladaptive). 4 of 6 symbols active. Signal strengths interleaved with food inputs in encoding hierarchy.
+
 ## CSV Column Formats
 
 **output.csv** (25 columns): generation, avg_fitness, max_fitness, signals_emitted, iconicity, mutual_info, jsd_no_pred, jsd_pred, silence_corr, sender_fit_corr, traj_fluct_ratio, receiver_fit_corr, response_fit_corr, silence_onset_jsd, silence_move_delta, avg_base_hidden, min_base_hidden, max_base_hidden, avg_signal_hidden, min_signal_hidden, max_signal_hidden, zone_deaths, signal_entropy, freeze_zone_deaths, food_mi
