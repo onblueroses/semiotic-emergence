@@ -1,0 +1,7 @@
+timestamp	experiment_id	branch	hypothesis	files_changed	metric_before	metric_after	delta_pct	kept	notes
+2026-03-24T00:30:00	000-baseline	main	baseline measurement	-	-	1.71	-	-	initial baseline (VPS under load: 2 long-running sims consuming ~970% CPU)
+2026-03-24T01:15:00	001-i32-distance	autoopt/001-simd-distance-batch	Integer-only distance comparison in inner loop	src/signal.rs	2.71	2.73	+0.7	false	below 2% threshold (noise)
+2026-03-24T02:00:00	000-rebaseline	main	local re-baseline (laptop unloaded)	-	-	5.28	-	-	re-baseline: 50 gens in 9463ms median (laptop unloaded)
+2026-03-24T02:30:00	002-flat-scan-fullgrid	autoopt/002-flat-scan-fullgrid	Skip ring iteration when search covers entire grid; flat scan contiguous SoA arrays	src/signal.rs	5.28	5.13	-2.8	false	regression: ring early exit saves more than cell overhead costs
+2026-03-24T03:15:00	003-fuse-output-heads	autoopt/003-fuse-output-heads	Fuse 4 output head loops into single 20-wide loop in CompactBrain::forward	src/brain.rs	5.28	5.22	+0.9	false	below 2% threshold (noise); base_hidden fits L1 cache line, no reload savings
+2026-03-24T05:00:00	004-simd-distance-batch	autoopt/004-simd-distance-batch	AVX2 SIMD 8-wide distance+wrap in receive_detailed_grid inner loop	src/signal.rs	1.71	1.89	+10.4	true	A/B VPS benchmark, paired analysis runs 5-7 (stable load), SNR 3.5. First KEEP.
