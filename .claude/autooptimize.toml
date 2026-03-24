@@ -1,0 +1,58 @@
+# Autooptimize config for semiotic-emergence
+# Used by /autooptimize skill to run autonomous optimization experiments
+
+[project]
+name = "semiotic-emergence"
+scope = [
+    "src/signal.rs",
+    "src/world.rs",
+    "src/brain.rs",
+    "src/evolution.rs",
+    "src/main.rs",
+    "src/metrics.rs",
+]
+
+[build]
+command = "cargo build --release"
+vps_rustflags = "-C target-cpu=znver3"
+test_command = "cargo test"
+lint_command = "cargo clippy -- -D warnings"
+fmt_command = "cargo fmt --check"
+
+[benchmark]
+script = "bench.sh"
+metric_name = "gens_per_sec"
+metric_direction = "higher"
+runs_per_experiment = 7
+warmup_runs = 2
+aggregation = "median"
+benchmark_gens = 50
+benchmark_seed = 42
+benchmark_args = "--metrics-interval 10"
+
+[benchmark.vps]
+host_alias = "hetzner"
+repo_path = "/root/semiotic-emergence"
+binary_path = "target/release/semiotic-emergence"
+warmup_runs = 2
+
+[benchmark.local]
+warmup_runs = 2
+runs_per_experiment = 12
+threshold = 3.0
+
+[profiling]
+command = "samply record ./target/release/semiotic-emergence 42 50 --metrics-interval 10"
+
+[constraints]
+determinism_check = true
+determinism_seed = 42
+determinism_gens = 10
+min_improvement_pct = 2.0
+max_consecutive_failures = 5
+max_experiments = 5
+
+[context]
+performance_doc = "PERFORMANCE.md"
+roadmap_section = "## Optimization Roadmap"
+experiment_log = "autooptimize-experiments.tsv"
