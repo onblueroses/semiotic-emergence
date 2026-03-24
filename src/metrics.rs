@@ -36,6 +36,12 @@ pub fn compute_food_mi(signal_events: &[SignalEvent]) -> f32 {
     adaptive_quartile_mi(signal_events, |e| e.inputs[5])
 }
 
+/// I(Signal; `EnergyDelta`) - whether signals encode the emitter's recent energy change.
+/// Captures poison food information: `energy_delta` goes negative after eating poison.
+pub fn compute_energy_delta_mi(signal_events: &[SignalEvent]) -> f32 {
+    adaptive_quartile_mi(signal_events, |e| e.inputs[1])
+}
+
 /// MI between emitted symbol and an arbitrary continuous variable, using
 /// data-derived quartile bin edges. Handles any value distribution without
 /// fixed-bin degeneracy.

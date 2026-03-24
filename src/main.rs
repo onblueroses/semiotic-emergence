@@ -65,6 +65,7 @@ struct SimParams {
     zone_drain_rate: f32,
     no_signals: bool,
     patch_ratio: f32,
+    poison_ratio: f32,
     kin_bonus: f32,
     metrics_interval: usize,
     fast_fail_tick: u32,
@@ -89,6 +90,7 @@ impl SimParams {
         let ticks_per_eval = parse_flag(args, "--ticks").unwrap_or(500);
         let no_signals = args.iter().any(|a| a == "--no-signals");
         let patch_ratio = parse_flag(args, "--patch-ratio").unwrap_or(0.5);
+        let poison_ratio: f32 = parse_flag(args, "--poison-ratio").unwrap_or(0.0);
         let kin_bonus = parse_flag(args, "--kin-bonus").unwrap_or(0.1);
         let metrics_interval = parse_flag(args, "--metrics-interval").unwrap_or(1);
         let zone_radius: f32 = parse_flag(args, "--zone-radius").unwrap_or(8.0);
@@ -148,6 +150,7 @@ impl SimParams {
             zone_drain_rate,
             no_signals,
             patch_ratio,
+            poison_ratio,
             kin_bonus,
             metrics_interval: metrics_interval.max(1),
             fast_fail_tick,
@@ -231,13 +234,15 @@ struct GenMetrics {
     freeze_zone_deaths: u32,
     signal_entropy: f32,
     food_mi: f32,
+    poison_eaten_total: u32,
+    energy_delta_mi: f32,
 }
 
 impl GenMetrics {
     fn write_csv(&self, f: &mut impl Write, gen: usize) -> Result<(), Box<dyn std::error::Error>> {
         writeln!(
             f,
-            "{gen},{:.1},{:.1},{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.1},{},{},{},{:.4},{},{:.4}",
+            "{gen},{:.1},{:.1},{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.1},{},{},{},{:.4},{},{:.4},{},{:.4}",
             self.avg_fitness,
             self.max_fitness,
             self.total_signals,
@@ -258,7 +263,9 @@ impl GenMetrics {
             self.zone_deaths,
             self.signal_entropy,
             self.freeze_zone_deaths,
-            self.food_mi
+            self.food_mi,
+            self.poison_eaten_total,
+            self.energy_delta_mi
         )?;
         Ok(())
     }
@@ -306,12 +313,13 @@ impl GenMetrics {
             .collect::<Vec<_>>()
             .join(",");
         println!(
-            "gen {gen:>4} | avg {:>7.1} | max {:>7.1} | signals {} | icon {:.3} | MI {:.3} | fMI {:.3} | ent {:.3} | jsd {:.3}/{:.3} | sym [{sym_str}] | sil {:.3} | zd {}/{} | base {:.1} [{}-{}]",
+            "gen {gen:>4} | avg {:>7.1} | max {:>7.1} | signals {} | icon {:.3} | MI {:.3} | fMI {:.3} | ent {:.3} | jsd {:.3}/{:.3} | sym [{sym_str}] | sil {:.3} | zd {}/{} | psn {} | base {:.1} [{}-{}]",
             self.avg_fitness, self.max_fitness, self.total_signals,
             self.iconicity, self.mutual_info, self.food_mi, self.signal_entropy,
             self.jsd_no_pred, self.jsd_pred,
             self.silence_corr,
             self.zone_deaths, self.freeze_zone_deaths,
+            self.poison_eaten_total,
             self.avg_base_hidden, self.min_base_hidden, self.max_base_hidden
         );
     }
@@ -333,6 +341,7 @@ struct EvalResult {
     silence_onset_actions: Vec<[[u32; 5]; 2]>,
     zone_deaths: u32,
     freeze_zone_deaths: u32,
+    poison_eaten_total: u32,
 }
 
 fn evaluate_generation(
@@ -356,6 +365,7 @@ fn evaluate_generation(
         params.neuron_cost,
         params.signal_cost,
         params.patch_ratio,
+        params.poison_ratio,
         params.zone_drain_rate,
         params.signal_ticks,
         params.num_freeze_zones,
@@ -428,6 +438,7 @@ fn evaluate_generation(
         silence_onset_actions,
         zone_deaths: world.zone_deaths,
         freeze_zone_deaths: world.freeze_zone_deaths,
+        poison_eaten_total: world.prey.iter().map(|p| p.poison_eaten).sum(),
     }
 }
 
@@ -449,6 +460,7 @@ fn compute_gen_metrics(
     );
     let mutual_info = metrics::compute_mutual_info(&ev.signal_events, &params.mi_bins);
     let food_mi = metrics::compute_food_mi(&ev.signal_events);
+    let energy_delta_mi = metrics::compute_energy_delta_mi(&ev.signal_events);
     let signal_entropy = metrics::compute_signal_entropy(&ev.signal_events);
     let (jsd_no_pred, jsd_pred) = metrics::compute_receiver_jsd(&ev.receiver_counts);
     let per_sym_jsd = metrics::compute_per_symbol_jsd(&ev.receiver_counts);
@@ -556,6 +568,8 @@ fn compute_gen_metrics(
         freeze_zone_deaths: ev.freeze_zone_deaths,
         signal_entropy,
         food_mi,
+        poison_eaten_total: ev.poison_eaten_total,
+        energy_delta_mi,
     }
 }
 
@@ -610,7 +624,7 @@ fn run_seed(
 
     if !resuming {
         if let Some(ref mut f) = csv {
-            writeln!(f, "generation,avg_fitness,max_fitness,signals_emitted,iconicity,mutual_info,jsd_no_pred,jsd_pred,silence_corr,sender_fit_corr,traj_fluct_ratio,receiver_fit_corr,response_fit_corr,silence_onset_jsd,silence_move_delta,avg_base_hidden,min_base_hidden,max_base_hidden,zone_deaths,signal_entropy,freeze_zone_deaths,food_mi")?;
+            writeln!(f, "generation,avg_fitness,max_fitness,signals_emitted,iconicity,mutual_info,jsd_no_pred,jsd_pred,silence_corr,sender_fit_corr,traj_fluct_ratio,receiver_fit_corr,response_fit_corr,silence_onset_jsd,silence_move_delta,avg_base_hidden,min_base_hidden,max_base_hidden,zone_deaths,signal_entropy,freeze_zone_deaths,food_mi,poison_eaten,energy_delta_mi")?;
         }
         if let Some(ref mut f) = traj_csv {
             write!(f, "generation")?;
@@ -738,6 +752,7 @@ fn run_seed(
                 silence_onset_actions: ev.silence_onset_actions,
                 zone_deaths: ev.zone_deaths,
                 freeze_zone_deaths: ev.freeze_zone_deaths,
+                poison_eaten_total: ev.poison_eaten_total,
             };
 
             let gm = compute_gen_metrics(
@@ -873,7 +888,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or(200);
 
         println!(
-            "Config: pop={} grid={} zones={} freeze_zones={} radius={:.1} speed={:.1} drain={:.3} food={} ticks={} patches={:.0}% kin_bonus={:.2} sig_cost={:.4} sig_range={:.1}",
+            "Config: pop={} grid={} zones={} freeze_zones={} radius={:.1} speed={:.1} drain={:.3} food={} ticks={} patches={:.0}% poison={:.0}% kin_bonus={:.2} sig_cost={:.4} sig_range={:.1}",
             params.pop_size,
             params.grid_size,
             params.num_zones,
@@ -884,6 +899,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             params.food_count,
             params.ticks_per_eval,
             params.patch_ratio * 100.0,
+            params.poison_ratio * 100.0,
             params.kin_bonus,
             params.signal_cost,
             params.signal_range
@@ -960,7 +976,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or(200);
 
         println!(
-            "Config: pop={} grid={} zones={} freeze_zones={} radius={:.1} speed={:.1} drain={:.3} food={} ticks={} patches={:.0}% kin_bonus={:.2} sig_cost={:.4} sig_range={:.1}",
+            "Config: pop={} grid={} zones={} freeze_zones={} radius={:.1} speed={:.1} drain={:.3} food={} ticks={} patches={:.0}% poison={:.0}% kin_bonus={:.2} sig_cost={:.4} sig_range={:.1}",
             params.pop_size,
             params.grid_size,
             params.num_zones,
@@ -971,6 +987,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             params.food_count,
             params.ticks_per_eval,
             params.patch_ratio * 100.0,
+            params.poison_ratio * 100.0,
             params.kin_bonus,
             params.signal_cost,
             params.signal_range
