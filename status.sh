@@ -35,6 +35,12 @@ show_run() {
     local flags=$(grep "^extra_flags:" "$meta_file" | cut -d' ' -f2-)
     local commit=$(grep "^git_commit:" "$meta_file" | cut -d' ' -f2-)
 
+    local cores_file="$dir/cores.txt"
+    local cores=""
+    if [ -f "$cores_file" ]; then
+        cores=" cores=$(cat "$cores_file")"
+    fi
+
     local throughput_file="$dir/throughput.tsv"
     local speed=""
     if [ -f "$throughput_file" ] && [ "$(wc -l < "$throughput_file")" -gt 1 ]; then
@@ -42,7 +48,7 @@ show_run() {
         speed=" ${speed} gen/min"
     fi
 
-    printf "%-30s  %-8s  seed=%-6s  gen=%-8s%s  commit=%s\n" "$name" "$status" "$seed" "$gen" "$speed" "$commit"
+    printf "%-30s  %-8s  seed=%-6s  gen=%-8s%s%s  commit=%s\n" "$name" "$status" "$seed" "$gen" "$cores" "$speed" "$commit"
 
     if [ "$2" = "verbose" ]; then
         if [ -f "$throughput_file" ] && [ "$(wc -l < "$throughput_file")" -gt 1 ]; then
