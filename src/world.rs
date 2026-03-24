@@ -324,6 +324,7 @@ pub struct Prey {
     pub alive: bool,
     pub ticks_alive: u32,
     pub food_eaten: u32,
+    pub poison_eaten: u32,
     pub memory: [f32; MEMORY_SIZE],
     /// Per-prey action counts by dominant received symbol (for per-symbol response JSD).
     pub actions_per_symbol: [[u32; 5]; NUM_SYMBOLS],
@@ -363,6 +364,7 @@ pub struct Food {
     pub x: i32,
     pub y: i32,
     pub is_patch: bool,
+    pub is_poison: bool,
 }
 
 pub struct SignalEvent {
@@ -424,6 +426,7 @@ pub struct World {
     pub neuron_cost: f32,
     pub signal_cost: f32,
     pub patch_ratio: f32,
+    pub poison_ratio: f32,
     pub zone_drain_rate: f32,
     pub signal_ticks: u32,
     pub gate_threshold: f32,
@@ -450,6 +453,7 @@ impl World {
         neuron_cost: f32,
         signal_cost: f32,
         patch_ratio: f32,
+        poison_ratio: f32,
         zone_drain_rate: f32,
         signal_ticks: u32,
         num_freeze_zones: usize,
@@ -471,6 +475,7 @@ impl World {
                 alive: true,
                 ticks_alive: 0,
                 food_eaten: 0,
+                poison_eaten: 0,
                 memory: std::array::from_fn(|_| rng.gen_range(-0.1..0.1)),
                 actions_per_symbol: [[0; 5]; NUM_SYMBOLS],
                 ticks_without_signal: 0,
@@ -507,6 +512,7 @@ impl World {
                 x: rng.gen_range(0..grid_size),
                 y: rng.gen_range(0..grid_size),
                 is_patch: rng.gen::<f32>() < patch_ratio,
+                is_poison: rng.gen::<f32>() < poison_ratio,
             })
             .collect();
 
@@ -555,6 +561,7 @@ impl World {
             neuron_cost,
             signal_cost,
             patch_ratio,
+            poison_ratio,
             zone_drain_rate,
             signal_ticks,
             gate_threshold,
@@ -773,6 +780,7 @@ impl World {
                     x: rng.gen_range(0..self.grid_size),
                     y: rng.gen_range(0..self.grid_size),
                     is_patch: rng.gen::<f32>() < self.patch_ratio,
+                    is_poison: rng.gen::<f32>() < self.poison_ratio,
                 };
                 let idx = self.food.len() as u16;
                 self.food_grid.insert(f.x, f.y, idx);
@@ -986,8 +994,13 @@ impl World {
                 .remove(moved.x, moved.y, self.food.len() as u16);
             self.food_grid.insert(moved.x, moved.y, food_idx as u16);
         }
-        self.prey[prey_idx].energy = (self.prey[prey_idx].energy + 0.3).min(1.0);
-        self.prey[prey_idx].food_eaten += 1;
+        if old_food.is_poison {
+            self.prey[prey_idx].energy = (self.prey[prey_idx].energy - 0.3).max(0.0);
+            self.prey[prey_idx].poison_eaten += 1;
+        } else {
+            self.prey[prey_idx].energy = (self.prey[prey_idx].energy + 0.3).min(1.0);
+            self.prey[prey_idx].food_eaten += 1;
+        }
     }
 
     /// Move zones via probabilistic random walk. Each zone moves 1 cell in a random
@@ -1155,6 +1168,7 @@ mod tests {
             alive: true,
             ticks_alive: 0,
             food_eaten: 0,
+            poison_eaten: 0,
             memory: [0.0; MEMORY_SIZE],
             actions_per_symbol: [[0; 5]; NUM_SYMBOLS],
             ticks_without_signal: 0,
@@ -1213,6 +1227,7 @@ mod tests {
             neuron_cost: TEST_NEURON_COST,
             signal_cost: TEST_SIGNAL_COST,
             patch_ratio: TEST_PATCH_RATIO,
+            poison_ratio: 0.0,
             zone_drain_rate: TEST_ZONE_DRAIN_RATE,
             signal_ticks: 4,
             gate_threshold: 1.0 / 6.0,
@@ -1630,6 +1645,7 @@ mod tests {
             TEST_NEURON_COST,
             TEST_SIGNAL_COST,
             TEST_PATCH_RATIO,
+            0.0,
             TEST_ZONE_DRAIN_RATE,
             4,
             0,
@@ -1658,6 +1674,7 @@ mod tests {
             x: 10,
             y: 10,
             is_patch: false,
+            is_poison: false,
         });
         let mut rng = ChaCha8Rng::seed_from_u64(0);
 
@@ -1677,6 +1694,7 @@ mod tests {
             x: 5,
             y: 5,
             is_patch: false,
+            is_poison: false,
         });
         world.food_grid.insert(5, 5, 0);
 
@@ -1700,6 +1718,7 @@ mod tests {
             x: 5,
             y: 5,
             is_patch: false,
+            is_poison: false,
         });
         world.food_grid.insert(5, 5, 0);
 
@@ -1725,6 +1744,7 @@ mod tests {
             x: 10,
             y: 10,
             is_patch: false,
+            is_poison: false,
         });
         let mut rng = ChaCha8Rng::seed_from_u64(0);
 
@@ -1744,6 +1764,7 @@ mod tests {
                 x,
                 y: 5,
                 is_patch: false,
+                is_poison: false,
             });
         }
         let mut rng = ChaCha8Rng::seed_from_u64(0);
@@ -1762,6 +1783,7 @@ mod tests {
                 x,
                 y: 5,
                 is_patch: false,
+                is_poison: false,
             });
         }
         let initial_count = world.food.len();
@@ -1843,6 +1865,7 @@ mod tests {
             x: 10,
             y: 10,
             is_patch: false,
+            is_poison: false,
         });
         world.signals.push(crate::signal::Signal {
             x: 5,
@@ -1895,6 +1918,7 @@ mod tests {
             x: 5,
             y: 5,
             is_patch: false,
+            is_poison: false,
         });
 
         let inputs = world.build_inputs(0);
@@ -1910,6 +1934,7 @@ mod tests {
             x: 10,
             y: 10,
             is_patch: false,
+            is_poison: false,
         });
         world.brains[0].base_hidden_size = DEFAULT_BASE_HIDDEN;
         world.brains[1].base_hidden_size = crate::brain::MAX_BASE_HIDDEN;
@@ -1934,6 +1959,7 @@ mod tests {
             x: 10,
             y: 10,
             is_patch: false,
+            is_poison: false,
         });
         world.brains[0].base_hidden_size = DEFAULT_BASE_HIDDEN;
         world.brains[1].base_hidden_size = crate::brain::MIN_BASE_HIDDEN;
@@ -1969,6 +1995,7 @@ mod tests {
             x: 5,
             y: 5,
             is_patch: true,
+            is_poison: false,
         });
         world.food_grid.insert(5, 5, 0);
         world.rebuild_prey_grid();
@@ -1998,6 +2025,7 @@ mod tests {
             x: 5,
             y: 5,
             is_patch: true,
+            is_poison: false,
         });
         world.food_grid.insert(5, 5, 0);
         world.rebuild_prey_grid();
@@ -2026,6 +2054,7 @@ mod tests {
             x: 5,
             y: 5,
             is_patch: false,
+            is_poison: false,
         });
         world.food_grid.insert(5, 5, 0);
         world.rebuild_prey_grid();
@@ -2074,6 +2103,7 @@ mod tests {
             TEST_NEURON_COST,
             TEST_SIGNAL_COST,
             TEST_PATCH_RATIO,
+            0.0,
             TEST_ZONE_DRAIN_RATE,
             4,
             0,
@@ -2245,5 +2275,102 @@ mod tests {
         }
         // Signals (9-26), memory (27-34), energy (35) should still work
         assert!(inputs[35] > 0.0, "Energy should be nonzero");
+    }
+
+    // --- Poison food ---
+
+    #[test]
+    fn poison_food_decreases_energy() {
+        let mut world = minimal_world(&[(5, 5)], (15.0, 15.0));
+        world.food.push(Food {
+            x: 5,
+            y: 5,
+            is_patch: false,
+            is_poison: true,
+        });
+        world.food_grid.insert(5, 5, 0);
+        world.rebuild_prey_grid();
+
+        let inputs = [0.0_f32; INPUTS];
+        world.apply_outputs(0, 4, None, &inputs, f32::MAX);
+
+        assert!(
+            (world.prey[0].energy - 0.7).abs() < f32::EPSILON,
+            "Poison should reduce energy by 0.3: got {}",
+            world.prey[0].energy
+        );
+        assert_eq!(world.prey[0].poison_eaten, 1);
+        assert_eq!(world.prey[0].food_eaten, 0);
+    }
+
+    #[test]
+    fn poison_food_energy_floor() {
+        let mut world = minimal_world(&[(5, 5)], (15.0, 15.0));
+        world.prey[0].energy = 0.1;
+        world.food.push(Food {
+            x: 5,
+            y: 5,
+            is_patch: false,
+            is_poison: true,
+        });
+        world.food_grid.insert(5, 5, 0);
+        world.rebuild_prey_grid();
+
+        let inputs = [0.0_f32; INPUTS];
+        world.apply_outputs(0, 4, None, &inputs, f32::MAX);
+
+        assert!(
+            world.prey[0].energy >= 0.0,
+            "Energy should not go negative: got {}",
+            world.prey[0].energy
+        );
+    }
+
+    #[test]
+    fn poison_patch_requires_partner() {
+        let mut world = minimal_world(&[(5, 5)], (15.0, 15.0));
+        world.food.push(Food {
+            x: 5,
+            y: 5,
+            is_patch: true,
+            is_poison: true,
+        });
+        world.food_grid.insert(5, 5, 0);
+        world.rebuild_prey_grid();
+
+        let inputs = [0.0_f32; INPUTS];
+        world.apply_outputs(0, 4, None, &inputs, f32::MAX);
+
+        assert_eq!(
+            world.food.len(),
+            1,
+            "Poison patch food should not be consumed solo"
+        );
+        assert_eq!(world.prey[0].poison_eaten, 0);
+    }
+
+    #[test]
+    fn good_food_unaffected_by_poison_feature() {
+        let mut world = minimal_world(&[(5, 5)], (15.0, 15.0));
+        world.prey[0].energy = 0.5;
+        world.food.push(Food {
+            x: 5,
+            y: 5,
+            is_patch: false,
+            is_poison: false,
+        });
+        world.food_grid.insert(5, 5, 0);
+        world.rebuild_prey_grid();
+
+        let inputs = [0.0_f32; INPUTS];
+        world.apply_outputs(0, 4, None, &inputs, f32::MAX);
+
+        assert!(
+            (world.prey[0].energy - 0.8).abs() < f32::EPSILON,
+            "Good food should still give +0.3: got {}",
+            world.prey[0].energy
+        );
+        assert_eq!(world.prey[0].food_eaten, 1);
+        assert_eq!(world.prey[0].poison_eaten, 0);
     }
 }
