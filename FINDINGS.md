@@ -14,7 +14,7 @@ What we know, what we disproved, and what remains open. For the chronological ex
 | 4 | Responses are appropriate | **NO** (v11: -0.13 to -0.28) | **NO** (v13: -0.29) | Metric fixed, needs GPU rebuild |
 | 5 | Genuine reference | Not testable | Not testable | Not testable |
 
-**Critical finding (v13):** Level 4 now measured at 2000 pop - still negative (response_fit_corr=-0.29). The receiver paradox: receiver_fit_corr=0.74 (being near signals correlates with fitness) but responding to signal content is maladaptive. This narrows the emergence threshold: response_fit_corr is negative at 2000 and positive at 5000, so the crossover is somewhere in 2000-5000. A counterfactual (--no-signals) at 2000 pop is needed to test Level 1. Level 4 at 5k pop (GPU) also remains unmeasured.
+**Critical finding (v13-v14):** Level 4 negative at both 384 and 2000 pop across two architectures (split-head v13, shared-layer v14). The receiver paradox persists: receiver_fit_corr=0.71-0.74 but response_fit_corr=-0.10 to -0.29. v14 diagnosis: the environment supports only one message, so vocabulary can't emerge regardless of architecture or population. Next intervention is environmental (poison food, v15).
 
 ---
 
@@ -22,11 +22,13 @@ What we know, what we disproved, and what remains open. For the chronological ex
 
 ### Universal patterns (every era, every seed)
 
-- **Population scale is the key variable.** At 384-1000 agents, signals are net negative at every parameter configuration tested (8 eras, 15+ runs). At 2000, signals carry real information (food_mi=0.14) but responses are maladaptive (response_fit_corr=-0.29). At 5,000 agents (GPU), signals become adaptive (r=+0.51). The emergence threshold lies between 2000 and 5000.
+- **Population scale is the key variable (but not sufficient).** At 384-1000 agents, signals are net negative at every parameter configuration tested (8 eras, 15+ runs). At 2000, signals carry real information (food_mi=0.14) but responses are maladaptive (response_fit_corr=-0.29). At 5,000 agents (GPU), signals become adaptive (r=+0.51). The emergence threshold lies between 2000 and 5000. However, v14 showed that even at 2000 pop with a spandrel-optimized architecture, the system converges to beacon or silence - population alone doesn't produce vocabulary.
 
 - **response_fit_corr is negative up to 2000 pop.** At 384 pop: -0.13 to -0.28 (v11). At 2000 pop: -0.29 (v13). Symbol differentiation is maladaptive because direct spatial inputs (food/ally direction) remain more reliable than the signal channel. The signal environment at 2000 pop is informationally richer than at 384 (food_mi 0.14 vs 0.01) but still too noisy for symbol-differentiated responses to outperform direct perception.
 
 - **The receiver paradox.** receiver_fit_corr is consistently positive (0.48-0.87 across all eras, 0.74 at 2000 pop), but response_fit_corr is consistently negative. Being near signals correlates with fitness; acting on signal content reduces fitness. The positive receiver correlation is a spatial confound: center prey hear more signals AND encounter more food AND have more escape routes. The negative response correlation is the real signal: the channel is too noisy for content to be actionable.
+
+- **The beacon attractor.** Every architecture tested (split-head, shared-layer, gate neuron) converges to the same outcome: one dominant signal meaning ("something at my location") or silence. The environment can be fully served by one message - zone escape, food location, and ally proximity all reduce to "come to where I am." Vocabulary requires an environment where two distinct messages outperform one (v14 diagnosis).
 
 - **Silence near danger.** Prey reduce per-capita signaling near threats. Present from gen 0, maintained but not amplified by evolution. Likely an architectural spandrel of shared hidden layers, not a learned strategy.
 
@@ -59,6 +61,7 @@ What we know, what we disproved, and what remains open. For the chronological ex
 | Ecological conditions are the bottleneck | 8+GPU | **Disproven: population scale is the bottleneck** |
 | Constraining signal capacity improves encoding quality | 9 (v11) | Cap=6 produces more food encoding but symbol differentiation is maladaptive (-0.13 to -0.28 response_fit_corr). Direct spatial inputs outcompete signals. |
 | Removing spatial perception forces signal dependence | 12 (v12) | Blind mode: MI~0, 2 symbols extinct, fitness halved. Prey can't signal about things they can't perceive. Memory replaces perception, not signals. |
+| Shared-layer spandrels bootstrap vocabulary | 14 (v14) | Spandrel mechanism creates transient signal-context correlations (MI spikes at gen 7k, 49k) but they collapse to beacon attractor. Gate neuron becomes volume knob, not context switch. Same outcome at 384 and 2000 pop. |
 
 ---
 
@@ -75,6 +78,7 @@ What we know, what we disproved, and what remains open. For the chronological ex
 | Food encoding | 4 | Emerged independently in 3 seeds. MI 0.10-0.12 sustained. Strongest at 2k pop (0.14) |
 | Signal relay (seed43) | 4 | Emerged spontaneously as alternative to direct encoding |
 | Metrics-interval=10 | 13 | 10x finer resolution reveals dynamics masked at 200 (v10 vs v13 signal hidden trajectories) |
+| Shared-layer + gate neuron | 14 | Simpler architecture (3860 vs 5683 weights), spandrel mechanism bootstraps signal-context correlations. Gate separates emission decision from symbol selection. |
 
 ---
 
@@ -118,6 +122,8 @@ Inputs 0-1 are justified: prey need body-state awareness. Inputs 2, 36-38 give a
 
 4. **Can the Rust simulation scale to 5k+ efficiently?** At 2000 pop: 25 gen/min (CPU-bound on signal reception at 41% of runtime). 5000 pop would be ~4 gen/min, making 100k gens impractical on VPS. GPU mirror (Python/JAX) is the planned path.
 
+5. **Can poison food create vocabulary pressure?** (NEW - v15 planned) Architecture and population are exhausted variables across 14 eras. The environment has only one message worth sending ("something interesting at my location"). Poison food (visually identical, -0.3 energy) makes a generic beacon harmful - it attracts prey to poison. Two distinguishable messages ("good food" vs "bad food") should outperform one. This is the first environmental intervention targeting vocabulary directly.
+
 ---
 
 ## Resolved Questions
@@ -137,3 +143,5 @@ Inputs 0-1 are justified: prey need body-state awareness. Inputs 2, 36-38 give a
 7. **Does removing spatial perception flip response_fit_corr positive?** No. v12-blind6-42 shows response_fit_corr=-0.044, MI~0, 2 symbols extinct. Removing perception destroys information asymmetry rather than redirecting it through signals.
 
 8. **Is response_fit_corr positive at 2000 pop?** No. v13-2k-42 (100k gens, fixed metrics) shows response_fit_corr=-0.29. Symbol differentiation remains maladaptive at 2000 pop despite strong food encoding (food_mi=0.14) and high receiver_fit_corr (0.74). The emergence threshold is above 2000.
+
+9. **Can shared-layer spandrels bootstrap vocabulary?** No. v14 (shared-layer + gate neuron) creates transient signal-context correlations via the spandrel mechanism, but they collapse to beacon attractor at 384 pop and silence at 2000 pop. Architecture is not the bottleneck - the environment supports only one useful message.

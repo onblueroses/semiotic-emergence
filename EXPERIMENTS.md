@@ -18,6 +18,7 @@ Chronological lab notebook for semiotic-emergence. Each era documents what we te
 - [Era 10: Population Scale](#era-10-population-scale-pop2000-100k-gens) - 2000 pop bracket test
 - [Era 12: Blind Mode](#era-12-blind-mode-100k-gens) - Spatial perception stripped
 - [Era 13: Population Scale Redux](#era-13-population-scale-redux-pop2000-fixed-metrics) - Pop=2000 with fixed response_fit_corr
+- [Era 14: Shared-Layer Architecture](#era-14-shared-layer-architecture) - Spandrel-first design, beacon attractor
 - [Parameter History](#parameter-history)
 
 ---
@@ -53,6 +54,8 @@ Every significant run, its parameters, and headline result.
 | v11-cap32-42 | 11 | 42 | 74,810 | pop=384, max-signal-hidden=32 (control), metrics-interval=10 | response_fit_corr near zero, occasionally +0.16 |
 | v12-blind6-42 | 12 | 42 | 100,000 | pop=384, --blind, max-signal-hidden=6 | Blind mode failed: MI~0, 2 symbols extinct, fitness halved vs sighted |
 | v13-2k-42 | 13 | 42 | 100,000 | pop=2000, grid=100, zone-radius=14, food=520, metrics-interval=10 | **receiver_fit_corr=0.74**, food_mi=0.14, symbol collapse to 4, response_fit_corr=-0.29 |
+| v14-baseline-42 | 14 | 42 | 86,070 | pop=384, shared-layer arch, metrics-interval=10 | MI noise floor, beacon attractor, response_fit_corr=-0.10 |
+| v14-2k-42 | 14 | 42 | 21,880 | pop=2000, grid=100, shared-layer arch, metrics-interval=10 | Heading toward silence (emission 28%), food_mi transient |
 
 Raw data: `data/` contains CSV output for each run listed above. See `data/README.md` for column formats.
 
@@ -849,29 +852,84 @@ The two runs differ more than expected given identical ecological parameters. v1
 
 ---
 
+## Era 14: Shared-Layer Architecture
+
+*Question: Can a shared-layer architecture that creates spandrels (incidental signal-context correlations) bootstrap vocabulary instead of just a beacon?*
+
+**Architecture change (v14):** Replaced the split-head brain (base_hidden -> signal_hidden -> signal_out, 5683 weights) with shared-layer architecture (base_hidden -> direct projections to all output heads, 3860 weights) plus a sigmoid gate neuron. The gate separates "should I signal?" from "what should I signal?" All output heads (movement, signal, gate, memory) project directly from the same shared hidden layer.
+
+**Hypothesis:** Shared hidden activations create spandrels - incidental correlations between internal representations and signal outputs. If a hidden neuron that encodes food proximity also drives signal output, signals automatically carry food information without dedicated signal processing. This bootstrapping mechanism was the only one in 12 eras that produced genuine signal-context correlation.
+
+### v14-baseline-42: Shared-layer baseline (seed 42, 86k gens)
+
+**Parameters:** pop=384, grid=56, shared-layer arch, metrics-interval=10. Standard ecological params (drain 0.02, freeze zones, death echoes, patches).
+
+**Results:**
+
+1. **MI at noise floor.** Final 0.0007, sustained 0.0008. Had two transient spikes: gen 7k (0.024) and gen 44-49k (0.016), both collapsed. The spandrel mechanism bootstraps signal-context correlations but they don't stabilize.
+
+2. **Beacon attractor.** Emission rate ~55% at termination (was 81% at gen 77k, declining). The gate neuron learned "emit when activations are strong" which, through a linear projection from ~6 hidden neurons encoding food/energy state, reduces to "emit most of the time." The gate is a volume knob, not a context switch.
+
+3. **response_fit_corr negative (-0.10).** Same pattern as every era: being near signals correlates with fitness (receiver_fit_corr=0.71) but acting on signal content hurts.
+
+4. **Brain size stable.** base_hidden 5.6 [4-7], stable throughout. No pressure to grow signal processing capacity because the signal channel carries no usable information.
+
+5. **Signal entropy oscillates (0.6-1.2).** Never converges to a stable vocabulary. The population cycles between symbol configurations without settling on conventions.
+
+### v14-2k-42: Shared-layer at 2000 pop (seed 42, 22k gens)
+
+**Parameters:** pop=2000, grid=100, shared-layer arch, metrics-interval=10. Scaled ecological params.
+
+**Results (terminated early - trajectory clear):**
+
+1. **MI peaked at gen 180 then crashed.** Peak 0.018, sustained 0.0002. The initial spandrel encoding dissipated almost immediately as the population converged.
+
+2. **Heading toward silence.** Emission rate dropped to 28% (from 69% at gen 20k check-in). Signal entropy fell to 0.63 - the population converging on a single dominant symbol or near-silence. This is a different attractor than the baseline's beacon: larger grid makes signaling less beneficial (signals reach fewer receivers relative to grid size).
+
+3. **food_mi transient.** Peaked at 0.025 early, fell to 0.010 by termination. The spandrel food encoding didn't persist.
+
+4. **traj_fluct_ratio volatile (4.3-15.9).** The signal-context matrix was in flux but not diversifying - just unstable.
+
+5. **response_fit_corr near zero (+0.005).** Neither helpful nor harmful. At 2000 pop with shared-layer arch, the signal channel is irrelevant rather than actively maladaptive.
+
+### Diagnosis
+
+The shared-layer spandrel mechanism works exactly as theorized: hidden activations that encode food/energy state incidentally drive signal outputs, creating signal-context correlations. But it bootstraps a **beacon** (one useful message: "something interesting at my location"), not a **vocabulary** (multiple messages for different contexts).
+
+The gate neuron can't learn context-dependent emission because there's no evolutionary pressure for it. "Always emit" and "never emit" are both stable strategies; "emit conditionally" requires two or more distinguishable messages to outperform either extreme. The environment has only one message worth sending.
+
+**Architecture and population are exhausted variables across 14 eras.** The next intervention must be environmental: create a scenario where two different messages produce better outcomes than one.
+
+### Next steps
+
+1. **Poison food intervention (v15).** Introduce poison food items (visually identical, -0.3 energy on consumption). A generic "food here" beacon now attracts prey to poison - creating selection pressure for at least two signals ("good food" vs "bad food"). See FINDINGS.md Open Questions.
+
+---
+
 ## Parameter History
 
 Tracks every significant parameter change and why.
 
-| Parameter | Era 1 | Era 2 (ph1) | Era 2 (ph2) | Era 2 (ph4) | Era 3 | Era 4 | v6 | v7 | v8 | GPU | v13 |
-|-----------|-------|-------------|-------------|-------------|-------|-------|----|----|----|----|-----|
-| Population | 48 | 384 | 384 | 384 | 384 | 384 | 384 | 1000 | 384 | **5000** | **2000** |
-| Grid | 20 | 56 | 56 | 56 | 56 | 56 | 56 | 72 | 56 | **150** | **100** |
-| Threat | 2 pred (vis) | 16 pred (vis) | 16 pred (vis) | 3 pred (vis) | 3 pred (vis) | 3 zones | 3 flee + 2 freeze | same | same | 5 flee + 2 freeze | 3 flee + 2 freeze |
-| Threat speed | - | 8 | 4 | 4 | round(scale) | 0.5 prob | 0.5 prob | 0.5 prob | 0.5 | 3.75 | 0.5 |
-| Hidden layer | 6 fixed | 4-16 evolv | 4-16 evolv | 4-124 evolv | 4-64b + 2-32s | same | same | same | same | same | same |
-| Symbols | 3 | 3 | 3 | 3 | 6 | 6 | 6 | 6 | 6 | 6 | 6 |
-| Signal cost | 0.01 | 0.01 | 0.0 | 0.002 | 0.002 | 0.002 | 0.002 | 0.0002 | 0.002 | 0.015 | 0.002 |
-| Neuron cost | 0 | 0.0002 | 0.00002 | 0.00002 | 0.00001 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 |
-| Evasion boost | no | no | yes | no | no | no | no | no | no | no | no |
-| Vision | 4.0 | 11.2 | 11.2 | 11.2 | 5.6 | 5.6 | 5.6 | 5.6 | 5.6/1.4 | global | 10 |
-| Signal range | 8.0 | 22.4 | 22.4 | 22.4 | 22.4 | 22.4 | 22.4 | 16 | 22.4 | 60 | 40 |
-| Memory | no | no | no | no | 8 cells | 8 cells | 8 cells | 8 cells | 8 cells | 8 cells | 8 cells |
-| Patches | no | no | no | no | 50% | 50% | 50% | 50% | 50% | 50% | 50% |
-| Kin fitness | no | no | no | no | 0.5/0.25 | 0.5/0.25 | 0.5/0.25 | 0.25 | 0.10 | 0.10 | 0.10 |
-| Zone drain | - | - | - | - | - | 0.02 | 0.02 | 0.05 | 0.02 | 0.15 | 0.02 |
-| Food | 25 | 200 | 200 | 100 | 100 | 100 | 100 | 100 | 100 | 750 | **520** |
-| Freeze zones | - | - | - | - | - | no | 2 | 2 | 2 | 2 | 2 |
-| Death echoes | - | - | - | - | - | no | no | yes | **off** | no | yes |
-| Demes | - | - | - | - | - | no | no | 3x3 | 1/4x4 | no | no |
-| Sig threshold | - | - | - | - | - | 1/6 | 1/6 | 0.3 | 1/6 | 1/6 | 1/6 |
+| Parameter | Era 1 | Era 2 (ph1) | Era 2 (ph2) | Era 2 (ph4) | Era 3 | Era 4 | v6 | v7 | v8 | GPU | v13 | v14 |
+|-----------|-------|-------------|-------------|-------------|-------|-------|----|----|----|----|-----|-----|
+| Population | 48 | 384 | 384 | 384 | 384 | 384 | 384 | 1000 | 384 | **5000** | **2000** | 384/2000 |
+| Grid | 20 | 56 | 56 | 56 | 56 | 56 | 56 | 72 | 56 | **150** | **100** | 56/100 |
+| Threat | 2 pred (vis) | 16 pred (vis) | 16 pred (vis) | 3 pred (vis) | 3 pred (vis) | 3 zones | 3 flee + 2 freeze | same | same | 5 flee + 2 freeze | 3 flee + 2 freeze | 3 flee + 2 freeze |
+| Threat speed | - | 8 | 4 | 4 | round(scale) | 0.5 prob | 0.5 prob | 0.5 prob | 0.5 | 3.75 | 0.5 | 0.5 |
+| Hidden layer | 6 fixed | 4-16 evolv | 4-16 evolv | 4-124 evolv | 4-64b + 2-32s | same | same | same | same | same | same | **4-64 shared** |
+| Symbols | 3 | 3 | 3 | 3 | 6 | 6 | 6 | 6 | 6 | 6 | 6 | 6 |
+| Signal cost | 0.01 | 0.01 | 0.0 | 0.002 | 0.002 | 0.002 | 0.002 | 0.0002 | 0.002 | 0.015 | 0.002 | 0.002 |
+| Neuron cost | 0 | 0.0002 | 0.00002 | 0.00002 | 0.00001 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 |
+| Evasion boost | no | no | yes | no | no | no | no | no | no | no | no | no |
+| Vision | 4.0 | 11.2 | 11.2 | 11.2 | 5.6 | 5.6 | 5.6 | 5.6 | 5.6/1.4 | global | 10 | 5.6/10 |
+| Signal range | 8.0 | 22.4 | 22.4 | 22.4 | 22.4 | 22.4 | 22.4 | 16 | 22.4 | 60 | 40 | 22.4/40 |
+| Memory | no | no | no | no | 8 cells | 8 cells | 8 cells | 8 cells | 8 cells | 8 cells | 8 cells | 8 cells |
+| Patches | no | no | no | no | 50% | 50% | 50% | 50% | 50% | 50% | 50% | 50% |
+| Kin fitness | no | no | no | no | 0.5/0.25 | 0.5/0.25 | 0.5/0.25 | 0.25 | 0.10 | 0.10 | 0.10 | 0.10 |
+| Zone drain | - | - | - | - | - | 0.02 | 0.02 | 0.05 | 0.02 | 0.15 | 0.02 | 0.02 |
+| Food | 25 | 200 | 200 | 100 | 100 | 100 | 100 | 100 | 100 | 750 | **520** | 100/520 |
+| Freeze zones | - | - | - | - | - | no | 2 | 2 | 2 | 2 | 2 | 2 |
+| Death echoes | - | - | - | - | - | no | no | yes | **off** | no | yes | yes |
+| Demes | - | - | - | - | - | no | no | 3x3 | 1/4x4 | no | no | no |
+| Sig threshold | - | - | - | - | - | 1/6 | 1/6 | 0.3 | 1/6 | 1/6 | 1/6 | 1/6 |
+| Architecture | - | - | - | - | split-head | same | same | same | same | same | same | **shared-layer+gate** |
