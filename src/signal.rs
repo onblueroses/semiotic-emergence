@@ -3,6 +3,13 @@ use crate::world::wrap_coord;
 #[cfg(test)]
 use crate::world::wrap_delta;
 
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::{
+    __m128i, _mm256_add_epi32, _mm256_add_ps, _mm256_and_si256, _mm256_cmp_ps, _mm256_cmpgt_epi32,
+    _mm256_cvtepi16_epi32, _mm256_cvtepi32_ps, _mm256_movemask_ps, _mm256_mul_ps,
+    _mm256_set1_epi32, _mm256_set1_ps, _mm256_sub_epi32, _mm_loadu_si128, _CMP_LT_OQ,
+};
+
 pub const NUM_SYMBOLS: usize = 6;
 
 #[derive(Clone, Debug)]
@@ -151,11 +158,28 @@ pub struct ReceivedSignal {
 }
 
 /// Compute detailed received signals using spatial grid for O(nearby) instead of O(all).
-/// Searches cells in ring order (center outward) and exits early when all 6 symbols
-/// have been found closer than any signal in the next ring could be.
-/// Reads signal data directly from the grid's contiguous arrays (no indirection).
+/// Dispatches to AVX2 SIMD path on `x86_64` when available, scalar fallback otherwise.
 #[allow(clippy::similar_names)]
 pub fn receive_detailed_grid(
+    grid: &SignalGrid,
+    rx: i32,
+    ry: i32,
+    grid_size: f32,
+    signal_range: f32,
+) -> [ReceivedSignal; NUM_SYMBOLS] {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") {
+            // SAFETY: AVX2 support verified by runtime check above.
+            return unsafe { receive_detailed_grid_avx2(grid, rx, ry, grid_size, signal_range) };
+        }
+    }
+    receive_detailed_grid_scalar(grid, rx, ry, grid_size, signal_range)
+}
+
+/// Scalar fallback: ring search with per-axis early exit.
+#[allow(clippy::similar_names)]
+fn receive_detailed_grid_scalar(
     grid: &SignalGrid,
     rx: i32,
     ry: i32,
@@ -178,9 +202,6 @@ pub fn receive_detailed_grid(
     let mut best_dy = [0.0_f32; NUM_SYMBOLS];
 
     for ring in 0..=r_max {
-        // Early exit: if every symbol already has a hit closer than the minimum
-        // possible distance from any signal in this ring, no need to check further.
-        // Min distance for ring r: (r-1)*cell_size (conservative lower bound).
         if ring >= 2 {
             let min_gap = ((ring - 1) * cs) as f32;
             let min_sq = min_gap * min_gap;
@@ -195,7 +216,6 @@ pub fn receive_detailed_grid(
             }
         }
 
-        // Iterate cells at Chebyshev distance == ring
         for dcy in -ring..=ring {
             for dcx in -ring..=ring {
                 if ring > 0 && dcx.abs().max(dcy.abs()) != ring {
@@ -208,7 +228,6 @@ pub fn receive_detailed_grid(
                 let s = start as usize;
                 let end = s + len as usize;
 
-                // Inner loop: SoA access + inlined wrap_delta
                 for k in s..end {
                     let ddx = {
                         let d = i32::from(grid.sig_x[k]) - rx;
@@ -253,6 +272,188 @@ pub fn receive_detailed_grid(
         }
     }
 
+    finish_reception(best_dist_sq, best_dx, best_dy, grid_size, signal_range)
+}
+
+/// AVX2 SIMD path: processes 8 signals at a time with branchless `wrap_delta`.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+#[allow(clippy::similar_names, clippy::cast_ptr_alignment)]
+unsafe fn receive_detailed_grid_avx2(
+    grid: &SignalGrid,
+    rx: i32,
+    ry: i32,
+    grid_size: f32,
+    signal_range: f32,
+) -> [ReceivedSignal; NUM_SYMBOLS] {
+    let grid_size_i = grid_size as i32;
+    let half_gs = grid_size_i >> 1;
+    let range_sq = signal_range * signal_range;
+    let cs = grid.cell_size;
+    let cpa = grid.cells_per_axis;
+    let r_max = grid.cells_radius;
+
+    let cx = rx.rem_euclid(grid_size_i) / cs;
+    let cy = ry.rem_euclid(grid_size_i) / cs;
+
+    let mut best_dist_sq = [f32::MAX; NUM_SYMBOLS];
+    let mut best_dx = [0.0_f32; NUM_SYMBOLS];
+    let mut best_dy = [0.0_f32; NUM_SYMBOLS];
+
+    // SIMD constants (broadcast scalars to all 8 lanes)
+    let rx_v = _mm256_set1_epi32(rx);
+    let ry_v = _mm256_set1_epi32(ry);
+    let half_gs_v = _mm256_set1_epi32(half_gs);
+    let neg_half_gs_v = _mm256_set1_epi32(-half_gs);
+    let gs_v = _mm256_set1_epi32(grid_size_i);
+    let range_sq_v = _mm256_set1_ps(range_sq);
+
+    for ring in 0..=r_max {
+        if ring >= 2 {
+            let min_gap = ((ring - 1) * cs) as f32;
+            let min_sq = min_gap * min_gap;
+            if best_dist_sq[0] <= min_sq
+                && best_dist_sq[1] <= min_sq
+                && best_dist_sq[2] <= min_sq
+                && best_dist_sq[3] <= min_sq
+                && best_dist_sq[4] <= min_sq
+                && best_dist_sq[5] <= min_sq
+            {
+                break;
+            }
+        }
+
+        for dcy in -ring..=ring {
+            for dcx in -ring..=ring {
+                if ring > 0 && dcx.abs().max(dcy.abs()) != ring {
+                    continue;
+                }
+                let ncx = wrap_coord(cx + dcx, cpa) as usize;
+                let ncy = wrap_coord(cy + dcy, cpa) as usize;
+                let ci = ncy * cpa as usize + ncx;
+                let (start, len) = grid.offsets[ci];
+                if len == 0 {
+                    continue;
+                }
+                let s = start as usize;
+                let end = s + len as usize;
+
+                // SIMD: process 8 signals at a time
+                let mut k = s;
+                while k + 8 <= end {
+                    // Load 8 x-coords (i16) and sign-extend to i32
+                    let sx_16 = _mm_loadu_si128(grid.sig_x.as_ptr().add(k).cast::<__m128i>());
+                    let sx = _mm256_cvtepi16_epi32(sx_16);
+
+                    // Load 8 y-coords (i16) and sign-extend to i32
+                    let sy_16 = _mm_loadu_si128(grid.sig_y.as_ptr().add(k).cast::<__m128i>());
+                    let sy = _mm256_cvtepi16_epi32(sy_16);
+
+                    // Branchless wrap_delta x: d = sx - rx
+                    let mut ddx = _mm256_sub_epi32(sx, rx_v);
+                    // if d > half_gs: d -= grid_size
+                    let hi = _mm256_cmpgt_epi32(ddx, half_gs_v);
+                    ddx = _mm256_sub_epi32(ddx, _mm256_and_si256(hi, gs_v));
+                    // if d < -half_gs: d += grid_size
+                    let lo = _mm256_cmpgt_epi32(neg_half_gs_v, ddx);
+                    ddx = _mm256_add_epi32(ddx, _mm256_and_si256(lo, gs_v));
+
+                    // Branchless wrap_delta y: d = sy - ry
+                    let mut ddy = _mm256_sub_epi32(sy, ry_v);
+                    let hi = _mm256_cmpgt_epi32(ddy, half_gs_v);
+                    ddy = _mm256_sub_epi32(ddy, _mm256_and_si256(hi, gs_v));
+                    let lo = _mm256_cmpgt_epi32(neg_half_gs_v, ddy);
+                    ddy = _mm256_add_epi32(ddy, _mm256_and_si256(lo, gs_v));
+
+                    // Convert to f32 and compute dist_sq
+                    let dxf = _mm256_cvtepi32_ps(ddx);
+                    let dyf = _mm256_cvtepi32_ps(ddy);
+                    let dist_sq = _mm256_add_ps(_mm256_mul_ps(dxf, dxf), _mm256_mul_ps(dyf, dyf));
+
+                    // Which lanes are within range?
+                    let in_range = _mm256_cmp_ps(dist_sq, range_sq_v, _CMP_LT_OQ);
+                    let mut mask = _mm256_movemask_ps(in_range) as u32;
+
+                    if mask != 0 {
+                        let dist_arr: [f32; 8] = core::mem::transmute(dist_sq);
+                        let dx_arr: [f32; 8] = core::mem::transmute(dxf);
+                        let dy_arr: [f32; 8] = core::mem::transmute(dyf);
+
+                        while mask != 0 {
+                            let bit = mask.trailing_zeros() as usize;
+                            mask &= mask - 1;
+                            let sym = *grid.sig_sym.get_unchecked(k + bit) as usize;
+                            if sym < NUM_SYMBOLS && dist_arr[bit] < best_dist_sq[sym] {
+                                best_dist_sq[sym] = dist_arr[bit];
+                                best_dx[sym] = dx_arr[bit];
+                                best_dy[sym] = dy_arr[bit];
+                            }
+                        }
+                    }
+
+                    k += 8;
+                }
+
+                // Scalar tail for remaining 0-7 signals
+                let range_i = signal_range as i32;
+                while k < end {
+                    let ddx = {
+                        let d = i32::from(*grid.sig_x.get_unchecked(k)) - rx;
+                        if d > half_gs {
+                            d - grid_size_i
+                        } else if d < -half_gs {
+                            d + grid_size_i
+                        } else {
+                            d
+                        }
+                    };
+                    if ddx > range_i || ddx < -range_i {
+                        k += 1;
+                        continue;
+                    }
+                    let ddy = {
+                        let d = i32::from(*grid.sig_y.get_unchecked(k)) - ry;
+                        if d > half_gs {
+                            d - grid_size_i
+                        } else if d < -half_gs {
+                            d + grid_size_i
+                        } else {
+                            d
+                        }
+                    };
+                    if ddy > range_i || ddy < -range_i {
+                        k += 1;
+                        continue;
+                    }
+                    let dxf = ddx as f32;
+                    let dyf = ddy as f32;
+                    let dist_sq_val = dxf * dxf + dyf * dyf;
+                    if dist_sq_val < range_sq {
+                        let sym = *grid.sig_sym.get_unchecked(k) as usize;
+                        if sym < NUM_SYMBOLS && dist_sq_val < best_dist_sq[sym] {
+                            best_dist_sq[sym] = dist_sq_val;
+                            best_dx[sym] = dxf;
+                            best_dy[sym] = dyf;
+                        }
+                    }
+                    k += 1;
+                }
+            }
+        }
+    }
+
+    finish_reception(best_dist_sq, best_dx, best_dy, grid_size, signal_range)
+}
+
+/// Convert best-distance tracking arrays into final `ReceivedSignal` results.
+#[allow(clippy::similar_names)]
+fn finish_reception(
+    best_dist_sq: [f32; NUM_SYMBOLS],
+    best_dx: [f32; NUM_SYMBOLS],
+    best_dy: [f32; NUM_SYMBOLS],
+    grid_size: f32,
+    signal_range: f32,
+) -> [ReceivedSignal; NUM_SYMBOLS] {
     std::array::from_fn(|s| {
         if best_dist_sq[s] < f32::MAX {
             let dist = best_dist_sq[s].sqrt();
