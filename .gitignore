@@ -9,6 +9,7 @@ runs/
 *.log
 CLAUDE.md
 .claude/
+!.claude/autooptimize.toml
 figures/*.tar.gz
 figures/__pycache__/
 __pycache__/
