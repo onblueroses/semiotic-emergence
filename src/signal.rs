@@ -73,7 +73,6 @@ impl SignalGrid {
         for o in &mut self.offsets {
             *o = (0, 0);
         }
-        let mut count = 0u32;
         for sig in signals {
             if sig.tick_emitted >= current_tick {
                 continue;
@@ -82,22 +81,28 @@ impl SignalGrid {
             let cy = sig.y.rem_euclid(self.grid_size) / self.cell_size;
             let ci = (cy * self.cells_per_axis + cx) as usize;
             self.offsets[ci].1 += 1;
-            count += 1;
         }
-        // Prefix sum to compute start offsets
+        // Prefix sum with per-cell padding to multiples of 8.
+        // Padding slots get sentinel values so the AVX2 SIMD path can
+        // process every cell in 8-wide batches without a scalar tail.
         let mut running = 0u32;
+        let mut total_padded = 0u32;
         for ci in 0..total_cells {
             self.offsets[ci].0 = running;
-            running += u32::from(self.offsets[ci].1);
+            let len = u32::from(self.offsets[ci].1);
+            let padded_len = (len + 7) & !7;
+            running += padded_len;
+            total_padded += padded_len;
         }
-        // Fill SoA arrays using offsets[ci].0 as write cursor, then restore
-        let n = count as usize;
+        // Allocate SoA arrays with sentinel fill (i16::MAX fails distance check)
+        let n = total_padded as usize;
         self.sig_x.clear();
-        self.sig_x.resize(n, 0);
+        self.sig_x.resize(n, i16::MAX);
         self.sig_y.clear();
-        self.sig_y.resize(n, 0);
+        self.sig_y.resize(n, i16::MAX);
         self.sig_sym.clear();
-        self.sig_sym.resize(n, 0);
+        self.sig_sym.resize(n, 0xFF);
+        // Scatter signals using offsets[ci].0 as write cursor, then restore
         for sig in signals {
             if sig.tick_emitted >= current_tick {
                 continue;
@@ -111,7 +116,7 @@ impl SignalGrid {
             self.sig_sym[pos] = sig.symbol;
             self.offsets[ci].0 += 1;
         }
-        // Restore start offsets (each was advanced by len)
+        // Restore start offsets (each was advanced by actual len, not padded)
         for ci in 0..total_cells {
             self.offsets[ci].0 -= u32::from(self.offsets[ci].1);
         }
@@ -336,11 +341,13 @@ unsafe fn receive_detailed_grid_avx2(
                     continue;
                 }
                 let s = start as usize;
-                let end = s + len as usize;
+                // Cells are padded to multiples of 8 with i16::MAX sentinels,
+                // so we can process the full padded range in SIMD batches.
+                let end_padded = s + ((len as usize + 7) & !7);
 
-                // SIMD: process 8 signals at a time
+                // SIMD: process all signals in 8-wide batches (no scalar tail)
                 let mut k = s;
-                while k + 8 <= end {
+                while k + 8 <= end_padded {
                     // Load 8 x-coords (i16) and sign-extend to i32
                     let sx_16 = _mm_loadu_si128(grid.sig_x.as_ptr().add(k).cast::<__m128i>());
                     let sx = _mm256_cvtepi16_epi32(sx_16);
@@ -394,50 +401,8 @@ unsafe fn receive_detailed_grid_avx2(
                     k += 8;
                 }
 
-                // Scalar tail for remaining 0-7 signals
-                let range_i = signal_range as i32;
-                while k < end {
-                    let ddx = {
-                        let d = i32::from(*grid.sig_x.get_unchecked(k)) - rx;
-                        if d > half_gs {
-                            d - grid_size_i
-                        } else if d < -half_gs {
-                            d + grid_size_i
-                        } else {
-                            d
-                        }
-                    };
-                    if ddx > range_i || ddx < -range_i {
-                        k += 1;
-                        continue;
-                    }
-                    let ddy = {
-                        let d = i32::from(*grid.sig_y.get_unchecked(k)) - ry;
-                        if d > half_gs {
-                            d - grid_size_i
-                        } else if d < -half_gs {
-                            d + grid_size_i
-                        } else {
-                            d
-                        }
-                    };
-                    if ddy > range_i || ddy < -range_i {
-                        k += 1;
-                        continue;
-                    }
-                    let dxf = ddx as f32;
-                    let dyf = ddy as f32;
-                    let dist_sq_val = dxf * dxf + dyf * dyf;
-                    if dist_sq_val < range_sq {
-                        let sym = *grid.sig_sym.get_unchecked(k) as usize;
-                        if sym < NUM_SYMBOLS && dist_sq_val < best_dist_sq[sym] {
-                            best_dist_sq[sym] = dist_sq_val;
-                            best_dx[sym] = dxf;
-                            best_dy[sym] = dyf;
-                        }
-                    }
-                    k += 1;
-                }
+                // No scalar tail needed: SoA arrays are padded to allow
+                // 8-wide overread, sentinels fail distance check.
             }
         }
     }
