@@ -50,7 +50,7 @@ determinism_seed = 42
 determinism_gens = 10
 min_improvement_pct = 2.0
 max_consecutive_failures = 5
-max_experiments = 5
+max_experiments = 50
 
 [context]
 performance_doc = "PERFORMANCE.md"
