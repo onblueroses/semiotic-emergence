@@ -906,30 +906,105 @@ The gate neuron can't learn context-dependent emission because there's no evolut
 
 ---
 
+## Era 15: Poison Food (Environmental Vocabulary Pressure)
+
+*Question: Can invisible poison food - requiring two distinct messages ("good food" vs "bad food") to outperform one generic beacon - create vocabulary pressure that 14 eras of architectural and population changes could not?*
+
+**New mechanic (v15):** `--poison-ratio F` makes a fraction of food items deal -0.3 energy instead of +0.3 on consumption. Poison food is visually identical to good food (same nearest-food inputs 3-5). Prey learn only through `energy_delta` (input 1) going negative after eating. Creates information asymmetry: a prey that ate poison knows the location is dangerous, others don't. A generic "food here" beacon now actively harms receivers by attracting them to poison.
+
+**Performance:** AVX2 SIMD signal reception (+8.7% throughput via autooptimize experiments 004/007). VPS znver3 target. 384-pop runs: ~330-356 gen/min at metrics-interval=10 with 3 cores each.
+
+### v15-psn30-42: 30% poison, 384 pop (seed 42, 244k gens)
+
+**Parameters:** pop=384, grid=56, shared-layer+gate, poison-ratio=0.3, metrics-interval=10. All other params at v14 defaults.
+
+**Results:**
+
+1. **response_fit_corr genuinely positive - first time at 384 pop.** 65% of nonzero measurements positive, mean +0.078. Controlled for signal volume: positive rfc persists within signal-count quartiles (partial correlation). Historical comparison: v11-cap6 34% positive, v11-cap32 62%, v13-2k 6%. Poison food shifted the distribution meaningfully.
+
+2. **Quality over quantity.** Fewer signals correlate with higher rfc. Q1 (lowest signal count): rfc=+0.23. Q4 (highest): rfc=+0.02. When signals triple in the middle epoch, rfc goes negative. The population periodically stumbles into low-signal, high-information regimes but can't sustain them.
+
+3. **Signals still net negative.** Counterfactual (v15-mute-psn30-42, 231k gens): mute prey -7.4% to -9.7% fitter than signal prey across all epochs. Gap never narrows. Signal prey eat 189-406 less poison per gen AND die 23-36 more to zones. The signaling cost + zone death increase outweighs the poison discrimination benefit.
+
+4. **energy_delta_mi dead.** 0% above 0.01 in the tail across all runs. Prey don't signal about poison encounters despite energy_delta being the only channel for poison information. The gen-990 transient didn't persist.
+
+5. **Beacon attractor intact.** Signal entropy 0.23-0.77, one symbol dominates. No vocabulary diversification despite the two-message environment.
+
+6. **Brain: 6.2 hidden neurons** (vs mute 12.4). Signal brains collapsed to near-minimum. The signal channel doesn't justify neural investment at 30% poison.
+
+### v15-psn50-42: 50% poison, 384 pop (seed 42, 224k gens)
+
+**Parameters:** Same as psn30 except poison-ratio=0.5.
+
+**Results:**
+
+1. **Stronger rfc shift.** 77% positive, mean +0.125. More poison = stronger symbol differentiation pressure. Dose-response relationship confirms poison is the causal variable, not drift.
+
+2. **Brain divergence.** Signal brains grew to 14.9 hidden neurons (vs mute 12.4, psn30-signal 6.2). 50% poison forces neural investment in memory processing (top input MI = memory cells), not signal processing.
+
+3. **food_mi weak but present.** 0.076-0.095 across epochs. Signals carry some food information but not enough to overcome cost.
+
+4. **Same counterfactual gap.** Mute prey still fitter. 50% poison doesn't close it.
+
+### v15-mute-psn30-42: Mute control (seed 42, 231k gens)
+
+**Parameters:** Same as psn30 plus --no-signals. Counterfactual baseline.
+
+**Results:** Fitness 7.4-9.7% higher than signal runs across all epochs. Brain stabilizes at 12.4 hidden neurons. Eats more poison per gen (189-406 more) but dies less to zones (23-36 fewer). The net fitness advantage of silence persists throughout.
+
+### v15-psn30-2k-42: 2000 pop, 30% poison (seed 42, IN PROGRESS)
+
+**Parameters:** pop=2000, grid=100, poison-ratio=0.3, metrics-interval=10. Running on VPS with all 12 cores, ~130 gen/min. Target: 100k+ gens.
+
+**Status:** At gen ~14k as of 2026-03-26. The real test: does the positive rfc at 384 pop translate to positive signal value at 2000 pop, where population density provides the receiver base that 384 lacks?
+
+### Diagnosis
+
+Poison food achieved what no prior intervention could: **genuinely positive response_fit_corr at 384 pop**. Prey that differentiate behavior across received symbols DO survive better in a poison environment, and the effect scales with poison pressure (30% -> 50%). This is the first evidence that environmental complexity - not architecture or population - is the missing ingredient for symbol differentiation.
+
+But the effect is insufficient. Three problems remain:
+
+1. **Signal cost exceeds discrimination benefit.** Even though symbol-differentiating prey are fitter *among signal users*, signal users as a class are still less fit than mute prey. The cost of producing and processing signals outweighs the poison avoidance benefit.
+
+2. **energy_delta_mi = 0.** The obvious encoding (signal about recent energy change, which captures poison encounters) never evolves. Prey don't signal about poison - they signal about the same things as always (food proximity, spatial context). The positive rfc comes from incidental signal-context correlations (spandrels), not learned poison communication.
+
+3. **Beacon attractor holds.** One symbol still dominates. The environment technically supports two messages but the evolutionary path from beacon to vocabulary requires crossing a fitness valley: the intermediate state (two symbols, neither established as convention) is worse than the starting state (one dominant symbol everyone recognizes).
+
+**What this tells us about vocabulary emergence:** The fitness landscape has a local optimum at "one dominant signal" that is lower than the global optimum at "two distinct signals for different food types," but the valley between them is too wide for mutation to cross at 384 pop. Population scale may provide the diversity to explore both basins simultaneously - hence the 2k run.
+
+### Next steps
+
+1. **Analyze v15-psn30-2k-42** when it reaches 100k+ gens. Key question: does the positive rfc at 384 pop translate to positive counterfactual signal value at 2000 pop?
+2. **2k mute counterfactual** (v15-mute-psn30-2k-42) needed to measure signal value at scale.
+3. **Higher poison ratios at 2k** if 30% shows promise.
+
+---
+
 ## Parameter History
 
 Tracks every significant parameter change and why.
 
-| Parameter | Era 1 | Era 2 (ph1) | Era 2 (ph2) | Era 2 (ph4) | Era 3 | Era 4 | v6 | v7 | v8 | GPU | v13 | v14 |
-|-----------|-------|-------------|-------------|-------------|-------|-------|----|----|----|----|-----|-----|
-| Population | 48 | 384 | 384 | 384 | 384 | 384 | 384 | 1000 | 384 | **5000** | **2000** | 384/2000 |
-| Grid | 20 | 56 | 56 | 56 | 56 | 56 | 56 | 72 | 56 | **150** | **100** | 56/100 |
-| Threat | 2 pred (vis) | 16 pred (vis) | 16 pred (vis) | 3 pred (vis) | 3 pred (vis) | 3 zones | 3 flee + 2 freeze | same | same | 5 flee + 2 freeze | 3 flee + 2 freeze | 3 flee + 2 freeze |
-| Threat speed | - | 8 | 4 | 4 | round(scale) | 0.5 prob | 0.5 prob | 0.5 prob | 0.5 | 3.75 | 0.5 | 0.5 |
-| Hidden layer | 6 fixed | 4-16 evolv | 4-16 evolv | 4-124 evolv | 4-64b + 2-32s | same | same | same | same | same | same | **4-64 shared** |
-| Symbols | 3 | 3 | 3 | 3 | 6 | 6 | 6 | 6 | 6 | 6 | 6 | 6 |
-| Signal cost | 0.01 | 0.01 | 0.0 | 0.002 | 0.002 | 0.002 | 0.002 | 0.0002 | 0.002 | 0.015 | 0.002 | 0.002 |
-| Neuron cost | 0 | 0.0002 | 0.00002 | 0.00002 | 0.00001 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 |
-| Evasion boost | no | no | yes | no | no | no | no | no | no | no | no | no |
-| Vision | 4.0 | 11.2 | 11.2 | 11.2 | 5.6 | 5.6 | 5.6 | 5.6 | 5.6/1.4 | global | 10 | 5.6/10 |
-| Signal range | 8.0 | 22.4 | 22.4 | 22.4 | 22.4 | 22.4 | 22.4 | 16 | 22.4 | 60 | 40 | 22.4/40 |
-| Memory | no | no | no | no | 8 cells | 8 cells | 8 cells | 8 cells | 8 cells | 8 cells | 8 cells | 8 cells |
-| Patches | no | no | no | no | 50% | 50% | 50% | 50% | 50% | 50% | 50% | 50% |
-| Kin fitness | no | no | no | no | 0.5/0.25 | 0.5/0.25 | 0.5/0.25 | 0.25 | 0.10 | 0.10 | 0.10 | 0.10 |
-| Zone drain | - | - | - | - | - | 0.02 | 0.02 | 0.05 | 0.02 | 0.15 | 0.02 | 0.02 |
-| Food | 25 | 200 | 200 | 100 | 100 | 100 | 100 | 100 | 100 | 750 | **520** | 100/520 |
-| Freeze zones | - | - | - | - | - | no | 2 | 2 | 2 | 2 | 2 | 2 |
-| Death echoes | - | - | - | - | - | no | no | yes | **off** | no | yes | yes |
-| Demes | - | - | - | - | - | no | no | 3x3 | 1/4x4 | no | no | no |
-| Sig threshold | - | - | - | - | - | 1/6 | 1/6 | 0.3 | 1/6 | 1/6 | 1/6 | 1/6 |
-| Architecture | - | - | - | - | split-head | same | same | same | same | same | same | **shared-layer+gate** |
+| Parameter | Era 1 | Era 2 (ph1) | Era 2 (ph2) | Era 2 (ph4) | Era 3 | Era 4 | v6 | v7 | v8 | GPU | v13 | v14 | v15 |
+|-----------|-------|-------------|-------------|-------------|-------|-------|----|----|----|----|-----|-----|-----|
+| Population | 48 | 384 | 384 | 384 | 384 | 384 | 384 | 1000 | 384 | **5000** | **2000** | 384/2000 | 384/**2000** |
+| Grid | 20 | 56 | 56 | 56 | 56 | 56 | 56 | 72 | 56 | **150** | **100** | 56/100 | 56/100 |
+| Threat | 2 pred (vis) | 16 pred (vis) | 16 pred (vis) | 3 pred (vis) | 3 pred (vis) | 3 zones | 3 flee + 2 freeze | same | same | 5 flee + 2 freeze | 3 flee + 2 freeze | 3 flee + 2 freeze | same |
+| Threat speed | - | 8 | 4 | 4 | round(scale) | 0.5 prob | 0.5 prob | 0.5 prob | 0.5 | 3.75 | 0.5 | 0.5 | 0.5 |
+| Hidden layer | 6 fixed | 4-16 evolv | 4-16 evolv | 4-124 evolv | 4-64b + 2-32s | same | same | same | same | same | same | **4-64 shared** | same |
+| Symbols | 3 | 3 | 3 | 3 | 6 | 6 | 6 | 6 | 6 | 6 | 6 | 6 | 6 |
+| Signal cost | 0.01 | 0.01 | 0.0 | 0.002 | 0.002 | 0.002 | 0.002 | 0.0002 | 0.002 | 0.015 | 0.002 | 0.002 | 0.002 |
+| Neuron cost | 0 | 0.0002 | 0.00002 | 0.00002 | 0.00001 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 |
+| Evasion boost | no | no | yes | no | no | no | no | no | no | no | no | no | no |
+| Vision | 4.0 | 11.2 | 11.2 | 11.2 | 5.6 | 5.6 | 5.6 | 5.6 | 5.6/1.4 | global | 10 | 5.6/10 | 5.6/10 |
+| Signal range | 8.0 | 22.4 | 22.4 | 22.4 | 22.4 | 22.4 | 22.4 | 16 | 22.4 | 60 | 40 | 22.4/40 | 22.4/40 |
+| Memory | no | no | no | no | 8 cells | 8 cells | 8 cells | 8 cells | 8 cells | 8 cells | 8 cells | 8 cells | 8 cells |
+| Patches | no | no | no | no | 50% | 50% | 50% | 50% | 50% | 50% | 50% | 50% | 50% |
+| Kin fitness | no | no | no | no | 0.5/0.25 | 0.5/0.25 | 0.5/0.25 | 0.25 | 0.10 | 0.10 | 0.10 | 0.10 | 0.10 |
+| Zone drain | - | - | - | - | - | 0.02 | 0.02 | 0.05 | 0.02 | 0.15 | 0.02 | 0.02 | 0.02 |
+| Food | 25 | 200 | 200 | 100 | 100 | 100 | 100 | 100 | 100 | 750 | **520** | 100/520 | 100/520 |
+| Freeze zones | - | - | - | - | - | no | 2 | 2 | 2 | 2 | 2 | 2 | 2 |
+| Death echoes | - | - | - | - | - | no | no | yes | **off** | no | yes | yes | yes |
+| Demes | - | - | - | - | - | no | no | 3x3 | 1/4x4 | no | no | no | no |
+| Sig threshold | - | - | - | - | - | 1/6 | 1/6 | 0.3 | 1/6 | 1/6 | 1/6 | 1/6 | 1/6 |
+| Architecture | - | - | - | - | split-head | same | same | same | same | same | same | **shared-layer+gate** | same |
+| **Poison** | - | - | - | - | - | - | - | - | - | - | - | - | **0.3/0.5** |
