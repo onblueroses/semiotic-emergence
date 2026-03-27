@@ -56,6 +56,10 @@ Every significant run, its parameters, and headline result.
 | v13-2k-42 | 13 | 42 | 100,000 | pop=2000, grid=100, zone-radius=14, food=520, metrics-interval=10 | **receiver_fit_corr=0.74**, food_mi=0.14, symbol collapse to 4, response_fit_corr=-0.29 |
 | v14-baseline-42 | 14 | 42 | 86,070 | pop=384, shared-layer arch, metrics-interval=10 | MI noise floor, beacon attractor, response_fit_corr=-0.10 |
 | v14-2k-42 | 14 | 42 | 21,880 | pop=2000, grid=100, shared-layer arch, metrics-interval=10 | Heading toward silence (emission 28%), food_mi transient |
+| v15-psn30-42 | 15 | 42 | 244,000 | pop=384, poison=0.3, shared-layer+gate | rfc +0.078 (65% pos), signals net -7.4%, beacon holds |
+| v15-psn50-42 | 15 | 42 | 224,000 | pop=384, poison=0.5, shared-layer+gate | rfc +0.125 (77% pos), dose-response confirmed |
+| v15-mute-psn30-42 | 15 | 42 | 231,000 | pop=384, poison=0.3, --no-signals | Counterfactual baseline, 7.4-9.7% fitter than signal |
+| v15-psn30-2k-42 | 15 | 42 | 187,850 | pop=2000, grid=100, poison=0.3, metrics-interval=10 | **rfc +0.12 (95% pos last 10%)**, brain collapse/regrowth, vocabulary stratification |
 
 Raw data: `data/` contains CSV output for each run listed above. See `data/README.md` for column formats.
 
@@ -952,17 +956,40 @@ The gate neuron can't learn context-dependent emission because there's no evolut
 
 **Results:** Fitness 7.4-9.7% higher than signal runs across all epochs. Brain stabilizes at 12.4 hidden neurons. Eats more poison per gen (189-406 more) but dies less to zones (23-36 fewer). The net fitness advantage of silence persists throughout.
 
-### v15-psn30-2k-42: 2000 pop, 30% poison (seed 42, IN PROGRESS)
+### v15-psn30-2k-42: 2000 pop, 30% poison (seed 42, 187,850 gens)
 
-**Parameters:** pop=2000, grid=100, poison-ratio=0.3, metrics-interval=10. Running on VPS with all 12 cores, ~130 gen/min. Target: 100k+ gens.
+**Parameters:** pop=2000, grid=100, poison-ratio=0.3, metrics-interval=10. VPS with 12 cores (taskset 0-11), RAYON_NUM_THREADS=12. Throughput: ~132 gen/min sustained over 23 hours. Git commit 997207c.
 
-**Status:** At gen ~14k as of 2026-03-26. The real test: does the positive rfc at 384 pop translate to positive signal value at 2000 pop, where population density provides the receiver base that 384 lacks?
+**Results:**
+
+1. **response_fit_corr strongest in project history.** Overall rfc=+0.04 (67% positive), last 10% rfc=+0.12 (95% positive). Compare v13-2k (no poison): rfc=-0.13 (6% positive). Poison flipped rfc from deeply negative to strongly positive at 2000 pop, confirming the 384-pop signal and exceeding it.
+
+2. **Three evolutionary regimes.**
+   - Regime A (0-66k): Bootstrap. Brain 4-5, volatile signals (0-13k/gen), rfc nascent +0.02 (60% pos). recv_fit +0.24.
+   - Regime B (66k-155k): Brain expansion + crash. Brains grow 8->24, then population goes near-silent (263 sig/gen avg). recv_fit flips to -0.39 (unprecedented). Brains collapse to 7 at gen 155k.
+   - Regime C (155k-188k): Recovery + consolidation. Brains regrow to 14-17 with different architecture. rfc surges to +0.10 (89% pos), strengthening to +0.12 (95%). Signal channel MI 10x higher than growth phase (0.50 vs 0.05).
+
+3. **Brain collapse as creative destruction.** Brains peaked at 24 (90-105k), crashed to 7 (155-162k), regrew to 17 (188k). The regrown brain produces 10x higher signal channel MI (0.50 vs 0.05), more active symbols (4 vs 2-3), and higher entropy (0.72 vs 0.12). The collapse destroyed an architecture that couldn't support multi-symbol communication; the regrowth rebuilt one that could.
+
+4. **Vocabulary stratification - first evidence of functional roles.** sym5=beacon (82% usage, JSD 0.002, poison r=-0.143). sym1=poison-correlated (9%, JSD 0.031, poison r=+0.291). sym2=rare alarm (2%, JSD 0.109, strongest behavioral differentiation). sym1 and sym5 have opposite poison correlations - the beginnings of a two-convention vocabulary.
+
+5. **Quality over quantity at extreme scale.** v13 (no poison): 846k signals/gen, rfc=-0.13. v15: 111 signals/gen (7,600x fewer), rfc=+0.12. Fewer signals = higher information content per signal.
+
+6. **Altruistic signaling pattern.** sender_fit consistently negative (-0.03 to -0.11) and getting MORE negative in Regime C, while rfc simultaneously strengthens. Senders pay a fitness cost; receivers benefit from content. The altruism gap (rfc - sender_fit) widened from +0.16 to +0.22.
+
+7. **Silence response strongest in project history.** silence_move_delta=+0.24 in Regime B - receivers increase movement 24% when signals vanish. Even during near-silence, rare signals calibrate receiver behavior.
+
+8. **Memory dominance.** Memory MI (0.69 total) exceeds direct perception MI (0.37) in Regime C. All 8 memory channels highly correlated (r=0.6-0.9). Signals encode temporal context (accumulated recurrent state), not instantaneous perception.
+
+9. **energy_delta_mi still zero.** Despite poison creating energy_delta variation, prey don't signal about individual energy change. The sym1-poison correlation operates at the population level (more poison seasons = more sym1), not the individual level (I ate poison -> emit sym1).
+
+10. **recv_fit flipped negative.** In Regime B, recv_fit=-0.39 - unprecedented across all runs. Signal reception correlated with LOWER fitness during the evolutionary winter. The spatial confound that usually inflates recv_fit was overwhelmed by signal-associated costs.
 
 ### Diagnosis
 
 Poison food achieved what no prior intervention could: **genuinely positive response_fit_corr at 384 pop**. Prey that differentiate behavior across received symbols DO survive better in a poison environment, and the effect scales with poison pressure (30% -> 50%). This is the first evidence that environmental complexity - not architecture or population - is the missing ingredient for symbol differentiation.
 
-But the effect is insufficient. Three problems remain:
+At 384 pop, the effect is insufficient - three problems remain:
 
 1. **Signal cost exceeds discrimination benefit.** Even though symbol-differentiating prey are fitter *among signal users*, signal users as a class are still less fit than mute prey. The cost of producing and processing signals outweighs the poison avoidance benefit.
 
@@ -970,13 +997,22 @@ But the effect is insufficient. Three problems remain:
 
 3. **Beacon attractor holds.** One symbol still dominates. The environment technically supports two messages but the evolutionary path from beacon to vocabulary requires crossing a fitness valley: the intermediate state (two symbols, neither established as convention) is worse than the starting state (one dominant symbol everyone recognizes).
 
-**What this tells us about vocabulary emergence:** The fitness landscape has a local optimum at "one dominant signal" that is lower than the global optimum at "two distinct signals for different food types," but the valley between them is too wide for mutation to cross at 384 pop. Population scale may provide the diversity to explore both basins simultaneously - hence the 2k run.
+**At 2000 pop, population scale amplifies the effect but doesn't resolve it.** The 2k run (v15-psn30-2k-42, 187k gens) shows:
+
+- **rfc is much stronger** (+0.12 vs +0.078 at 384), reaching 95% positive in the final 10%. The strengthening trend continued through termination.
+- **Vocabulary shows functional stratification** for the first time: sym5 (beacon, anti-poison r=-0.143), sym1 (poison-correlated, r=+0.291), sym2 (rare alarm, highest behavioral differentiation JSD=0.109). This is more than a beacon - it's the first evidence of distinct communicative roles.
+- **Brain collapse as creative destruction.** The population went through a 90k-gen evolutionary winter (brains 24->7->17) that destroyed an architecture unable to support multi-symbol communication and rebuilt one that could. Signal channel MI increased 10x post-collapse.
+- **Altruistic signaling pattern.** sender_fit getting more negative while rfc strengthens. Senders pay increasing costs; receivers benefit increasingly from content.
+- **The beacon still dominates** (sym5 at 82%), but the minority symbols carry distinct information. This isn't vocabulary in the full sense - it's a beacon with functional annotations.
+- **energy_delta_mi still zero.** The sym1-poison correlation is at the population level (more poison seasons = more sym1), not individual (I ate poison -> emit sym1).
+
+**What this tells us about vocabulary emergence:** Population scale amplifies the signal quality effect found at 384 pop - rfc is stronger, vocabulary structure is richer, and the dynamics show creative destruction that rebuilds better signal architectures. But the beacon attractor persists, and the missing counterfactual means we don't know if this translates to net adaptive value.
 
 ### Next steps
 
-1. **Analyze v15-psn30-2k-42** when it reaches 100k+ gens. Key question: does the positive rfc at 384 pop translate to positive counterfactual signal value at 2000 pop?
-2. **2k mute counterfactual** (v15-mute-psn30-2k-42) needed to measure signal value at scale.
-3. **Higher poison ratios at 2k** if 30% shows promise.
+1. **Mute counterfactual at 2k** (v15-mute-psn30-2k-42). The single most important missing piece. Does the strong rfc (+0.12) translate to positive signal value, or are mute prey still fitter? At 384 pop, rfc was positive but signals were -7 to -10% vs mute. The 2k run has much stronger rfc AND much lower signal volume - this could be the configuration where signals tip positive.
+2. **Different seeds at 2k+poison** to test reproducibility. The sym1-poison / sym5-beacon pattern could be contingent on seed 42.
+3. **50% poison at 2k** if 30% counterfactual is promising. The 384-pop dose-response (30% -> 50% poison increased rfc from +0.078 to +0.125) suggests higher poison would strengthen the effect further.
 
 ---
 

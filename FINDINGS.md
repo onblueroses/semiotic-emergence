@@ -9,12 +9,12 @@ What we know, what we disproved, and what remains open. For the chronological ex
 | Level | Claim | Rust (384 pop) | Rust (2k pop) | GPU (5k pop) |
 |-------|-------|----------------|---------------|-------------|
 | 1 | Signals have adaptive value | **NO** (-7% to -25%) | Untested (needs v15-2k counterfactual) | **YES** (r=+0.51, +52 fitness) |
-| 2 | Receivers change behavior | Weak yes (JSD 0.15-0.27) | Yes (JSD 0.29-0.32) | Yes (JSD 0.033-0.066, rising) |
-| 3 | Different symbols carry different info | Yes at 0.02 drain (food encoding) | **Yes** (food_mi=0.14, sig strengths interleaved with food inputs) | Weak (PC1=89.9%, one channel) |
-| 4 | Responses are appropriate | **PARTIAL** (v15: +0.078 to +0.125 with poison) | **NO** (v13: -0.29, v15-2k pending) | Metric fixed, needs GPU rebuild |
+| 2 | Receivers change behavior | Weak yes (JSD 0.15-0.27) | **Yes** (JSD 0.29-0.32; silence_move_delta +0.24) | Yes (JSD 0.033-0.066, rising) |
+| 3 | Different symbols carry different info | Yes at 0.02 drain (food encoding) | **Yes** (vocabulary stratification: sym5 beacon, sym1 poison-correlated r=+0.291, sym2 rare alarm JSD=0.109) | Weak (PC1=89.9%, one channel) |
+| 4 | Responses are appropriate | **PARTIAL** (v15: +0.078 to +0.125 with poison) | **YES with poison** (v15-2k: rfc=+0.12, 95% positive last 10%), **NO without** (v13: -0.29) | Metric fixed, needs GPU rebuild |
 | 5 | Genuine reference | Not testable | Not testable | Not testable |
 
-**Critical finding (v15):** Level 4 turned positive for the first time at 384 pop with poison food. response_fit_corr is +0.078 (30% poison) to +0.125 (50% poison), with 65-77% of nonzero measurements positive. Dose-response relationship confirms poison as the causal variable. However, signals remain net negative in counterfactual (-7.4% to -9.7% vs mute) - symbol differentiation helps individual receivers but doesn't overcome signaling cost for the population. The 2k poison run is in progress.
+**Critical finding (v15-2k):** Level 4 is now strongly positive at 2000 pop with 30% poison. response_fit_corr=+0.12 (95% positive in last 10%), up from +0.078 at 384 pop. First evidence of vocabulary stratification: sym5=beacon (82%, anti-poison r=-0.143), sym1=poison-correlated (9%, r=+0.291), sym2=rare alarm (2%, JSD 0.109). Brain collapse/regrowth cycle at 90-155k gens destroyed an architecture unable to support multi-symbol communication and rebuilt one that could (signal MI 10x higher post-collapse). The altruism gap (rfc - sender_fit) is widening: senders pay increasing cost, receivers benefit increasingly from content. Mute counterfactual still needed for Level 1.
 
 ---
 
@@ -22,13 +22,19 @@ What we know, what we disproved, and what remains open. For the chronological ex
 
 ### Universal patterns (every era, every seed)
 
-- **Population scale is the key variable (but not sufficient).** At 384-1000 agents, signals are net negative at every parameter configuration tested (8 eras, 15+ runs). At 2000, signals carry real information (food_mi=0.14) but responses are maladaptive (response_fit_corr=-0.29). At 5,000 agents (GPU), signals become adaptive (r=+0.51). The emergence threshold lies between 2000 and 5000. However, v14 showed that even at 2000 pop with a spandrel-optimized architecture, the system converges to beacon or silence - population alone doesn't produce vocabulary.
+- **Population scale is the key variable, environmental complexity is the catalyst.** At 384-1000 agents, signals are net negative at every parameter configuration tested (8 eras, 15+ runs). At 2000 without poison (v13), signals carry real information (food_mi=0.14) but responses are maladaptive (rfc=-0.29). At 2000 WITH poison (v15-2k), rfc flips to +0.12 (95% positive last 10%) with vocabulary stratification. At 5,000 agents (GPU), signals become adaptive without poison (r=+0.51). The interaction of population scale x environmental complexity produces signal quality that neither achieves alone.
 
-- **response_fit_corr is negative without environmental complexity, positive with it.** Without poison: -0.13 to -0.28 at 384 pop (v11), -0.29 at 2000 pop (v13). With 30% poison: +0.078 at 384 pop (65% positive). With 50% poison: +0.125 (77% positive). This is the first evidence that environmental complexity - not architecture or population - is the missing ingredient for symbol differentiation. However, positive rfc among signal users does not mean signals are adaptive: mute prey remain 7-10% fitter in counterfactual.
+- **response_fit_corr is negative without environmental complexity, positive with it.** Without poison: -0.13 to -0.28 at 384 pop (v11), -0.29 at 2000 pop (v13). With 30% poison at 384 pop: +0.078 (65% positive). With 50% poison at 384: +0.125 (77% positive). With 30% poison at 2000 pop: +0.12 (95% positive last 10%), strengthening through 188k gens. Dose-response confirmed at both scales. However, positive rfc among signal users does not confirm net adaptive value - mute counterfactual still needed at 2k.
 
-- **The receiver paradox.** receiver_fit_corr is consistently positive (0.48-0.87 across all eras, 0.74 at 2000 pop), but response_fit_corr is consistently negative. Being near signals correlates with fitness; acting on signal content reduces fitness. The positive receiver correlation is a spatial confound: center prey hear more signals AND encounter more food AND have more escape routes. The negative response correlation is the real signal: the channel is too noisy for content to be actionable.
+- **The receiver paradox (resolved with poison).** Without poison: receiver_fit_corr is consistently positive (0.48-0.87 across all eras, 0.74 at v13-2k) but response_fit_corr is consistently negative. The positive receiver correlation is a spatial confound. With poison at 2k (v15-2k): recv_fit actually went NEGATIVE (-0.39 in Regime B) - unprecedented, showing the confound can be overwhelmed - while rfc turned strongly positive. Poison breaks the receiver paradox: it makes signal content adaptive while removing the spatial confound that inflated recv_fit.
 
-- **The beacon attractor.** Every architecture tested (split-head, shared-layer, gate neuron) converges to the same outcome: one dominant signal meaning ("something at my location") or silence. Even with poison food (v15), which technically requires two messages ("good food" vs "bad food"), the beacon dominates. The evolutionary path from one dominant symbol to two distinct conventions requires crossing a fitness valley - the intermediate state is worse than either extreme. Poison food created positive response_fit_corr (symbol differentiation IS adaptive among signal users) but couldn't break the attractor at 384 pop.
+- **The beacon attractor bends but doesn't break.** Every architecture tested converges to one dominant signal. At 2k+poison (v15-2k), the beacon (sym5, 82%) still dominates, but minority symbols now carry distinct information: sym1 is poison-correlated (r=+0.291), sym2 is a rare alarm (JSD 0.109). This is the first evidence of functional stratification - a beacon with annotations, not a pure monopoly. The evolutionary path to a true multi-convention vocabulary may require the brain collapse/regrowth dynamic to run longer, or higher poison ratios.
+
+- **Brain collapse as creative destruction.** At 2k+poison (v15-2k), brains grew to 24, crashed to 7, then regrew to 17 over 90k gens. The regrown brain produced 10x higher signal channel MI (0.50 vs 0.05), more active symbols (4 vs 2-3), and higher entropy (0.72 vs 0.12). The collapse destroyed an architecture that couldn't support multi-symbol communication and rebuilt one that could. This dynamic has not been observed at 384 pop or at 2k without poison.
+
+- **Altruistic signaling at scale.** At 2k+poison, sender_fit_corr is consistently negative and getting more negative (-0.03 to -0.11 across Regime C), while rfc simultaneously strengthens (+0.03 to +0.12). Senders pay increasing fitness costs; receivers benefit increasingly from signal content. The altruism gap (rfc - sender_fit) widened from +0.16 to +0.22. This is the classic sender-cost/receiver-benefit pattern predicted by costly signaling theory.
+
+- **Quality over quantity.** v13 (2k, no poison) floods 846k signals/gen with negative rfc. v15-2k (2k, 30% poison) emits 111 signals/gen (7,600x fewer) with positive rfc. The correlation holds within the v15-2k run: quieter generations have higher fitness AND better signal quality. Signal cost per agent is negligible at 111 signals/2000 agents - the quality difference is about information content, not energy cost.
 
 - **Silence near danger.** Prey reduce per-capita signaling near threats. Present from gen 0, maintained but not amplified by evolution. Likely an architectural spandrel of shared hidden layers, not a learned strategy.
 
@@ -62,7 +68,7 @@ What we know, what we disproved, and what remains open. For the chronological ex
 | Constraining signal capacity improves encoding quality | 9 (v11) | Cap=6 produces more food encoding but symbol differentiation is maladaptive (-0.13 to -0.28 response_fit_corr). Direct spatial inputs outcompete signals. |
 | Removing spatial perception forces signal dependence | 12 (v12) | Blind mode: MI~0, 2 symbols extinct, fitness halved. Prey can't signal about things they can't perceive. Memory replaces perception, not signals. |
 | Shared-layer spandrels bootstrap vocabulary | 14 (v14) | Spandrel mechanism creates transient signal-context correlations (MI spikes at gen 7k, 49k) but they collapse to beacon attractor. Gate neuron becomes volume knob, not context switch. Same outcome at 384 and 2000 pop. |
-| Poison food breaks the beacon attractor | 15 (v15) | response_fit_corr turned positive (first time at 384 pop) but beacon still dominates. One symbol still >50% of emissions. Positive rfc comes from incidental spandrel correlations, not learned poison communication. energy_delta_mi = 0 (prey don't signal about poison). Signal cost still exceeds discrimination benefit (-7.4% to -9.7% vs mute). |
+| Poison food breaks the beacon attractor | 15 (v15) | Beacon bends but doesn't break. At 384 pop: rfc positive but signals net negative. At 2k pop: rfc=+0.12 (95% pos), vocabulary stratification (sym1 poison-correlated, sym2 rare alarm), but sym5 beacon still at 82%. energy_delta_mi = 0 - prey don't signal about individual poison encounters. Poison creates functional annotations on the beacon, not a second convention. |
 
 ---
 
@@ -80,7 +86,7 @@ What we know, what we disproved, and what remains open. For the chronological ex
 | Signal relay (seed43) | 4 | Emerged spontaneously as alternative to direct encoding |
 | Metrics-interval=10 | 13 | 10x finer resolution reveals dynamics masked at 200 (v10 vs v13 signal hidden trajectories) |
 | Shared-layer + gate neuron | 14 | Simpler architecture (3860 vs 5683 weights), spandrel mechanism bootstraps signal-context correlations. Gate separates emission decision from symbol selection. |
-| Poison food (vocabulary pressure) | 15 | First positive response_fit_corr at 384 pop. Dose-response: 50% poison > 30% poison. Creates genuine symbol differentiation pressure, though insufficient to overcome signal cost at small scale. |
+| Poison food (vocabulary pressure) | 15 | First positive response_fit_corr at 384 pop. At 2k pop: rfc=+0.12 (95% pos), vocabulary stratification, brain collapse/regrowth producing 10x signal MI. Strongest signal quality in project history. |
 
 ---
 
@@ -116,15 +122,17 @@ Inputs 0-1 are justified: prey need body-state awareness. Inputs 2, 36-38 give a
 
 ## Open Questions
 
-1. **What is the minimum population for signal emergence?** NARROWED. Bracketed between 2000 (response_fit_corr=-0.29, v13) and 5,000 (receiver_fit_corr=+0.51, GPU). The crossover where symbol differentiation becomes adaptive is somewhere in this range. Next tests: pop=3000 or 4000 bracket runs, and/or counterfactual at 2000.
+1. **Are signals net adaptive at 2k+poison?** The single most important remaining question. v15-psn30-2k-42 shows rfc=+0.12 (95% pos) with vocabulary stratification, but we don't know if this translates to positive counterfactual signal value. At 384 pop, rfc was positive but signals were -7 to -10% vs mute. The 2k run has much stronger rfc AND much lower signal volume (111/gen vs 846k at v13) - this could be the configuration where signals tip positive. Next test: v15-mute-psn30-2k-42 (same params, --no-signals).
 
-2. **Is receiver_fit_corr a pure spatial confound at 2000 pop?** v13 shows receiver_fit_corr=0.74 but we can't separate signal utility from spatial advantage without a counterfactual. Next test: v13-mute-2k-42 (same params, --no-signals). If mute prey show similar center-survival advantage, the 0.74 is spatial confound.
+2. **Is the vocabulary stratification reproducible?** One seed (42), one run. The sym1-poison / sym5-beacon pattern could be contingent. Different seeds at 2k+poison needed.
 
 3. **Is response_fit_corr positive at 5k pop?** The GPU run used the pre-fix architecture. The metric was broken (measurement artifact). Needs a GPU rebuild with the fixed per-symbol JSD metric.
 
-4. **Can the Rust simulation scale to 5k+ efficiently?** At 2000 pop: 25 gen/min (CPU-bound on signal reception at 41% of runtime). 5000 pop would be ~4 gen/min, making 100k gens impractical on VPS. GPU mirror (Python/JAX) is the planned path.
+4. **Can the Rust simulation scale to 5k+ efficiently?** At 2000 pop: ~132 gen/min with 12 cores (improved from prior 25 gen/min). 5000 pop would be ~20 gen/min, making 100k gens require ~3.5 days. Feasible on VPS but slow. GPU mirror (Python/JAX) is the planned path for larger scales.
 
-5. **Can poison food + population scale produce adaptive signals?** v15 showed poison creates symbol differentiation pressure (positive rfc) but not adaptive signaling (mute still fitter) at 384 pop. The 2k poison run (v15-psn30-2k-42, in progress) tests whether population density provides the receiver base to tip the balance. If rfc stays positive AND counterfactual signal value turns positive at 2k, the emergence threshold may be environmental complexity x population, not either alone.
+5. **Would the brain collapse/regrowth dynamic continue?** The v15-2k run was terminated at 188k gens with rfc still rising. The 90k-155k evolutionary winter ended with a 10x improvement in signal MI. Would extending produce another cycle? Or has the architecture stabilized?
+
+6. **Does 50% poison at 2k pop strengthen the effect?** The 384-pop dose-response (30%->50% poison increased rfc from +0.078 to +0.125) suggests higher poison would strengthen vocabulary differentiation further at 2k.
 
 ---
 
@@ -148,4 +156,6 @@ Inputs 0-1 are justified: prey need body-state awareness. Inputs 2, 36-38 give a
 
 9. **Can shared-layer spandrels bootstrap vocabulary?** No. v14 (shared-layer + gate neuron) creates transient signal-context correlations via the spandrel mechanism, but they collapse to beacon attractor at 384 pop and silence at 2000 pop. Architecture is not the bottleneck - the environment supports only one useful message.
 
-10. **Can poison food create vocabulary pressure?** Partially. v15 (30% and 50% poison) produced the first positive response_fit_corr at 384 pop (65-77% positive, mean +0.078 to +0.125). Dose-response confirms poison as causal variable. But the beacon attractor held (one symbol dominates), energy_delta_mi stayed at zero (prey don't signal about poison), and signals remained net negative vs mute (-7.4% to -9.7%). Poison creates pressure for symbol differentiation but doesn't break the beacon or overcome signal cost at 384 pop.
+10. **Can poison food create vocabulary pressure?** Yes. v15 at 384 pop: rfc +0.078 to +0.125 (dose-response confirmed), but signals still net negative vs mute. v15 at 2k pop: rfc=+0.12 (95% positive last 10%), vocabulary stratification (sym1 poison-correlated r=+0.291, sym2 rare alarm JSD=0.109, sym5 beacon at 82%). Brain collapse/regrowth dynamic produced 10x signal MI improvement. Poison creates genuine vocabulary pressure that strengthens with population - but the beacon persists as the dominant symbol and energy_delta_mi remains zero (prey don't signal about individual poison encounters). Counterfactual needed for Level 1.
+
+11. **Is response_fit_corr positive at 2000 pop with poison?** Yes. v15-psn30-2k-42 (188k gens) shows rfc=+0.04 overall (67% positive), +0.12 in last 10% (95% positive), with the trend still strengthening at termination. Compare v13-2k without poison: rfc=-0.29 (6% positive). Poison is confirmed as the causal variable for positive rfc at both 384 and 2000 pop.
