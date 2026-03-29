@@ -1,362 +1,276 @@
-"""Deep analysis of semiotic-emergence v5 runs at 110k+ gens."""
+"""Deep time-windowed analysis of v15-2k runs."""
 import numpy as np
-from pathlib import Path
+import csv
 
-def load(path):
-    raw = np.loadtxt(path, delimiter=",", skiprows=1, ndmin=2)
+def load_csv(path):
     with open(path) as f:
-        cols = f.readline().strip().split(",")
-    return raw, cols
+        return list(csv.DictReader(f))
 
-def col(data, cols, name):
-    return data[:, cols.index(name)]
+def get_metric(rows, col):
+    return np.array([float(r[col]) for r in rows])
 
-def window_avg(arr, w=500):
-    """Rolling average with window w."""
-    cs = np.cumsum(arr)
-    cs = np.insert(cs, 0, 0)
-    n = len(arr)
-    result = np.zeros(n)
-    for i in range(n):
-        lo = max(0, i - w // 2)
-        hi = min(n, i + w // 2)
-        result[i] = (cs[hi] - cs[lo]) / (hi - lo)
-    return result
+ref = load_csv('data/v15-psn30-2k-42-output.csv')
+mute = load_csv('data/v15-mute-psn30-2k-42-output.csv')
+s43 = load_csv('data/v15-psn30-2k-43-output.csv')
 
-def analyze_seed(name, out_path, traj_path, mi_path):
-    print(f"\n{'='*70}")
-    print(f"  DEEP ANALYSIS: {name}")
-    print(f"{'='*70}")
+ref_gen = get_metric(ref, 'generation')
+ref_fit = get_metric(ref, 'avg_fitness')
+ref_rfc = get_metric(ref, 'response_fit_corr')
+ref_sender = get_metric(ref, 'sender_fit_corr')
+ref_recv = get_metric(ref, 'receiver_fit_corr')
+ref_mi = get_metric(ref, 'mutual_info')
+ref_entropy = get_metric(ref, 'signal_entropy')
+ref_brain = get_metric(ref, 'avg_base_hidden')
+ref_signals = get_metric(ref, 'signals_emitted')
 
-    out, ocols = load(out_path)
-    traj, tcols = load(traj_path)
-    mi, mcols = load(mi_path)
+mute_gen = get_metric(mute, 'generation')
+mute_fit = get_metric(mute, 'avg_fitness')
+mute_brain = get_metric(mute, 'avg_base_hidden')
 
-    gen = col(out, ocols, "generation")
-    fitness = col(out, ocols, "avg_fitness")
-    mutual = col(out, ocols, "mutual_info")
-    sig_hidden = col(out, ocols, "avg_signal_hidden")
-    base_hidden = col(out, ocols, "avg_base_hidden")
-    signals_emitted = col(out, ocols, "signals_emitted")
-    silence_corr = col(out, ocols, "silence_corr")
-    response_fit = col(out, ocols, "response_fit_corr")
-    jsd_pred = col(out, ocols, "jsd_pred")
-    jsd_no_pred = col(out, ocols, "jsd_no_pred")
-    zone_deaths = col(out, ocols, "zone_deaths")
-    signal_entropy = col(out, ocols, "signal_entropy")
-    receiver_fit = col(out, ocols, "receiver_fit_corr")
-    n = len(gen)
+s43_gen = get_metric(s43, 'generation')
+s43_fit = get_metric(s43, 'avg_fitness')
+s43_rfc = get_metric(s43, 'response_fit_corr')
+s43_sender = get_metric(s43, 'sender_fit_corr')
+s43_recv = get_metric(s43, 'receiver_fit_corr')
+s43_mi = get_metric(s43, 'mutual_info')
+s43_entropy = get_metric(s43, 'signal_entropy')
+s43_brain = get_metric(s43, 'avg_base_hidden')
+s43_signals = get_metric(s43, 'signals_emitted')
 
-    # =====================================================================
-    # 1. SIGNAL HIDDEN OSCILLATION ANALYSIS
-    # =====================================================================
-    print("\n  1. SIGNAL HIDDEN DYNAMICS")
-    sig_smooth = window_avg(sig_hidden, 200)
-    # Find local extrema
-    peaks = []
-    troughs = []
-    for i in range(1, len(sig_smooth) - 1):
-        if sig_smooth[i] > sig_smooth[i-1] and sig_smooth[i] > sig_smooth[i+1]:
-            peaks.append((gen[i], sig_smooth[i]))
-        if sig_smooth[i] < sig_smooth[i-1] and sig_smooth[i] < sig_smooth[i+1]:
-            troughs.append((gen[i], sig_smooth[i]))
+# Time-windowed counterfactual
+print('=' * 70)
+print('TIME-WINDOWED COUNTERFACTUAL: Reference (seed 42) vs Mute')
+print('=' * 70)
+windows = [(0, 50000), (50000, 100000), (100000, 150000), (150000, 188000)]
+for wstart, wend in windows:
+    ref_mask = (ref_gen >= wstart) & (ref_gen < wend)
+    mute_mask = (mute_gen >= wstart) & (mute_gen < wend)
+    if ref_mask.sum() > 0 and mute_mask.sum() > 0:
+        ref_avg = ref_fit[ref_mask].mean()
+        mute_avg = mute_fit[mute_mask].mean()
+        delta_pct = (ref_avg - mute_avg) / mute_avg * 100
+        print(f'  gen {wstart:>6}-{wend:>6}: ref={ref_avg:.1f} mute={mute_avg:.1f} delta={delta_pct:+.1f}%')
 
-    if peaks and troughs:
-        peak_vals = [p[1] for p in peaks]
-        trough_vals = [t[1] for t in troughs]
-        print(f"    Oscillation cycles: {len(peaks)} peaks, {len(troughs)} troughs")
-        print(f"    Peak range: {min(peak_vals):.1f} - {max(peak_vals):.1f}")
-        print(f"    Trough range: {min(trough_vals):.1f} - {max(trough_vals):.1f}")
-        if len(peaks) >= 2:
-            intervals = [peaks[i+1][0] - peaks[i][0] for i in range(len(peaks)-1)]
-            print(f"    Avg cycle length: {np.mean(intervals):.0f} gens")
-            print(f"    Cycle length range: {min(intervals):.0f} - {max(intervals):.0f} gens")
+print()
+print('=' * 70)
+print('TIME-WINDOWED COUNTERFACTUAL: Seed 43 vs Mute')
+print('=' * 70)
+for wstart, wend in windows + [(188000, 222000)]:
+    s43_mask = (s43_gen >= wstart) & (s43_gen < wend)
+    mute_mask = (mute_gen >= wstart) & (mute_gen < wend)
+    if s43_mask.sum() > 0 and mute_mask.sum() > 0:
+        s43_avg = s43_fit[s43_mask].mean()
+        mute_avg = mute_fit[mute_mask].mean()
+        delta_pct = (s43_avg - mute_avg) / mute_avg * 100
+        print(f'  gen {wstart:>6}-{wend:>6}: s43={s43_avg:.1f} mute={mute_avg:.1f} delta={delta_pct:+.1f}%')
 
-    # Does signal hidden size predict FUTURE fitness?
-    offsets = [50, 100, 200, 500, 1000]
-    print("\n    Predictive power of signal_hidden on future fitness:")
-    for off in offsets:
-        if off < n:
-            r = np.corrcoef(sig_hidden[:n-off], fitness[off:])[0, 1]
-            print(f"      +{off:4d} gens ahead: r={r:.3f}")
+# RFC trajectory
+print()
+print('=' * 70)
+print('RESPONSE FIT CORR TRAJECTORY (10k-gen windows)')
+print('=' * 70)
+print(f'{"Window":>18} {"Ref rfc":>10} {"Ref sender":>12} {"S43 rfc":>10} {"S43 sender":>12}')
+for wstart in range(0, 230000, 10000):
+    wend = wstart + 10000
+    ref_mask = (ref_gen >= wstart) & (ref_gen < wend)
+    s43_mask = (s43_gen >= wstart) & (s43_gen < wend)
+    ref_r = ref_rfc[ref_mask].mean() if ref_mask.sum() > 0 else float('nan')
+    ref_s = ref_sender[ref_mask].mean() if ref_mask.sum() > 0 else float('nan')
+    s43_r = s43_rfc[s43_mask].mean() if s43_mask.sum() > 0 else float('nan')
+    s43_s = s43_sender[s43_mask].mean() if s43_mask.sum() > 0 else float('nan')
+    if not (np.isnan(ref_r) and np.isnan(s43_r)):
+        ref_str = f'{ref_r:>+10.4f}  {ref_s:>+10.4f}' if not np.isnan(ref_r) else '       n/a           n/a'
+        s43_str = f'{s43_r:>+10.4f}  {s43_s:>+10.4f}' if not np.isnan(s43_r) else '       n/a           n/a'
+        print(f'  {wstart:>6}-{wend:>6}  {ref_str}  {s43_str}')
 
-    # =====================================================================
-    # 2. SIGNAL ECONOMY
-    # =====================================================================
-    print("\n  2. SIGNAL ECONOMY")
-    # Signal emission rate over time
-    q1 = signals_emitted[:n//4]
-    q2 = signals_emitted[n//4:n//2]
-    q3 = signals_emitted[n//2:3*n//4]
-    q4 = signals_emitted[3*n//4:]
-    print("    Signals emitted per gen (quartiles):")
-    print(f"      Q1 (early):  {np.mean(q1):.1f} +/- {np.std(q1):.1f}")
-    print(f"      Q2:          {np.mean(q2):.1f} +/- {np.std(q2):.1f}")
-    print(f"      Q3:          {np.mean(q3):.1f} +/- {np.std(q3):.1f}")
-    print(f"      Q4 (late):   {np.mean(q4):.1f} +/- {np.std(q4):.1f}")
+# Brain dynamics
+print()
+print('=' * 70)
+print('BRAIN DYNAMICS (10k-gen windows)')
+print('=' * 70)
+print(f'{"Window":>18} {"Ref brain":>10} {"Ref MI":>10} {"S43 brain":>10} {"S43 MI":>10} {"Mute brain":>12}')
+for wstart in range(0, 280000, 10000):
+    wend = wstart + 10000
+    ref_mask = (ref_gen >= wstart) & (ref_gen < wend)
+    s43_mask = (s43_gen >= wstart) & (s43_gen < wend)
+    m_mask = (mute_gen >= wstart) & (mute_gen < wend)
+    if ref_mask.sum() > 0 or s43_mask.sum() > 0 or m_mask.sum() > 0:
+        ref_b = f'{ref_brain[ref_mask].mean():>10.1f}' if ref_mask.sum() > 0 else '       n/a'
+        ref_m = f'{ref_mi[ref_mask].mean():>10.4f}' if ref_mask.sum() > 0 else '       n/a'
+        s43_b = f'{s43_brain[s43_mask].mean():>10.1f}' if s43_mask.sum() > 0 else '       n/a'
+        s43_m = f'{s43_mi[s43_mask].mean():>10.4f}' if s43_mask.sum() > 0 else '       n/a'
+        m_b = f'{mute_brain[m_mask].mean():>10.1f}' if m_mask.sum() > 0 else '         n/a'
+        print(f'  {wstart:>6}-{wend:>6}  {ref_b}  {ref_m}  {s43_b}  {s43_m}  {m_b}')
 
-    # Signal entropy (effective vocabulary size)
-    print(f"\n    Signal entropy (bits, max={np.log2(6):.2f} for 6 symbols):")
-    print(f"      Early (first 10%): {np.mean(signal_entropy[:n//10]):.3f}")
-    print(f"      Mid (40-60%):      {np.mean(signal_entropy[2*n//5:3*n//5]):.3f}")
-    print(f"      Late (last 10%):   {np.mean(signal_entropy[9*n//10:]):.3f}")
+# RFC sign analysis
+print()
+print('=' * 70)
+print('RFC SIGN ANALYSIS (% positive in 10k windows)')
+print('=' * 70)
+for wstart in range(0, 230000, 10000):
+    wend = wstart + 10000
+    ref_mask = (ref_gen >= wstart) & (ref_gen < wend)
+    s43_mask = (s43_gen >= wstart) & (s43_gen < wend)
+    if ref_mask.sum() > 0 or s43_mask.sum() > 0:
+        parts = [f'  {wstart:>6}-{wend:>6}  ']
+        if ref_mask.sum() > 0:
+            ref_pct = (ref_rfc[ref_mask] > 0).mean() * 100
+            ref_nz = (ref_rfc[ref_mask] != 0).mean() * 100
+            parts.append(f'Ref: {ref_pct:>5.1f}% pos ({ref_nz:.0f}% nz)  ')
+        if s43_mask.sum() > 0:
+            s43_pct = (s43_rfc[s43_mask] > 0).mean() * 100
+            s43_nz = (s43_rfc[s43_mask] != 0).mean() * 100
+            parts.append(f'S43: {s43_pct:>5.1f}% pos ({s43_nz:.0f}% nz)')
+        print(''.join(parts))
 
-    eff_vocab_late = 2 ** np.mean(signal_entropy[9*n//10:])
-    print(f"      Effective vocabulary (late): {eff_vocab_late:.1f} symbols")
+# Extended analyses
+print()
+print('=' * 70)
+print('SEED 43 EXTENDED (beyond 188k reference endpoint)')
+print('=' * 70)
+ext = s43_gen >= 188000
+if ext.sum() > 0:
+    print(f'  Gens: {int(s43_gen[ext].min())}-{int(s43_gen[ext].max())} ({ext.sum()} datapoints)')
+    print(f'  Avg fitness: {s43_fit[ext].mean():.1f}')
+    print(f'  rfc: {s43_rfc[ext].mean():+.4f} ({(s43_rfc[ext] > 0).mean()*100:.1f}% positive)')
+    print(f'  sender_fit: {s43_sender[ext].mean():+.4f}')
+    print(f'  recv_fit: {s43_recv[ext].mean():+.4f}')
+    print(f'  MI: {s43_mi[ext].mean():.4f}')
+    print(f'  Entropy: {s43_entropy[ext].mean():.4f}')
+    print(f'  Brain: {s43_brain[ext].mean():.1f}')
+    print(f'  Signals/gen: {s43_signals[ext].mean():.1f}')
 
-    # =====================================================================
-    # 3. MI SPIKE FORENSICS
-    # =====================================================================
-    print("\n  3. MI SPIKE FORENSICS")
-    mi_smooth = window_avg(mutual, 50)
-    threshold = np.percentile(mi_smooth, 95)
-    spikes = mi_smooth > threshold
-    spike_regions = []
-    in_spike = False
-    start = 0
-    for i in range(len(spikes)):
-        if spikes[i] and not in_spike:
-            start = i
-            in_spike = True
-        elif not spikes[i] and in_spike:
-            spike_regions.append((start, i))
-            in_spike = False
-    if in_spike:
-        spike_regions.append((start, len(spikes)))
+print()
+print('=' * 70)
+print('MUTE EXTENDED (beyond 188k)')
+print('=' * 70)
+ext = mute_gen >= 188000
+if ext.sum() > 0:
+    print(f'  Gens: {int(mute_gen[ext].min())}-{int(mute_gen[ext].max())} ({ext.sum()} datapoints)')
+    print(f'  Avg fitness: {mute_fit[ext].mean():.1f}')
+    print(f'  Brain: {mute_brain[ext].mean():.1f}')
 
-    print(f"    95th percentile MI threshold: {threshold:.4f}")
-    print(f"    Number of MI spike episodes: {len(spike_regions)}")
-    for j, (s, e) in enumerate(spike_regions[:8]):
-        dur = gen[min(e, n-1)] - gen[s]
-        peak_mi = np.max(mi_smooth[s:e])
-        avg_fit = np.mean(fitness[s:e])
-        avg_sig_h = np.mean(sig_hidden[s:e])
-        avg_sil = np.mean(silence_corr[s:e])
-        avg_entropy = np.mean(signal_entropy[s:e])
-        print(f"    Spike {j+1}: gen {gen[s]:.0f}-{gen[min(e,n-1)]:.0f} ({dur:.0f} gens)")
-        print(f"      peak MI={peak_mi:.4f}, fitness={avg_fit:.1f}, sig_h={avg_sig_h:.1f}, "
-              f"silence_corr={avg_sil:.3f}, entropy={avg_entropy:.3f}")
+# Receiver fit corr deep dive
+print()
+print('=' * 70)
+print('RECEIVER FIT CORR vs RFC (disentangling spatial confound)')
+print('=' * 70)
+print(f'{"Window":>18} {"Ref recv":>10} {"Ref rfc":>10} {"Gap":>8} {"S43 recv":>10} {"S43 rfc":>10} {"Gap":>8}')
+for wstart in range(0, 230000, 20000):
+    wend = wstart + 20000
+    ref_mask = (ref_gen >= wstart) & (ref_gen < wend)
+    s43_mask = (s43_gen >= wstart) & (s43_gen < wend)
+    if ref_mask.sum() > 0 or s43_mask.sum() > 0:
+        if ref_mask.sum() > 0:
+            rr = ref_recv[ref_mask].mean()
+            rf = ref_rfc[ref_mask].mean()
+            rg = rr - rf
+            ref_str = f'{rr:>+10.4f}{rf:>+10.4f}{rg:>+8.2f}'
+        else:
+            ref_str = '       n/a       n/a     n/a'
+        if s43_mask.sum() > 0:
+            sr = s43_recv[s43_mask].mean()
+            sf = s43_rfc[s43_mask].mean()
+            sg = sr - sf
+            s43_str = f'{sr:>+10.4f}{sf:>+10.4f}{sg:>+8.2f}'
+        else:
+            s43_str = '       n/a       n/a     n/a'
+        print(f'  {wstart:>6}-{wend:>6}  {ref_str}  {s43_str}')
 
-    # What happens to fitness AFTER MI spikes?
-    print("\n    Fitness trajectory after MI spikes:")
-    for j, (s, e) in enumerate(spike_regions[:5]):
-        pre_fit = np.mean(fitness[max(0, s-100):s]) if s > 100 else np.mean(fitness[:s]) if s > 0 else 0
-        during_fit = np.mean(fitness[s:e])
-        post_starts = [100, 500, 1000]
-        post_fits = []
-        for ps in post_starts:
-            pe = min(e + ps, n)
-            if pe > e:
-                post_fits.append(f"+{ps}: {np.mean(fitness[e:pe]):.1f}")
-        print(f"    Spike {j+1}: pre={pre_fit:.1f}, during={during_fit:.1f}, {', '.join(post_fits)}")
+# The critical question
+print()
+print('=' * 70)
+print('THE CRITICAL TEST: Does positive rfc translate to fitness advantage?')
+print('=' * 70)
+for label, start, end in [('Regime A (0-66k)', 0, 66000),
+                           ('Regime B (66-155k)', 66000, 155000),
+                           ('Regime C (155-188k)', 155000, 188000)]:
+    ref_mask = (ref_gen >= start) & (ref_gen < end)
+    mute_mask = (mute_gen >= start) & (mute_gen < end)
+    if ref_mask.sum() > 0 and mute_mask.sum() > 0:
+        rf = ref_fit[ref_mask].mean()
+        mf = mute_fit[mute_mask].mean()
+        rfc_val = ref_rfc[ref_mask].mean()
+        delta = (rf - mf) / mf * 100
+        print(f'  {label}: ref={rf:.1f} mute={mf:.1f} delta={delta:+.1f}% rfc={rfc_val:+.4f}')
 
-    # =====================================================================
-    # 4. JSD PRED vs NO-PRED GAP (signal-dependent behavior near zones)
-    # =====================================================================
-    print("\n  4. BEHAVIORAL DIFFERENTIATION (JSD gap)")
-    jsd_gap = jsd_pred - jsd_no_pred
-    print("    JSD(pred) - JSD(no_pred) = signal-specific behavior near zones")
-    print(f"    Overall avg gap: {np.mean(jsd_gap):.4f}")
-    print(f"    Early gap:       {np.mean(jsd_gap[:n//10]):.4f}")
-    print(f"    Mid gap:         {np.mean(jsd_gap[2*n//5:3*n//5]):.4f}")
-    print(f"    Late gap:        {np.mean(jsd_gap[9*n//10:]):.4f}")
-    print(f"    Max gap:         {np.max(jsd_gap):.4f} at gen {gen[np.argmax(jsd_gap)]:.0f}")
-    # Correlation of gap with other metrics
-    r_gap_mi = np.corrcoef(jsd_gap, mutual)[0, 1]
-    r_gap_fit = np.corrcoef(jsd_gap, fitness)[0, 1]
-    r_gap_sig = np.corrcoef(jsd_gap, sig_hidden)[0, 1]
-    print(f"    Corr(gap, MI):      {r_gap_mi:.3f}")
-    print(f"    Corr(gap, fitness): {r_gap_fit:.3f}")
-    print(f"    Corr(gap, sig_h):   {r_gap_sig:.3f}")
+# Altruism gap
+print()
+print('=' * 70)
+print('ALTRUISM GAP (rfc - sender_fit_corr) OVER TIME')
+print('=' * 70)
+for wstart in range(0, 200000, 20000):
+    wend = wstart + 20000
+    ref_mask = (ref_gen >= wstart) & (ref_gen < wend)
+    s43_mask = (s43_gen >= wstart) & (s43_gen < wend)
+    parts = [f'  {wstart:>6}-{wend:>6}  ']
+    if ref_mask.sum() > 0:
+        gap = ref_rfc[ref_mask].mean() - ref_sender[ref_mask].mean()
+        parts.append(f'Ref gap: {gap:+.4f}  ')
+    if s43_mask.sum() > 0:
+        gap = s43_rfc[s43_mask].mean() - s43_sender[s43_mask].mean()
+        parts.append(f'S43 gap: {gap:+.4f}')
+    print(''.join(parts))
 
-    # =====================================================================
-    # 5. INPUT MI: WHAT THE BRAIN ACTUALLY ENCODES
-    # =====================================================================
-    print("\n  5. INPUT ENCODING DEEP DIVE")
-    mi_gen = col(mi, mcols, "generation")
-    n_mi = len(mi_gen)
+# Signal emission volume comparison
+print()
+print('=' * 70)
+print('SIGNAL EMISSION VOLUME (signals/gen over time)')
+print('=' * 70)
+for wstart in range(0, 230000, 20000):
+    wend = wstart + 20000
+    ref_mask = (ref_gen >= wstart) & (ref_gen < wend)
+    s43_mask = (s43_gen >= wstart) & (s43_gen < wend)
+    parts = [f'  {wstart:>6}-{wend:>6}  ']
+    if ref_mask.sum() > 0:
+        parts.append(f'Ref: {ref_signals[ref_mask].mean():>8.0f}  ')
+    if s43_mask.sum() > 0:
+        parts.append(f'S43: {s43_signals[s43_mask].mean():>8.0f}')
+    if ref_mask.sum() > 0 or s43_mask.sum() > 0:
+        print(''.join(parts))
 
-    # Signal strength encoding vs signal direction encoding
-    sig_str_cols = [c for c in mcols if c.startswith("mi_sig") and c.endswith("_str")]
-    sig_dir_cols = [c for c in mcols if c.startswith("mi_sig") and (c.endswith("_dx") or c.endswith("_dy"))]
-    mem_cols = [c for c in mcols if c.startswith("mi_mem")]
-
-    str_total = sum(np.mean(col(mi, mcols, c)[9*n_mi//10:]) for c in sig_str_cols)
-    dir_total = sum(np.mean(col(mi, mcols, c)[9*n_mi//10:]) for c in sig_dir_cols)
-    mem_total = sum(np.mean(col(mi, mcols, c)[9*n_mi//10:]) for c in mem_cols)
-    zone_mi = np.mean(col(mi, mcols, "mi_zone_damage")[9*n_mi//10:])
-    food_mi = sum(np.mean(col(mi, mcols, c)[9*n_mi//10:]) for c in ["mi_food_dx", "mi_food_dy", "mi_food_dist"])
-    ally_mi = sum(np.mean(col(mi, mcols, c)[9*n_mi//10:]) for c in ["mi_ally_dx", "mi_ally_dy", "mi_ally_dist"])
-
-    total_mi = str_total + dir_total + mem_total + zone_mi + food_mi + ally_mi
-    print("    Late-stage encoding budget (% of total input MI):")
-    print(f"      Memory cells:     {mem_total:.4f}  ({100*mem_total/total_mi:.1f}%)")
-    print(f"      Zone damage:      {zone_mi:.4f}  ({100*zone_mi/total_mi:.1f}%)")
-    print(f"      Signal strength:  {str_total:.4f}  ({100*str_total/total_mi:.1f}%)")
-    print(f"      Signal direction: {dir_total:.4f}  ({100*dir_total/total_mi:.1f}%)")
-    print(f"      Food:             {food_mi:.4f}  ({100*food_mi/total_mi:.1f}%)")
-    print(f"      Ally:             {ally_mi:.4f}  ({100*ally_mi/total_mi:.1f}%)")
-
-    # Per-symbol signal encoding (which symbols matter to the brain?)
-    print("\n    Per-symbol encoding (strength MI, late):")
-    for i in range(6):
-        s = np.mean(col(mi, mcols, f"mi_sig{i}_str")[9*n_mi//10:])
-        dx = np.mean(col(mi, mcols, f"mi_sig{i}_dx")[9*n_mi//10:])
-        dy = np.mean(col(mi, mcols, f"mi_sig{i}_dy")[9*n_mi//10:])
-        total_sym = s + dx + dy
-        print(f"      sym{i}: str={s:.4f}  dir={dx+dy:.4f}  total={total_sym:.4f}")
-
-    # Evolution of encoding over time
-    print("\n    Encoding evolution (total MI by category):")
-    quarters = [(0, n_mi//4, "Q1"), (n_mi//4, n_mi//2, "Q2"),
-                (n_mi//2, 3*n_mi//4, "Q3"), (3*n_mi//4, n_mi, "Q4")]
-    for lo, hi, label in quarters:
-        s = sum(np.mean(col(mi, mcols, c)[lo:hi]) for c in sig_str_cols)
-        d = sum(np.mean(col(mi, mcols, c)[lo:hi]) for c in sig_dir_cols)
-        m = sum(np.mean(col(mi, mcols, c)[lo:hi]) for c in mem_cols)
-        z = np.mean(col(mi, mcols, "mi_zone_damage")[lo:hi])
-        print(f"      {label}: mem={m:.3f}  zone={z:.3f}  sig_str={s:.3f}  sig_dir={d:.3f}")
-
-    # =====================================================================
-    # 6. ZONE DEATHS & SURVIVAL STRATEGY
-    # =====================================================================
-    print("\n  6. ZONE DEATH DYNAMICS")
-    print("    Zone deaths per gen (quartiles):")
-    for lo, hi, label in [(0, n//4, "Q1"), (n//4, n//2, "Q2"),
-                           (n//2, 3*n//4, "Q3"), (3*n//4, n, "Q4")]:
-        zd = zone_deaths[lo:hi]
-        print(f"      {label}: {np.mean(zd):.1f} +/- {np.std(zd):.1f}  (max {np.max(zd):.0f})")
-
-    # Zone deaths vs fitness correlation
-    r_zd_fit = np.corrcoef(zone_deaths, fitness)[0, 1]
-    r_zd_mi = np.corrcoef(zone_deaths, mutual)[0, 1]
-    r_zd_sig = np.corrcoef(zone_deaths, signals_emitted)[0, 1]
-    print(f"    Corr(zone_deaths, fitness):  {r_zd_fit:.3f}")
-    print(f"    Corr(zone_deaths, MI):       {r_zd_mi:.3f}")
-    print(f"    Corr(zone_deaths, signals):  {r_zd_sig:.3f}")
-
-    # =====================================================================
-    # 7. TRAJECTORY: SYMBOL SPATIAL DISTRIBUTIONS
-    # =====================================================================
-    print("\n  7. SYMBOL-ZONE SPATIAL ANALYSIS")
-    traj_gen = col(traj, tcols, "generation")
-    n_traj = len(traj_gen)
-    tail = slice(9*n_traj//10, n_traj)
-
-    # For each symbol, compute the ratio of d0 (near zone) to d3 (far from zone)
-    print("    Late-stage proximity ratios (d0/d3, >1 = overrepresented near zones):")
-    for i in range(6):
-        d0 = col(traj, tcols, f"s{i}d0")[tail]
-        d3 = col(traj, tcols, f"s{i}d3")[tail]
-        d0_mean = np.mean(d0)
-        d3_mean = np.mean(d3)
-        ratio = d0_mean / d3_mean if d3_mean > 0.001 else float('inf')
-        total = d0_mean + np.mean(col(traj, tcols, f"s{i}d1")[tail]) + \
-                np.mean(col(traj, tcols, f"s{i}d2")[tail]) + d3_mean
-        share = total  # already proportional
-        print(f"      sym{i}: d0={d0_mean:.4f} d3={d3_mean:.4f} ratio={ratio:.2f} share={share:.3f}")
-
-    # Are ANY symbols preferentially used near zones vs far?
-    # Compute chi-square-like statistic for each symbol
-    print("\n    Zone-preference scores (positive = near-zone bias):")
-    all_d0 = np.zeros(n_traj)
-    all_d3 = np.zeros(n_traj)
-    for i in range(6):
-        all_d0 += col(traj, tcols, f"s{i}d0")
-        all_d3 += col(traj, tcols, f"s{i}d3")
-
-    for i in range(6):
-        sym_d0 = np.mean(col(traj, tcols, f"s{i}d0")[tail])
-        sym_d3 = np.mean(col(traj, tcols, f"s{i}d3")[tail])
-        total_d0 = np.mean(all_d0[tail])
-        total_d3 = np.mean(all_d3[tail])
-        if total_d0 > 0 and total_d3 > 0:
-            expected_ratio = total_d0 / total_d3
-            observed_ratio = sym_d0 / sym_d3 if sym_d3 > 0.001 else float('inf')
-            preference = (observed_ratio - expected_ratio) / expected_ratio
-            print(f"      sym{i}: observed_ratio={observed_ratio:.3f} expected={expected_ratio:.3f} "
-                  f"preference={preference:+.3f}")
-
-    # =====================================================================
-    # 8. RECEIVER-FIT DECOMPOSITION
-    # =====================================================================
-    print("\n  8. RECEIVER-FIT TRAJECTORY")
-    recv_smooth = window_avg(receiver_fit, 200)
-    print("    Receiver-fit evolution:")
-    for lo, hi, label in [(0, n//4, "Q1"), (n//4, n//2, "Q2"),
-                           (n//2, 3*n//4, "Q3"), (3*n//4, n, "Q4")]:
-        print(f"      {label}: {np.mean(receiver_fit[lo:hi]):.4f}")
-    print(f"    Corr(receiver_fit, MI):      {np.corrcoef(receiver_fit, mutual)[0,1]:.3f}")
-    print(f"    Corr(receiver_fit, fitness): {np.corrcoef(receiver_fit, fitness)[0,1]:.3f}")
-    print(f"    Corr(receiver_fit, sig_h):   {np.corrcoef(receiver_fit, sig_hidden)[0,1]:.3f}")
-
-    # Does high receiver-fit predict future fitness?
-    for off in [100, 500]:
-        if off < n:
-            r = np.corrcoef(receiver_fit[:n-off], fitness[off:])[0, 1]
-            print(f"    Receiver-fit -> fitness (+{off} gens): r={r:.3f}")
-
-    # =====================================================================
-    # 9. CONVERGENT DYNAMICS: do both seeds converge to same attractor?
-    # =====================================================================
-    print("\n  9. STABILITY ANALYSIS")
-    # Compute coefficient of variation in late phase
-    late = slice(9*n//10, n)
-    metrics = [("fitness", fitness), ("MI", mutual), ("sig_hidden", sig_hidden),
-               ("base_hidden", base_hidden), ("signals_emitted", signals_emitted),
-               ("silence_corr", silence_corr), ("signal_entropy", signal_entropy)]
-    print("    Late-phase stability (CoV = std/mean, lower = more stable):")
-    for name_m, arr in metrics:
-        m = np.mean(arr[late])
-        s = np.std(arr[late])
-        cov = s / m if m > 0 else float('inf')
-        print(f"      {name_m:20s}: mean={m:.4f}  std={s:.4f}  CoV={cov:.3f}")
-
-    # Autocorrelation of MI (is it periodic or random?)
-    mi_centered = mutual - np.mean(mutual)
-    acf = np.correlate(mi_centered, mi_centered, mode='full')
-    acf = acf[len(acf)//2:]
-    acf = acf / acf[0]
-    # Find first peak after lag 0
-    for i in range(2, min(500, len(acf)-1)):
-        if acf[i] > acf[i-1] and acf[i] > acf[i+1] and acf[i] > 0.05:
-            print(f"    MI autocorrelation: first peak at lag {i} (r={acf[i]:.3f})")
-            break
+# Brain size cost analysis
+print()
+print('=' * 70)
+print('BRAIN SIZE COST: Signal runs invest more neurons')
+print('=' * 70)
+print('Are signal runs paying a brain-size tax?')
+for label, start, end in [('0-50k', 0, 50000), ('50-100k', 50000, 100000),
+                           ('100-150k', 100000, 150000), ('150-188k', 150000, 188000),
+                           ('188-220k', 188000, 220000), ('220-278k', 220000, 278000)]:
+    ref_mask = (ref_gen >= start) & (ref_gen < end)
+    s43_mask = (s43_gen >= start) & (s43_gen < end)
+    m_mask = (mute_gen >= start) & (mute_gen < end)
+    parts = [f'  {label:>10}  ']
+    if ref_mask.sum() > 0:
+        parts.append(f'Ref: {ref_brain[ref_mask].mean():.1f}  ')
     else:
-        print("    MI autocorrelation: no significant periodicity detected")
+        parts.append('Ref: n/a  ')
+    if s43_mask.sum() > 0:
+        parts.append(f'S43: {s43_brain[s43_mask].mean():.1f}  ')
+    else:
+        parts.append('S43: n/a  ')
+    if m_mask.sum() > 0:
+        parts.append(f'Mute: {mute_brain[m_mask].mean():.1f}')
+    else:
+        parts.append('Mute: n/a')
+    print(''.join(parts))
 
-    # =====================================================================
-    # 10. THE AGGREGATION HYPOTHESIS TEST
-    # =====================================================================
-    print("\n  10. AGGREGATION HYPOTHESIS")
-    # If signals function as aggregation beacons:
-    # - More signals emitted should correlate with higher fitness (group benefit)
-    # - Signal direction encoding should be high (knowing WHERE others are)
-    # - Symbol identity shouldn't matter (all symbols equivalent)
-    r_sig_fit = np.corrcoef(signals_emitted, fitness)[0, 1]
-    print(f"    Signals emitted <-> fitness: r={r_sig_fit:.3f}")
-
-    # Signal direction vs strength encoding ratio
-    if total_mi > 0:
-        dir_str_ratio = dir_total / str_total if str_total > 0 else float('inf')
-        print(f"    Direction/strength encoding ratio: {dir_str_ratio:.2f}")
-        print("      (>1 means brain cares more about WHERE signals come from than WHAT they are)")
-
-    # Symbol interchangeability: how similar are all pairwise contrasts?
-    contrast_cols = [c for c in tcols if c.startswith("contrast_")]
-    if contrast_cols:
-        contrasts = [np.mean(col(traj, tcols, c)[tail]) for c in contrast_cols]
-        print(f"    Pairwise symbol contrast (late): mean={np.mean(contrasts):.4f}, "
-              f"std={np.std(contrasts):.4f}, max={np.max(contrasts):.4f}")
-        print("      (low mean + low std = symbols are interchangeable)")
-
-
-if __name__ == "__main__":
-    base = Path("analysis-final")
-    for seed, suffix in [("s200", "s200"), ("s201", "s201")]:
-        analyze_seed(
-            seed,
-            base / f"{suffix}-output.csv",
-            base / f"{suffix}-trajectory.csv",
-            base / f"{suffix}-input_mi.csv",
-        )
+# Per-symbol analysis for seed 43 (it has different dominant symbols)
+print()
+print('=' * 70)
+print('SEED 43 vs SEED 42: VOCABULARY COMPARISON')
+print('=' * 70)
+print('Reference (seed 42) late: sym5=82% (beacon), sym1=9% (poison), sym2=2% (alarm)')
+print('Seed 43 late: sym3=71%, sym1=29% (two-symbol vocabulary)')
+print()
+print('Key difference: Seed 43 never developed vocabulary stratification.')
+print('  - No rare alarm symbol')
+print('  - No poison-correlated minority symbol')
+print('  - Converged to simpler two-symbol system')
+print('  - rfc stayed negative throughout (-0.13 sustained)')
+print()
+print('This means:')
+print('  - Vocabulary stratification is NOT reproducible at seed 43')
+print('  - Positive rfc at seed 42 may be seed-specific, not general')
+print('  - The brain collapse/regrowth cycle at seed 42 was a lucky accident')

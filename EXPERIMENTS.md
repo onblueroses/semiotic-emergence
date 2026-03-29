@@ -60,6 +60,8 @@ Every significant run, its parameters, and headline result.
 | v15-psn50-42 | 15 | 42 | 224,000 | pop=384, poison=0.5, shared-layer+gate | rfc +0.125 (77% pos), dose-response confirmed |
 | v15-mute-psn30-42 | 15 | 42 | 231,000 | pop=384, poison=0.3, --no-signals | Counterfactual baseline, 7.4-9.7% fitter than signal |
 | v15-psn30-2k-42 | 15 | 42 | 187,850 | pop=2000, grid=100, poison=0.3, metrics-interval=10 | **rfc +0.12 (95% pos last 10%)**, brain collapse/regrowth, vocabulary stratification |
+| v15-mute-psn30-2k-42 | 15 | 42 | 278,270+ | pop=2000, grid=100, poison=0.3, --no-signals | **Counterfactual baseline**: fitness 801 sustained, brain 6.0 stable, 7-9% fitter than signal runs |
+| v15-psn30-2k-43 | 15 | 43 | 221,880+ | pop=2000, grid=100, poison=0.3, metrics-interval=10 | rfc -0.13 (negative throughout), no vocab stratification, volume maximizer (185k sig/gen), **fails to reproduce seed 42** |
 
 Raw data: `data/` contains CSV output for each run listed above. See `data/README.md` for column formats.
 
@@ -1008,11 +1010,61 @@ At 384 pop, the effect is insufficient - three problems remain:
 
 **What this tells us about vocabulary emergence:** Population scale amplifies the signal quality effect found at 384 pop - rfc is stronger, vocabulary structure is richer, and the dynamics show creative destruction that rebuilds better signal architectures. But the beacon attractor persists, and the missing counterfactual means we don't know if this translates to net adaptive value.
 
+### v15-mute-psn30-2k-42: Mute counterfactual (seed 42, 278k+ gens, still running)
+
+**Parameters:** pop=2000, grid=100, poison-ratio=0.3, --no-signals, metrics-interval=10. VPS cores 0-5, PID 1572092, started 2026-03-27. ~84 gen/min sustained.
+
+**Results:**
+
+1. **Mute fitness decisively higher in every time window.** No window exists where signals help.
+
+| Window | Signal (seed 42) | Mute | Delta |
+|--------|-----------------|------|-------|
+| 0-50k | 679.7 | 749.8 | -9.3% |
+| 50-100k | 724.9 | 788.7 | -8.1% |
+| 100-150k | 740.3 | 794.8 | -6.8% |
+| 150-188k | 729.8 | 798.6 | -8.6% |
+| 188-278k (mute only) | n/a | 801.3 | n/a |
+
+2. **Integral signal value: -12,015,232.** Cumulative fitness deficit across 188k common generations.
+3. **Overall advantage: -7.3%.** Consistent with 384-pop counterfactual (-7.4 to -9.7%).
+4. **Brain stays minimal.** Mute brains stabilize at 6.0 neurons (vs signal run's 12-17). No need for signal processing capacity = smaller, cheaper brains.
+5. **Even during Regime C (rfc=+0.06), signals are 8.8% worse.** The period where response_fit_corr was most positive still shows a clear mute advantage. Positive rfc does not translate to population-level adaptive value.
+
+### v15-psn30-2k-43: Seed 43 reproducibility test (221k+ gens, still running)
+
+**Parameters:** pop=2000, grid=100, poison-ratio=0.3, metrics-interval=10. VPS cores 6-10, PID 1572708, started 2026-03-27. ~67 gen/min sustained.
+
+**Results:**
+
+1. **rfc negative throughout.** Sustained rfc=-0.13 (3.3% positive in last 34k gens). Never reproduced the seed 42 positive rfc. In no 10k window does rfc exceed +0.05.
+2. **Volume maximizer.** 185k signals/gen (vs seed 42's 110/gen). The polar opposite strategy - flooding the grid instead of quality signaling.
+3. **Two-symbol vocabulary, no stratification.** sym3=71%, sym1=29% at gen 222k. No alarm symbol, no poison-correlated minority. HHI=0.59 (heading toward monopoly). Compare seed 42's functional stratification (sym5 beacon, sym1 poison, sym2 alarm).
+4. **Brain dynamics different.** Peak brain size 23 (at 127k, vs seed 42's 29 at 102k), brief collapse to 7.6 but no sustained collapse/regrowth cycle. Brain returned to 8-9 without the creative destruction that seed 42 exhibited.
+5. **MI collapsed to zero by 80k.** Peak MI=0.38 at gen 8k, sustained MI=0.0001 in last 10%. Signal channel carries no information.
+6. **Receiver paradox in full force.** recv_fit=+0.70 (spatial confound) while rfc=-0.13 (responses maladaptive). Gap widens over time to +0.86 by gen 220k.
+7. **Counterfactual vs mute: -5.3% to -8.4%.** Net negative in every time window, consistent with seed 42 counterfactual.
+8. **Sender-fit POSITIVE (+0.05).** Unlike seed 42 where senders paid costs, seed 43 senders benefit - they signal to attract aggregation, a selfish strategy. The altruism gap is negative (-0.10), opposite of seed 42's pattern.
+
+### Cross-run synthesis
+
+The three-way comparison (reference signal, mute, seed 43) reveals:
+
+1. **Level 1 is answered: signals are NOT adaptive at 2k pop with 30% poison.** Both signal seeds are 5-9% less fit than mute in every time window. The integral signal value is deeply negative (-12M for seed 42, -14M for seed 43).
+
+2. **Positive rfc is seed-specific.** Seed 42's rfc=+0.12 did not reproduce at seed 43 (rfc=-0.13). The vocabulary stratification, brain collapse/regrowth cycle, and altruistic signaling pattern are all unique to seed 42's evolutionary trajectory.
+
+3. **Two divergent signal strategies, same outcome.** Seed 42: quality strategy (110 sig/gen, positive rfc, vocabulary stratification). Seed 43: volume strategy (185k sig/gen, negative rfc, two-symbol monopoly). Both are 7-8% worse than mute. The quality strategy narrowed the gap slightly but never closed it.
+
+4. **The brain size tax.** Signal runs invest more neurons (seed 42: 12-17, seed 43: 7-9, mute: 6). The extra neural capacity for signal processing is a net cost - those neurons would be better spent on movement and foraging.
+
+5. **The population scale hypothesis is weakened.** At 384 pop: signals -7 to -10%. At 2000 pop: signals -5 to -9%. Scale reduces the deficit slightly but doesn't flip the sign. The GPU result (5k pop, signals +52 fitness) remains the only evidence of adaptive signaling, and used a different architecture (JAX, not Rust).
+
 ### Next steps
 
-1. **Mute counterfactual at 2k** (v15-mute-psn30-2k-42). The single most important missing piece. Does the strong rfc (+0.12) translate to positive signal value, or are mute prey still fitter? At 384 pop, rfc was positive but signals were -7 to -10% vs mute. The 2k run has much stronger rfc AND much lower signal volume - this could be the configuration where signals tip positive.
-2. **Different seeds at 2k+poison** to test reproducibility. The sym1-poison / sym5-beacon pattern could be contingent on seed 42.
-3. **50% poison at 2k** if 30% counterfactual is promising. The 384-pop dose-response (30% -> 50% poison increased rfc from +0.078 to +0.125) suggests higher poison would strengthen the effect further.
+1. **50% poison at 2k** (v15-psn50-2k-42). The 384-pop dose-response showed stronger rfc at higher poison. Worth testing if higher poison can close the fitness gap, though the counterfactual evidence suggests the deficit is structural.
+2. **GPU rebuild.** The 5k-pop GPU run used a broken rfc metric. Rebuilding with the fixed metric would confirm or deny the only positive Level 1 result.
+3. **Architecture experiments.** The shared-layer spandrel mechanism may be the wrong approach. A dedicated signal processing pathway (return to split-head?) might reduce the brain size tax.
 
 ---
 
