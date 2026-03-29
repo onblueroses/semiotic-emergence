@@ -1,6 +1,6 @@
 # Findings
 
-What we know, what we disproved, and what remains open. For the chronological experimental history (13 eras, 25 runs), see [EXPERIMENTS.md](EXPERIMENTS.md).
+What we know, what we disproved, and what remains open. For the chronological experimental history (15 eras, 33 runs), see [EXPERIMENTS.md](EXPERIMENTS.md).
 
 ---
 
@@ -130,7 +130,7 @@ Inputs 0-1 are justified: prey need body-state awareness. Inputs 2, 36-38 give a
 
 4. **What architectural change would make signals adaptive at 2k?** The shared-layer architecture imposes a brain size tax (signal runs grow 7-17 neurons vs mute's 6). A dedicated signal pathway (return to split-head?) might reduce the overhead. The GPU architecture differs significantly - understanding what it does differently could be key.
 
-5. **Why did seed 42 and 43 diverge so dramatically?** Same parameters, different seeds: quality strategy (110 sig/gen, positive rfc) vs volume strategy (185k sig/gen, negative rfc). Understanding this bifurcation could reveal what conditions favor quality signaling.
+5. **Why did seed 42 and 43 diverge so dramatically?** Same parameters, different seeds: quality strategy (111 sig/gen, positive rfc) vs volume strategy (185k sig/gen, negative rfc). Understanding this bifurcation could reveal what conditions favor quality signaling.
 
 ---
 
