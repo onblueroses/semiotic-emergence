@@ -1,5 +1,5 @@
 # Autooptimize config for semiotic-emergence
-# Used by /autooptimize skill to run autonomous optimization experiments
+# Reference: .claude/reference/autooptimize-methodology.md
 
 [project]
 name = "semiotic-emergence"
@@ -55,4 +55,5 @@ max_experiments = 50
 [context]
 performance_doc = "PERFORMANCE.md"
 roadmap_section = "## Optimization Roadmap"
-experiment_log = "autooptimize-experiments.tsv"
+experiment_log = "autooptimize-experiments.jsonl"
+enrichment_log = "autooptimize-meta.jsonl"
