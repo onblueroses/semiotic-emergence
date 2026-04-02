@@ -8,10 +8,16 @@ Hundreds of neural networks on a toroidal grid, under invisible lethal pressure,
 
 Signals emerge as a survival resource through the interaction of population scale and environmental complexity. At 384 agents, signals are net negative across every configuration tested (-8% to -25% fitness). At 5,000 agents, signals become adaptive (+0.51 correlation with survival). But the path there isn't just "add more agents" - it's environmental pressure.
 
+![Signals are adaptive only at population scale](figures/fig1_signals_adaptive_at_scale.png)
+*Signal vs mute fitness across experimental conditions. Signals hurt at small populations without environmental complexity. The GPU run (pop=5000) shows positive signal value.*
+
 Adding invisible poison food (visually identical, -0.3 energy) to a 2,000-agent population produced the strongest signal quality in the project's history: receivers that differentiate behavior across symbols survive better (response_fit_corr=+0.12, 95% positive), with the first evidence of functional vocabulary stratification - a dominant beacon, a poison-correlated signal, and a rare alarm, each triggering distinct behavioral changes. The population went through a 90,000-generation evolutionary winter where brains collapsed from 24 to 7 neurons, then regrew to 17 with 10x better signal encoding. Twenty disproven hypotheses and 15 experimental eras converged on two variables: population density provides the receiver base, environmental complexity provides the selection pressure for multiple distinct messages.
 
-![Signals are adaptive only at population scale](figures/fig1_signals_adaptive_at_scale.png)
-*Signal vs mute fitness across experimental conditions. Signals hurt at small populations without environmental complexity. The GPU run (pop=5000) shows positive signal value; the 2k+poison run shows the strongest signal quality yet (rfc=+0.12) but counterfactual is pending.*
+![Brain collapse as creative destruction](figures/fig7_brain_collapse_regrowth_v15.png)
+*v15-2k+poison run. Top-left: fitness (blue) and brain size (green) - brains grew to 24 neurons, collapsed to 7, then regrew to 17 over ~90,000 generations. The regrown brain produced 10x higher signal MI. Top-right: signal metrics plateau after regrowth. Bottom-left: phase transitions (trajectory JSD spikes) track the collapse/regrowth cycle.*
+
+![Counterfactual: signal vs mute fitness](figures/fig8_counterfactual_mute_vs_signal.png)
+*Mute prey (red) maintain a consistent fitness advantage over signal prey (blue) across 200k+ generations. Even with vocabulary stratification and positive response_fit_corr, signals remain net negative at 2k population - the emergence threshold lies above this scale.*
 
 ## How it works
 
