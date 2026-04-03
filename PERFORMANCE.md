@@ -2,7 +2,7 @@
 
 ## Baseline
 
-**Hardware (VPS):** Hetzner 12 vCPU AMD EPYC 7B13 (Zen 3), shared. 24 GB RAM.
+**Hardware (VPS):** Shared Linux VPS, 12 vCPU AMD EPYC 7B13 (Zen 3), 24 GB RAM.
 
 **Binary:** `RUSTFLAGS="-C target-cpu=znver3" cargo build --release`. Fat LTO, codegen-units=1, panic=abort.
 
@@ -247,6 +247,6 @@ Signal reception uses `SignalGrid` spatial index for O(nearby) lookup instead of
 
 **I/O overhead.** PowerShell `Tee-Object` piping costs ~2.6x (535 gens/min measured vs 1,392 benchmark on i7-12650H). VPS runs write directly to file, avoiding this.
 
-**Laptop vs VPS.** i7-12650H (6P+4E cores) measures higher gens/min than Hetzner shared vCPUs at the same thread count due to higher per-core frequency. VPS numbers are the authoritative baseline for long runs.
+**Laptop vs VPS.** i7-12650H (6P+4E cores) measures higher gens/min than shared VPS vCPUs at the same thread count due to higher per-core frequency. VPS numbers are the authoritative baseline for long runs.
 
 **Determinism.** All optimizations preserve deterministic behavior. Same seed produces identical results regardless of optimization level. This is verified by regression tests.

@@ -5,6 +5,25 @@ edition = "2021"
 description = "A semiotic observatory: watching meaning come into existence in a minimal evolutionary world"
 license = "MIT"
 repository = "https://github.com/onblueroses/semiotic-emergence"
+homepage = "https://github.com/onblueroses/semiotic-emergence"
+documentation = "https://docs.rs/semiotic-emergence"
+keywords = ["simulation", "evolution", "rust", "signals", "research"]
+categories = ["science", "simulation"]
+exclude = [
+    ".claude/**",
+    "CLAUDE.md",
+    ".cargo/**",
+    "data/**",
+    "runs/**",
+    "figures/**",
+    "gpu/**",
+    "output.csv",
+    "trajectory.csv",
+    "input_mi.csv",
+    "divergence.csv",
+    "runs.tsv",
+    "autooptimize-experiments.tsv",
+]
 
 [dependencies]
 rand = "0.8"
