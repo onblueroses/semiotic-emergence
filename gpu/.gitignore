@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+*.csv
+!remote/results-*/
+!remote/results-*/**/*.csv
+remote/results-*/*/checkpoints/
+runs/
+.venv/
+.claude/
+remote/monitor.log
