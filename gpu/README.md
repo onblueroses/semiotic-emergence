@@ -1,6 +1,12 @@
-# semiotic-emergence-gpu
+# GPU port (JAX/Python)
 
-GPU-optimized evolutionary simulation exploring emergent communication. Python + JAX reimagining of [semiotic-emergence](https://github.com/onblueroses/semiotic-emergence), targeting 100k prey on cloud GPUs.
+JAX/Python reimplementation of [semiotic-emergence](../) targeting large-scale GPU runs (Vast.ai, Colab). Same neural architecture, same 12 metric instruments, population sizes up to 100k prey.
+
+## Results
+
+**7k population, 83,860 generations (seed 42, Vast.ai RTX 4090):** mutual_info was exactly zero across all 83k generations. Signals collapsed to a single stereotyped symbol late in the run (0.0 bits entropy). The gap from the Rust version: signal_cost=0.015 (vs 0.002 in Rust) creates persistent selection pressure against senders. Receivers gain no fitness benefit from attending to signals that carry no information. Both sides of the communication channel have flat incentives. Language cannot emerge when signaling is a net fitness loss.
+
+Results: `remote/results-7k/7k-seed42/` (output.csv, trajectory.csv, input_mi.csv). See [FINDINGS.md](FINDINGS.md).
 
 ## Setup
 

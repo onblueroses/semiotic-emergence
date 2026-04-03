@@ -45,6 +45,7 @@ Output: `output.csv` (25 columns), `trajectory.csv`, `input_mi.csv`. Analysis: `
 | [FRAMEWORK.md](FRAMEWORK.md) | The semiotic theory governing this project - what meaning requires, the pre-semiotic zone, measurement instruments |
 | [FINDINGS.md](FINDINGS.md) | Standing conclusions, evidence hierarchy, 20 disproven hypotheses, the metric problem |
 | [EXPERIMENTS.md](EXPERIMENTS.md) | Chronological lab notebook - 15 eras, 30 runs, every parameter change and why |
+| [gpu/](gpu/) | JAX/Python GPU port for large-scale experiments (pop ≤ 100k on cloud GPUs) |
 
 ## The code
 
@@ -58,6 +59,8 @@ src/signal.rs     - Six symbols, configurable threshold, spatial signal grid
 src/metrics.rs    - 12 instruments: MI, JSD, silence, trajectory, fitness coupling
 src/main.rs       - Generation loop, CLI, checkpoint system
 ```
+
+The `gpu/` directory contains a JAX/Python reimplementation designed for large-scale GPU runs (Vast.ai, Colab). It mirrors the Rust simulation's architecture and metrics, targeting populations an order of magnitude larger than the Rust CPU version can sustain.
 
 ## License
 
