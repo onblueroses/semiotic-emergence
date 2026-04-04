@@ -15,3 +15,4 @@ figures/__pycache__/
 __pycache__/
 *.png
 !figures/fig*.png
+data/
