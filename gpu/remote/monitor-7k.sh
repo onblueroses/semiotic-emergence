@@ -2,11 +2,11 @@
 # Monitor for the 7k run on Vast.ai instance 34012705.
 # Runs every 10 minutes via systemd user timer (semgpu-monitor.timer).
 # On completion: copies results, destroys instance, disables timer.
-# Log: /home/onblueroses/Work/semiotic-emergence-gpu/remote/monitor.log
+# Log: $HOME/Work/semiotic-emergence-gpu/remote/monitor.log
 set -euo pipefail
 
 INSTANCE_ID="34012705"
-LOCAL_RESULTS="/home/onblueroses/Work/semiotic-emergence-gpu/remote/results-7k"
+LOCAL_RESULTS="$HOME/Work/semiotic-emergence-gpu/remote/results-7k"
 DONE_MARKER="$LOCAL_RESULTS/done.json"
 
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Checking instance $INSTANCE_ID..."
