@@ -1050,9 +1050,9 @@ impl World {
                         if !p.alive {
                             continue;
                         }
-                        let ddx = wrap_delta_f32(p.x as f32, zone.x, gsf);
-                        let ddy = wrap_delta_f32(p.y as f32, zone.y, gsf);
-                        let dist_sq = ddx * ddx + ddy * ddy;
+                        let horiz = wrap_delta_f32(p.x as f32, zone.x, gsf);
+                        let vert = wrap_delta_f32(p.y as f32, zone.y, gsf);
+                        let dist_sq = horiz * horiz + vert * vert;
                         if dist_sq <= r_sq {
                             let gradient = 1.0 - dist_sq.sqrt() / zone.radius;
                             let effective_drain = match zone.zone_type {
