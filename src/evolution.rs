@@ -630,8 +630,7 @@ fn swap_agents(
     migration_rate: f32,
     rng: &mut impl Rng,
 ) {
-    let swap_count =
-        ((from_members.len().min(to_members.len()) as f32 * migration_rate) as usize).max(0);
+    let swap_count = (from_members.len().min(to_members.len()) as f32 * migration_rate) as usize;
     for _ in 0..swap_count {
         if from_members.is_empty() || to_members.is_empty() {
             break;
