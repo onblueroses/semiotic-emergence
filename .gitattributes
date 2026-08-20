@@ -1,0 +1,4 @@
+# Git hooks must reach the kernel with LF endings, or the shebang line keeps a
+# CR and exec fails.
+*.sh text eol=lf
+.cargo-husky/hooks/* text eol=lf
