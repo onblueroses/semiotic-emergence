@@ -32,6 +32,13 @@ rayon = "1.10"
 serde = { version = "1", features = ["derive"] }
 bincode = "1"
 
+# Installs .cargo-husky/hooks/* into .git/hooks on every build, so the
+# pre-commit gate survives a fresh clone.
+[dev-dependencies.cargo-husky]
+version = "1"
+default-features = false
+features = ["precommit-hook", "user-hooks"]
+
 [profile.release]
 opt-level = 3
 lto = "fat"
