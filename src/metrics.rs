@@ -142,7 +142,11 @@ fn kl_div(p: &[f32], q: &[f32]) -> f32 {
 }
 
 fn jsd(p: &[f32], q: &[f32]) -> f32 {
-    let m: Vec<f32> = p.iter().zip(q).map(|(&a, &b)| (a + b) * 0.5).collect();
+    let m: Vec<f32> = p
+        .iter()
+        .zip(q)
+        .map(|(&a, &b)| f32::midpoint(a, b))
+        .collect();
     0.5 * kl_div(p, &m) + 0.5 * kl_div(q, &m)
 }
 

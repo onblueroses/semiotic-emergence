@@ -70,9 +70,7 @@ impl SignalGrid {
     pub fn rebuild(&mut self, signals: &[Signal], current_tick: u32) {
         let total_cells = self.offsets.len();
         // Count signals per cell
-        for o in &mut self.offsets {
-            *o = (0, 0);
-        }
+        self.offsets.fill((0, 0));
         for sig in signals {
             if sig.tick_emitted >= current_tick {
                 continue;
