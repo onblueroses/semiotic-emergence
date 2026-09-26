@@ -222,9 +222,7 @@ impl PreyGrid {
 
     fn rebuild(&mut self, prey: &[Prey]) {
         let total_cells = self.offsets.len();
-        for o in &mut self.offsets {
-            *o = (0, 0);
-        }
+        self.offsets.fill((0, 0));
         let mut count = 0u32;
         for p in prey {
             if p.alive {
