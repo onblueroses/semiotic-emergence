@@ -9,7 +9,8 @@ pip install --quiet --upgrade \
   -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 
 echo "=== Cloning repo ==="
-git clone https://github.com/onblueroses/semiotic-emergence-gpu.git /workspace/semgpu
+git clone https://github.com/onblueroses/semiotic-emergence.git /workspace/semiotic-emergence
+ln -s /workspace/semiotic-emergence/gpu /workspace/semgpu
 
 echo "=== Installing package ==="
 cd /workspace/semgpu

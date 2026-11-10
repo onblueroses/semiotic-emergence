@@ -9,10 +9,13 @@ echo "=== setup: installing JAX (CUDA 12) ==="
 pip install --quiet --upgrade "jax[cuda12]"
 
 echo "=== setup: cloning repo ==="
-if [ -d /workspace/semgpu/.git ]; then
-    git -C /workspace/semgpu pull --ff-only
+if [ -d /workspace/semiotic-emergence/.git ]; then
+    git -C /workspace/semiotic-emergence pull --ff-only
 else
-    git clone https://github.com/onblueroses/semiotic-emergence-gpu.git /workspace/semgpu
+    git clone https://github.com/onblueroses/semiotic-emergence.git /workspace/semiotic-emergence
+fi
+if [ ! -e /workspace/semgpu ]; then
+    ln -s /workspace/semiotic-emergence/gpu /workspace/semgpu
 fi
 
 echo "=== setup: installing package ==="

@@ -585,7 +585,7 @@ Stripping free information, adding kin selection, and making food scarce did not
 
 *A JAX/XLA port of the simulation running at 5,000 population on an A100 80GB GPU produced the project's first positive result for signal adaptive value.*
 
-Full data and analysis: [semiotic-emergence-gpu](https://github.com/onblueroses/semiotic-emergence-gpu) repository, `runs/5k-100k-seed42/`.
+Code and analysis: [`gpu/`](gpu/) in this repository (findings in [`gpu/FINDINGS.md`](gpu/FINDINGS.md)); the run data of `runs/5k-100k-seed42/` is not published.
 
 ### Parameters
 
